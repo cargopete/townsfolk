@@ -401,6 +401,12 @@ fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
         if let Some(par) = &p.parent { kin.push_str(&format!("↑ {}  ", par)); }
         if !p.children.is_empty() { kin.push_str(&format!("↓ {}", p.children.join(", "))); }
         if !kin.is_empty() { mid.push(Line::from(Span::styled(kin, Style::default().fg(Color::Magenta)))); }
+        if !p.friends.is_empty() {
+            mid.push(Line::from(vec![Span::raw("friends: "), Span::styled(p.friends.join(", "), Style::default().fg(Color::Green))]));
+        }
+        if !p.rivals.is_empty() {
+            mid.push(Line::from(vec![Span::raw("at odds: "), Span::styled(p.rivals.join(", "), Style::default().fg(Color::Red))]));
+        }
         if !p.recent.is_empty() {
             mid.push(Line::from(""));
             mid.push(Line::from(Span::styled("their record", Style::default().fg(Color::DarkGray))));

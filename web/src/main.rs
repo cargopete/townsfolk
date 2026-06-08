@@ -190,7 +190,8 @@ fn person(sim: &Sim, idx: usize) -> String {
         "<div class=card>standing <span class=bars>{}</span> {} &middot; purse £{}",
         bar(a.standing), a.standing, a.purse
     ));
-    // live placement/doings for the present cast
+    // live placement/doings and ties for the present cast
+    let mut ties_html = String::new();
     if a.active() {
         if let Ok(d) = sim.detail(t, phase_now()) {
             if let Some(p) = d.people.iter().find(|p| p.idx == idx) {
@@ -198,10 +199,19 @@ fn person(sim: &Sim, idx: usize) -> String {
                     "<br><span class=where>{}</span> &middot; <span class=doing>{}</span> &middot; next: <span class=next>{}</span>",
                     esc(&p.location), esc(&p.doing), esc(&p.next)
                 ));
+                if !p.friends.is_empty() {
+                    ties_html.push_str(&format!("<div class=doing>thick with {}</div>", esc(&p.friends.join(", "))));
+                }
+                if !p.rivals.is_empty() {
+                    ties_html.push_str(&format!("<div style='color:#c0392b'>at odds with {}</div>", esc(&p.rivals.join(", "))));
+                }
             }
         }
     }
     body.push_str("</div>");
+    if !ties_html.is_empty() {
+        body.push_str(&format!("<h2>Where they stand</h2>{}", ties_html));
+    }
 
     // kin
     let mut kin = String::new();

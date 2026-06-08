@@ -99,6 +99,7 @@ impl Agent {
 pub struct Animal {
     pub name: String,
     pub owner: String,
+    pub species: String,
     pub health: i32, // 0..100
     pub gest: i32,    // days until calving/birth; <0 = none pending
     pub value: i32,
@@ -126,6 +127,35 @@ pub struct World {
     pub animals: Vec<Animal>,
     pub news: Vec<News>,
     pub next_news_id: u32,
+    /// Directed pairwise feeling: (from, to) → affinity in [-100, 100]. The relationship
+    /// ledger — a slow variable that remembers every snub and kindness. Gossip moves it,
+    /// so reputation becomes *personal*, not just a global score.
+    pub affinity: BTreeMap<(u32, u32), i16>,
+}
+
+impl World {
+    fn nudge_aff(&mut self, from: usize, to: usize, d: i16) {
+        let e = self.affinity.entry((from as u32, to as u32)).or_insert(0);
+        *e = (*e + d).clamp(-100, 100);
+    }
+    /// The agent's strongest ties, as (other_idx, feeling), positive or negative, among the
+    /// living — for surfacing friends and rivals.
+    fn ties(&self, idx: usize, positive: bool, limit: usize) -> Vec<(usize, i16)> {
+        let mut v: Vec<(usize, i16)> = self
+            .affinity
+            .iter()
+            .filter(|(&(f, _), _)| f as usize == idx)
+            .filter(|(&(_, t), &val)| self.agents[t as usize].active() && if positive { val >= 25 } else { val <= -25 })
+            .map(|(&(_, t), &val)| (t as usize, val))
+            .collect();
+        if positive {
+            v.sort_by_key(|&(_, val)| std::cmp::Reverse(val));
+        } else {
+            v.sort_by_key(|&(_, val)| val);
+        }
+        v.truncate(limit);
+        v
+    }
 }
 
 impl World {
@@ -188,28 +218,38 @@ impl World {
             a("Miss Pertwee", "genteel_status_seeker", "Ivy Cottage", 58, 22, 64, 0),         // 29
             a("Dr Lydgate", "practitioner", "Springs House", 70, 60, 50, 1),                  // 30
         ];
-        // kinship (indices match the comments above)
+        // kinship (indices match the comments above), and the warmth that comes with it
+        let mut affinity: BTreeMap<(u32, u32), i16> = BTreeMap::new();
         for &(h, w) in &[(0, 1), (8, 9), (12, 13), (15, 16), (18, 19), (21, 22)] {
             agents[h].spouse = Some(w);
             agents[w].spouse = Some(h);
+            affinity.insert((h as u32, w as u32), 38);
+            affinity.insert((w as u32, h as u32), 38);
         }
         for &(child, parent) in &[(2, 0), (3, 0), (14, 12), (17, 15), (20, 18), (5, 4)] {
             agents[child].parent = Some(parent); // (5,4): Rupert is Lady Aldermaston's heir
+            affinity.insert((child as u32, parent as u32), 30);
+            affinity.insert((parent as u32, child as u32), 30);
         }
+        // a seeded rivalry, so the town opens with something simmering
+        affinity.insert((0, 4), -18); // Cynthia eyes Lady Aldermaston
+        affinity.insert((6, 5), -22); // Tot's low opinion of Rupert's schemes
 
         World {
             agents,
-            animals: vec![
-                Animal { name: "Strawberry".into(), owner: "Mr Sunter".into(), health: 68, gest: 4, value: 45 },
-                Animal { name: "Captain".into(), owner: "Mr Rupert Crale".into(), health: 80, gest: -1, value: 30 },
-            ],
+            animals: seed_animals(),
             news: Vec::new(),
             next_news_id: 0,
+            affinity,
         }
     }
 
     fn agent_mut(&mut self, name: &str) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| a.name == name && a.death_day.is_none())
+    }
+
+    fn animal_idx(&self, name: &str) -> Option<usize> {
+        self.animals.iter().position(|x| x.name == name)
     }
 
     fn idx(&self, name: &str) -> Option<usize> {
@@ -288,7 +328,6 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 /// events. Deterministic in (seed, day, world-state-from-prior-days).
 fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>) -> Vec<Event> {
     let mut out = Vec::new();
-    let mut rng = rng_for(seed, day);
     let mk = |kind: &str, actor: &str, text: String| Event {
         day,
         date: date.to_string(),
@@ -306,31 +345,8 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn Pol
         world.spawn_news("Mr Sunter", "the tithe demand fallen on High Foldside", -1, day, &["Revd Mr Soames"]);
     }
 
-    // --- gestation / calving (depends on world state) ---
-    for i in 0..world.animals.len() {
-        if world.animals[i].gest > 0 {
-            world.animals[i].gest -= 1;
-            if world.animals[i].gest == 0 {
-                let name = world.animals[i].name.clone();
-                let owner = world.animals[i].owner.clone();
-                if rng.gen_bool(0.70) {
-                    world.animals[i].value += 15;
-                    world.animals[i].health = (world.animals[i].health + 5).clamp(0, 100);
-                    world.animals[i].gest = -1;
-                    if let Some(o) = world.agent_mut(&owner) { clamp_standing(o, 3); }
-                    out.push(mk("calving", &owner, format!("{name} calved well — a fine heifer calf. Mr Farran was barely needed.")));
-                    world.spawn_news(&owner, &format!("{name}'s fine new heifer calf"), 2, day, &["Mr Farran MRCVS"]);
-                } else {
-                    world.animals[i].value -= 5;
-                    world.animals[i].health = (world.animals[i].health - 10).clamp(0, 100);
-                    world.animals[i].gest = -1;
-                    if let Some(v) = world.agent_mut("Mr Farran MRCVS") { clamp_standing(v, 2); }
-                    out.push(mk("calving", &owner, format!("{name}'s calving went hard; Mr Farran worked till dawn, but the calf stands.")));
-                    world.spawn_news("Mr Farran MRCVS", &format!("Mr Farran's long night saving {name}"), 1, day, &[&owner]);
-                }
-            }
-        }
-    }
+    // --- the animal & agricultural layer: births, ailments, the odd catastrophe ---
+    out.extend(animal_events(world, day, date, seed));
 
     // --- scheduled social event: Lady Aldermaston's garden party, the 14th ---
     if date.month() == Month::June && date.day() == 14 {
@@ -369,8 +385,11 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn Pol
     // --- the slow turn of the cast: birth, marriage, ageing, death, succession ---
     out.extend(life_tick(world, day, date, seed));
 
-    // --- the news spreads, with delay and distortion ---
+    // --- the news spreads, with delay and distortion (and moves the ledger) ---
     out.extend(diffuse(world, day, date, seed));
+
+    // --- the relationship ledger boils over on hub days ---
+    out.extend(relationship_events(world, day, date, seed));
 
     out
 }
@@ -825,6 +844,24 @@ fn hazard(age: i64) -> f64 {
     }
 }
 
+fn an(name: &str, owner: &str, species: &str, health: i32, gest: i32, value: i32) -> Animal {
+    Animal { name: name.into(), owner: owner.into(), species: species.into(), health, gest, value }
+}
+
+/// The town's notable beasts — first-class entities that can make or ruin a day.
+fn seed_animals() -> Vec<Animal> {
+    vec![
+        an("Strawberry", "Mr Sunter", "shorthorn cow", 68, 4, 45), // in difficult calf before the Show
+        an("Bluebell", "Mr Sunter", "shorthorn cow", 74, -1, 38),
+        an("Captain", "Mr Rupert Crale", "carthorse", 80, -1, 30), // the homicidal one
+        an("Floss", "Mr Metcalfe", "sheepdog", 88, -1, 8),
+        an("Duchess", "Mr Metcalfe", "ewe", 70, 30, 12),
+        an("the Major's hunter", "Major Pringle", "hunter", 76, -1, 60),
+        an("Mr Pickering's spaniel", "Mr Pickering", "spaniel", 60, -1, 5), // over-fed
+        an("Boxer", "Mr Garth", "dray horse", 72, -1, 28),
+    ]
+}
+
 fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex: u8, age: i64, day: i64) -> Agent {
     Agent {
         name: name.into(),
@@ -1171,6 +1208,134 @@ fn meet_rate(a: &Agent, b: &Agent, date: Date) -> f64 {
     r.clamp(0.0, 0.95)
 }
 
+/// On hub days (market, church) the simmering and the warm boil over: feuds deepen,
+/// friendships show. Emergent from the relationship ledger.
+fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let wd = date.weekday();
+    if !matches!(wd, Weekday::Wednesday | Weekday::Sunday) {
+        return out;
+    }
+    let mut rng = rng_for(seed ^ 0x4E1A_0000_0000, day);
+
+    // Sunday upkeep: grudges and warmth both fade unless fed (relationships need tending);
+    // living families are reinforced, so blood stays thicker than water.
+    if wd == Weekday::Sunday {
+        for v in world.affinity.values_mut() {
+            *v -= v.signum();
+        }
+        for i in 0..world.agents.len() {
+            if !world.agents[i].active() {
+                continue;
+            }
+            if let Some(s) = world.agents[i].spouse {
+                if world.agents[s].active() {
+                    world.nudge_aff(i, s, 3);
+                }
+            }
+            if let Some(p) = world.agents[i].parent {
+                if world.agents[p].active() {
+                    world.nudge_aff(i, p, 2);
+                    world.nudge_aff(p, i, 2);
+                }
+            }
+        }
+    }
+
+    let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
+    let elig = |w: &World, f: usize, t: usize| {
+        w.agents[f].active() && w.agents[t].active() && w.agents[f].archetype != "child" && w.agents[t].archetype != "child"
+    };
+    let cold: Vec<(usize, usize)> = world.affinity.iter()
+        .filter(|(_, &v)| v <= -48)
+        .map(|(&(f, t), _)| (f as usize, t as usize))
+        .filter(|&(f, t)| elig(world, f, t))
+        .collect();
+    let warm: Vec<(usize, usize)> = world.affinity.iter()
+        .filter(|(_, &v)| v >= 60)
+        .map(|(&(f, t), _)| (f as usize, t as usize))
+        .filter(|&(f, t)| elig(world, f, t))
+        .collect();
+    let place = if wd == Weekday::Sunday { "church door" } else { "market" };
+
+    if !cold.is_empty() && rng.gen_bool(0.10) {
+        let (f, t) = cold[rng.gen_range(0..cold.len())];
+        let (nf, nt) = (world.agents[f].name.clone(), world.agents[t].name.clone());
+        world.nudge_aff(f, t, -4); // a public airing deepens it (hysteresis)
+        let text = match rng.gen_range(0..3) {
+            0 => format!("{nf} cut {nt} dead at the {place}, and the whole town marked it."),
+            1 => format!("There was a frost between {nf} and {nt} at the {place} that could have iced the milk."),
+            _ => format!("{nf} and {nt} had words again at the {place} — the old coldness, deeper for the airing."),
+        };
+        out.push(mk("feud", &nf, text));
+        world.spawn_news(&nf, &format!("the bad blood between {nf} and {nt}"), -1, day, &[]);
+    }
+    if !warm.is_empty() && rng.gen_bool(0.08) {
+        let (f, t) = warm[rng.gen_range(0..warm.len())];
+        let (nf, nt) = (world.agents[f].name.clone(), world.agents[t].name.clone());
+        world.nudge_aff(f, t, 3);
+        let text = match rng.gen_range(0..2) {
+            0 => format!("{nf} and {nt} had their heads together at the {place}, the best of friends."),
+            _ => format!("{nf} and {nt} were thick as thieves at the {place}."),
+        };
+        out.push(mk("bond", &nf, text));
+    }
+    out
+}
+
+/// The animal & agricultural layer: births across the stock, the vet's ailments, the odd
+/// catastrophe — first-class beasts that make or ruin a day.
+fn animal_events(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mut rng = rng_for(seed ^ 0x0A11_0000_0000, day);
+    let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
+
+    for i in 0..world.animals.len() {
+        // gestation → birth
+        if world.animals[i].gest > 0 {
+            world.animals[i].gest -= 1;
+            if world.animals[i].gest == 0 {
+                let (nm, owner, sp) = (world.animals[i].name.clone(), world.animals[i].owner.clone(), world.animals[i].species.clone());
+                world.animals[i].gest = -1;
+                let young = if sp.contains("ewe") || sp.contains("sheep") { "lambs" } else { "a calf" };
+                if rng.gen_bool(0.72) {
+                    world.animals[i].value += 12;
+                    world.animals[i].health = (world.animals[i].health + 4).clamp(0, 100);
+                    if let Some(o) = world.agent_mut(&owner) { clamp_standing(o, 2); }
+                    out.push(mk("calving", &owner, format!("{nm} brought {young} safely; {owner} was well pleased.")));
+                    world.spawn_news(&owner, &format!("{nm}'s fine new {young}"), 2, day, &[]);
+                } else {
+                    world.animals[i].value -= 4;
+                    world.animals[i].health = (world.animals[i].health - 10).clamp(0, 100);
+                    if let Some(v) = world.agent_mut("Mr Farran MRCVS") { clamp_standing(v, 2); }
+                    out.push(mk("calving", &owner, format!("{nm} had a hard time of it; the vet worked till dawn, but {nm} and {young} stand.")));
+                }
+            }
+        }
+        // slow recovery toward health
+        if world.animals[i].gest != 0 && world.animals[i].health < 92 {
+            world.animals[i].health = (world.animals[i].health + 1).clamp(0, 100);
+        }
+    }
+
+    // a daily ailment somewhere in the parish — the vet's bread and butter
+    if !world.animals.is_empty() && rng.gen_bool(0.06) {
+        let i = rng.gen_range(0..world.animals.len());
+        if world.animals[i].health > 30 {
+            let (nm, owner, sp) = (world.animals[i].name.clone(), world.animals[i].owner.clone(), world.animals[i].species.clone());
+            world.animals[i].health -= rng.gen_range(8..20);
+            if let Some(o) = world.agent_mut(&owner) { o.purse -= 2; }
+            out.push(mk("practice", "Mr Farran MRCVS", format!("The vet was fetched to {owner}'s {sp} {nm}, off its feed and dull in the eye.")));
+        }
+    }
+
+    // Captain the homicidal carthorse, now and again
+    if rng.gen_bool(0.012) && world.animal_idx("Captain").is_some() {
+        out.push(mk("practice", "Mr Rupert Crale", "Captain put a hoof through the byre door and chased the boy clear round the yard.".into()));
+    }
+    out
+}
+
 /// Live rumours as display strings (freshest first): topic, reach, and whether it's grown.
 fn news_in_flight(world: &World, target: i64) -> Vec<String> {
     let living = world.agents.iter().filter(|a| a.active()).count();
@@ -1245,6 +1410,11 @@ fn diffuse(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
                 clamp_standing(&mut world.agents[subject], item.valence.signum());
                 item.applied += 1;
             }
+            // gossip is personal: the hearer's own opinion of the subject shifts, and it
+            // persists (no decay) — every snub remembered, every kindness too
+            if b != subject && alive[subject] {
+                world.nudge_aff(b, subject, (item.valence.clamp(-3, 3) * 3) as i16);
+            }
             // the story grows in the telling
             if rng.gen_bool(0.15) {
                 item.distortion += 1;
@@ -1311,6 +1481,8 @@ pub struct PersonDetail {
     pub parent: Option<String>,
     pub children: Vec<String>,
     pub origin: Option<String>,   // Some = came from away
+    pub friends: Vec<String>,     // strongest warm ties
+    pub rivals: Vec<String>,      // strongest cold ties
     pub recent: Vec<ChronEntry>,  // their latest beats
 }
 
@@ -1346,12 +1518,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 5;
+const SNAPSHOT_VERSION: i64 = 6;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365;
 
@@ -1588,6 +1760,8 @@ impl Sim {
                 parent: a.parent.map(|p| world.agents[p].name.clone()),
                 children,
                 origin: a.origin.clone(),
+                friends: world.ties(i, true, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
+                rivals: world.ties(i, false, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 recent: self.person_events(&a.name, 4)?,
             });
         }
