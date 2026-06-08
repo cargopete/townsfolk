@@ -426,7 +426,8 @@ fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
     let mut mid: Vec<Line> = Vec::new();
     if let Some(p) = d.people.get(sel) {
         mid.push(Line::from(Span::styled(p.name.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-        mid.push(Line::from(format!("{}, {}y · of {}", arch_tag(&p.archetype), p.age, p.seat)));
+        let role = p.trade.clone().unwrap_or_else(|| arch_tag(&p.archetype).to_string());
+        mid.push(Line::from(format!("{}, {}y · of {}", role, p.age, p.seat)));
         if let Some(o) = &p.origin {
             mid.push(Line::from(Span::styled(format!("came from {o}"), Style::default().fg(Color::DarkGray))));
         }

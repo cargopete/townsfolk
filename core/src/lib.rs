@@ -80,6 +80,7 @@ pub struct Agent {
     pub spouse: Option<usize>,
     pub parent: Option<usize>,    // mother/father index, for lineage & succession
     pub origin: Option<String>,   // where they came from; None = Thrushcombe-born
+    pub trade: Option<String>,    // their specific occupation, distinct from the policy archetype
 }
 
 impl Agent {
@@ -174,6 +175,7 @@ impl World {
             spouse: None,
             parent: None,
             origin: None,
+            trade: None,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -218,6 +220,29 @@ impl World {
             a("Miss Pertwee", "genteel_status_seeker", "Ivy Cottage", 58, 22, 64, 0),         // 29
             a("Dr Lydgate", "practitioner", "Springs House", 70, 60, 50, 1),                  // 30
         ];
+        // the trades — the town's working fabric (indices 31+, no kinship to disturb)
+        let ta = |name: &str, arch: &str, seat: &str, standing, purse, age: i64, sex: u8, trade: &str| {
+            let mut x = a(name, arch, seat, standing, purse, age, sex);
+            x.trade = Some(trade.into());
+            x
+        };
+        agents.extend([
+            ta("Mrs Pollard", "blunt_hand", "the Post Office", 52, 18, 53, 0, "postmistress"),
+            ta("Mr Haskins", "official", "the Station", 50, 26, 49, 1, "stationmaster"),
+            ta("Mr Annis", "blunt_hand", "the Station", 38, 8, 27, 1, "railway porter"),
+            ta("Mr Tranter", "blunt_hand", "the Bakehouse", 48, 22, 44, 1, "baker"),
+            ta("Mr Dunnage", "blunt_hand", "the Shambles", 46, 30, 51, 1, "butcher"),
+            ta("Miss Clewes", "blunt_hand", "the Draper's", 50, 16, 41, 0, "dressmaker"),
+            ta("Mr Yeo", "blunt_hand", "the Mill", 47, 28, 56, 1, "miller"),
+            ta("Miss Ferris", "official", "the School", 56, 14, 35, 0, "schoolmistress"),
+            ta("Mr Tallin", "genteel_status_seeker", "Church Row", 66, 90, 54, 1, "solicitor"),
+            ta("Mr Quint", "genteel_status_seeker", "the Bank House", 64, 140, 50, 1, "bank manager"),
+            ta("Mr Coad", "blunt_hand", "the Carrier's Yard", 40, 16, 46, 1, "carrier"),
+            ta("Mr Hollis", "blunt_hand", "the Crale estate", 42, 12, 43, 1, "gamekeeper"),
+            ta("Old Burrow", "blunt_hand", "the Churchyard", 36, 6, 67, 1, "sexton"),
+            ta("Mr Vye", "blunt_hand", "the Knacker's Yard", 30, 14, 48, 1, "knacker"),
+            ta("Jeb Pascoe", "blunt_hand", "the docks at Plymouth", 34, 20, 30, 1, "docker (works away)"),
+        ]);
         // kinship (indices match the comments above), and the warmth that comes with it
         let mut affinity: BTreeMap<(u32, u32), i16> = BTreeMap::new();
         for &(h, w) in &[(0, 1), (8, 9), (12, 13), (15, 16), (18, 19), (21, 22)] {
@@ -939,6 +964,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         spouse: None,
         parent: None,
         origin: None,
+        trade: None,
     }
 }
 
@@ -998,6 +1024,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     let mut out = Vec::new();
     let mut rng = rng_for(seed ^ 0x11FE_0000_0000, day);
     let n = world.agents.len();
+    let pop = world.agents.iter().filter(|a| a.active()).count();
     let mut newcomers: Vec<Agent> = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event {
         day,
@@ -1075,7 +1102,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         let parent = world.agents[i].parent;
         let is_heir = parent.is_some_and(|p| world.agents[p].active() && eldest_active_child(world, p) == Some(i));
         let nm = world.agents[i].name.clone();
-        if is_heir || !rng.gen_bool(0.82) {
+        // when the town is full, more of the young go out into the world
+        let stay_roll = if pop > SOFT_CAP { 0.92 } else { 0.80 };
+        if is_heir || !rng.gen_bool(stay_roll) {
             let parent_arch = parent
                 .map(|p| world.agents[p].archetype.clone())
                 .unwrap_or_else(|| "genteel_status_seeker".into());
@@ -1154,7 +1183,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             let a = &world.agents[i];
             (a.active(), a.sex, a.archetype == "child", a.spouse, a.age(day), a.standing, a.seat.clone(), a.name.clone())
         };
-        if active && sex == 0 && !child && spouse.is_some() && (18..=42).contains(&age) {
+        if active && sex == 0 && !child && spouse.is_some() && (18..=42).contains(&age) && pop < SOFT_CAP + 6 {
             let young = world
                 .agents
                 .iter()
@@ -1265,6 +1294,16 @@ fn meet_rate(a: &Agent, b: &Agent, date: Date) -> f64 {
     if pubgoer(&a.archetype) && pubgoer(&b.archetype) {
         r = r.max(if matches!(wd, Weekday::Friday | Weekday::Saturday) { 0.49 } else { 0.35 });
     }
+    // the trades that traffic in news: the post office hears everything; the station and
+    // the carrier bring word from away
+    let trade = |x: &Agent, t: &str| x.trade.as_deref() == Some(t);
+    let either = |t: &str| trade(a, t) || trade(b, t);
+    if either("postmistress") {
+        r = r.max(0.48); // the Cranford engine
+    }
+    if either("stationmaster") || either("railway porter") || either("carrier") || either("docker (works away)") {
+        r = r.max(0.40); // word from the wider world
+    }
     if wd == Weekday::Sunday {
         r += 0.20; // everyone at church
     }
@@ -1354,6 +1393,9 @@ fn animal_events(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Even
     let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
 
     for i in 0..world.animals.len() {
+        if world.animals[i].health < 0 {
+            continue; // gone to the knacker
+        }
         // gestation → birth
         if world.animals[i].gest > 0 {
             world.animals[i].gest -= 1;
@@ -1381,14 +1423,44 @@ fn animal_events(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Even
         }
     }
 
+    // re-breeding: cows go back in calf in spring, ewes to the tup come autumn
+    let season = Season::of(date);
+    for i in 0..world.animals.len() {
+        if world.animals[i].health < 35 || world.animals[i].gest > 0 {
+            continue;
+        }
+        let sp = world.animals[i].species.clone();
+        let g = if sp.contains("cow") && matches!(season, Season::Sowing) {
+            Some(50)
+        } else if (sp.contains("ewe") || sp.contains("sheep")) && matches!(season, Season::Mart) {
+            Some(28)
+        } else {
+            None
+        };
+        if let Some(g) = g {
+            if rng.gen_bool(0.03) {
+                world.animals[i].gest = g;
+            }
+        }
+    }
+
     // a daily ailment somewhere in the parish — the vet's bread and butter
     if !world.animals.is_empty() && rng.gen_bool(0.06) {
         let i = rng.gen_range(0..world.animals.len());
-        if world.animals[i].health > 30 {
+        if world.animals[i].health > 0 {
             let (nm, owner, sp) = (world.animals[i].name.clone(), world.animals[i].owner.clone(), world.animals[i].species.clone());
-            world.animals[i].health -= rng.gen_range(8..20);
-            if let Some(o) = world.agent_mut(&owner) { o.purse -= 2; }
-            out.push(mk("practice", "Mr Farran MRCVS", format!("The vet was fetched to {owner}'s {sp} {nm}, off its feed and dull in the eye.")));
+            world.animals[i].health -= rng.gen_range(8..22);
+            if world.animals[i].health <= 0 {
+                // the beast is lost — the knacker comes for it
+                world.animals[i].health = -1;
+                world.animals[i].value = 0;
+                if let Some(o) = world.agent_mut(&owner) { o.purse -= 4; clamp_standing(o, -1); }
+                out.push(mk("calving", &owner, format!("{owner}'s {sp} {nm} could not be saved; Mr Vye the knacker came for it at first light.")));
+                world.spawn_news(&owner, &format!("the loss of {owner}'s {nm}"), -1, day, &[]);
+            } else {
+                if let Some(o) = world.agent_mut(&owner) { o.purse -= 2; }
+                out.push(mk("practice", "Mr Farran MRCVS", format!("The vet was fetched to {owner}'s {sp} {nm}, off its feed and dull in the eye.")));
+            }
         }
     }
 
@@ -1533,6 +1605,7 @@ pub struct PersonDetail {
     pub idx: usize,
     pub name: String,
     pub archetype: String,
+    pub trade: Option<String>,
     pub seat: String,
     pub age: i64,
     pub standing: i32,
@@ -1588,7 +1661,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 6;
+const SNAPSHOT_VERSION: i64 = 7;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365;
 
@@ -1844,6 +1917,7 @@ impl Sim {
                 idx: i,
                 name: a.name.clone(),
                 archetype: a.archetype.clone(),
+                trade: a.trade.clone(),
                 seat: a.seat.clone(),
                 age: a.age(target),
                 standing: a.standing,
@@ -1964,7 +2038,7 @@ impl Sim {
             season: Season::of(today).name().to_string(),
             armed: Season::of(today).armed().to_string(),
             agents,
-            animals: world.animals.clone(),
+            animals: world.animals.iter().filter(|a| a.health >= 0).cloned().collect(),
             pending,
             news,
             chronicle,

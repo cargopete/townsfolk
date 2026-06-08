@@ -115,6 +115,11 @@ fn dashboard(sim: &Sim) -> String {
     page("Thrushcombe — Dashboard", &body)
 }
 
+/// A person's station: their specific trade if they have one, else their stratum.
+fn station(a: &Agent) -> String {
+    a.trade.clone().unwrap_or_else(|| pretty_arch(&a.archetype).to_string())
+}
+
 fn pretty_arch(a: &str) -> &'static str {
     match a {
         "genteel_status_seeker" => "gentlefolk",
@@ -159,7 +164,7 @@ fn folk(sim: &Sim) -> String {
             let from = a.origin.as_ref().map(|o| format!("<span class=tag>of {}</span>", esc(o))).unwrap_or_default();
             format!(
                 "<tr class='{}'><td><a href=/folk/{}>{}</a>{}{}</td><td class=hidesm>{}</td><td>{}y</td><td><span class=bars>{}</span></td></tr>",
-                if dim { "gone" } else { "" }, i, esc(&a.name), label, from, esc(pretty_arch(&a.archetype)), a.age(day), bar(a.standing)
+                if dim { "gone" } else { "" }, i, esc(&a.name), label, from, esc(&station(a)), a.age(day), bar(a.standing)
             )
         }).collect();
         format!("<h2>{}</h2><table><tr><th>Name</th><th class=hidesm>Station</th><th>Age</th><th>Standing</th></tr>{}</table>", esc(title), rows)
@@ -184,7 +189,7 @@ fn person(sim: &Sim, idx: usize) -> String {
     let origin = a.origin.as_ref().map(|o| format!(" &middot; came from {}", esc(o))).unwrap_or_default();
     let mut body = format!(
         "<h1>{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
-        esc(&a.name), status, esc(pretty_arch(&a.archetype)), esc(&a.seat), a.age(day), origin
+        esc(&a.name), status, esc(&station(a)), esc(&a.seat), a.age(day), origin
     );
 
     body.push_str(&format!(
