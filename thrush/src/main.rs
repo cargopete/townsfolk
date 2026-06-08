@@ -78,6 +78,17 @@ enum Cmd {
     Status,
     /// Live monitor (q / Esc to quit).
     Watch,
+    /// Play the novelist: inject circumstance the town will react to.
+    /// KIND = letter | loan | legacy | scandal | stranger.
+    Providence {
+        kind: String,
+        #[arg(long, default_value = "")]
+        target: String,
+        #[arg(long, default_value_t = 0)]
+        amount: i32,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
 }
 
 const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a small West-Country market town in 1934. Render the given event as a single short, warm, wry diary-style sentence or two, in the register of interwar English provincial comedy — gentle misfortune borne with dignity, the small humiliation, the understated joke. Never melodrama. No preamble, no quotation marks.";
@@ -198,6 +209,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut sim = Sim::open(&cli.db)?;
             apply_engine(&mut sim, cli.wasm);
             run_watch(&mut sim)?;
+        }
+        Cmd::Providence { kind, target, amount, note } => {
+            let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
+            sim.providence(today(), &kind, &target, amount, &note)?;
+            let added = sim.catch_up(today())?;
+            println!("Providence — {kind} upon {target}. {added} event(s) re-folded; the town will make of it what it will.");
+            print_status(&sim.report(today())?);
         }
     }
     Ok(())

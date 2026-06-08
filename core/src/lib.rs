@@ -14,6 +14,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use time::{Date, Month};
 
 // ----------------------------------------------------------------------------- calendar
@@ -283,7 +284,7 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 
 /// Advance the world by exactly one day, mutating it and returning that day's
 /// events. Deterministic in (seed, day, world-state-from-prior-days).
-fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine) -> Vec<Event> {
+fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>) -> Vec<Event> {
     let mut out = Vec::new();
     let mut rng = rng_for(seed, day);
     let mk = |kind: &str, actor: &str, text: String| Event {
@@ -340,6 +341,11 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn Pol
             "Lady Aldermaston's garden party at Crale Court. Mrs Pelham attended in a made-over frock and a brave face.".into()));
         world.spawn_news("Lady Aldermaston", "Lady Aldermaston's splendid garden party", 1, day, &[]);
         world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's made-over frock at the party", -1, day, &["Lady Aldermaston"]);
+    }
+
+    // --- providence: the player's diegetic interventions for this day ---
+    if let Some(list) = interventions.get(&day) {
+        out.extend(apply_interventions(world, day, date, list));
     }
 
     // --- the external-shock layer: weather, market, the form ---
@@ -684,6 +690,64 @@ fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, 
         }
         Action::Idle => {}
     }
+}
+
+// ----------------------------------------------------------------------------- providence
+//
+// The player is the novelist: not a god-game, but a source of *circumstance*. Each verb is
+// an event the world recognises — a letter, a called loan, a legacy, a scandal, a stranger
+// at the empty cottage — injected at a day, folded deterministically, and the autonomous
+// agents react to it in character.
+
+#[derive(Clone)]
+pub struct Intervention {
+    pub kind: String,
+    pub target: String,
+    pub amount: i32,
+    pub note: String,
+}
+
+/// Apply the day's providence to the world, returning the beats it sets down.
+fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Intervention]) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
+    for iv in list {
+        let t = &iv.target;
+        match iv.kind.as_str() {
+            "letter" => {
+                let what = if iv.note.is_empty() { "a letter, postmarked far away".to_string() } else { iv.note.clone() };
+                out.push(mk("providence", t, format!("A letter came for {t} — {what}.")));
+                world.spawn_news(t, &format!("the letter that came for {t}"), iv.amount.signum().max(0) + 1, day, &[]);
+            }
+            "loan" => {
+                let amt = if iv.amount > 0 { iv.amount } else { 40 };
+                if let Some(a) = world.agent_mut(t) { a.purse -= amt; }
+                out.push(mk("providence", t, format!("The bank called in {t}'s loan — £{amt}, and no putting it off.")));
+                world.spawn_news(t, &format!("the bank calling in {t}'s loan"), -2, day, &[]);
+            }
+            "legacy" => {
+                let amt = if iv.amount > 0 { iv.amount } else { 60 };
+                if let Some(a) = world.agent_mut(t) { a.purse += amt; clamp_standing(a, 2); }
+                out.push(mk("providence", t, format!("A legacy of £{amt} fell to {t}, from a relation barely remembered.")));
+                world.spawn_news(t, &format!("the legacy come to {t}"), 2, day, &[]);
+            }
+            "scandal" => {
+                let what = if iv.note.is_empty() { format!("something concerning {t}") } else { iv.note.clone() };
+                out.push(mk("providence", t, format!("An ugly whisper began to go round — {what}.")));
+                world.spawn_news(t, &what, -3, day, &[]);
+            }
+            "stranger" => {
+                let name = if iv.note.is_empty() { "A stranger".to_string() } else { iv.note.clone() };
+                let agent = make_agent(&name, "blunt_hand", "the empty cottage", 25, 1, 33, day);
+                out.push(mk("providence", &name, format!("{name} arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.")));
+                world.agents.push(agent);
+            }
+            other => {
+                out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
+            }
+        }
+    }
+    out
 }
 
 /// The external-shock layer: weather, market, bureaucracy — exogenous, not chosen. Draws
@@ -1139,6 +1203,7 @@ pub struct Sim {
     seed: u64,
     epoch: Date,
     engine: Box<dyn PolicyEngine>,
+    interventions: BTreeMap<i64, Vec<Intervention>>,
 }
 
 /// A structured chronicle line for readers (web/legends).
@@ -1215,8 +1280,25 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
         // its output once, keyed by event, and replay the stored text forever.
         "CREATE TABLE IF NOT EXISTS narration(event_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
          -- Folded-world checkpoints, so a read need not re-fold from genesis.
-         CREATE TABLE IF NOT EXISTS snapshots(day INTEGER PRIMARY KEY, version INTEGER NOT NULL, blob BLOB NOT NULL);",
+         CREATE TABLE IF NOT EXISTS snapshots(day INTEGER PRIMARY KEY, version INTEGER NOT NULL, blob BLOB NOT NULL);
+         -- Providence: the player's diegetic interventions, folded in at their day.
+         CREATE TABLE IF NOT EXISTS interventions(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL,
+            kind TEXT NOT NULL, target TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL);",
     )
+}
+
+fn load_interventions(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, Vec<Intervention>>> {
+    let mut stmt = conn.prepare("SELECT day, kind, target, amount, note FROM interventions ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, Intervention { kind: r.get(1)?, target: r.get(2)?, amount: r.get(3)?, note: r.get(4)? }))
+    })?;
+    let mut map: BTreeMap<i64, Vec<Intervention>> = BTreeMap::new();
+    for row in rows {
+        let (day, iv) = row?;
+        map.entry(day).or_default().push(iv);
+    }
+    Ok(map)
 }
 
 impl Sim {
@@ -1226,7 +1308,8 @@ impl Sim {
         ensure_aux(&conn)?;
         let seed: i64 = conn.query_row("SELECT val FROM meta WHERE key='seed'", [], |r| r.get(0))?;
         let ej: i64 = conn.query_row("SELECT val FROM meta WHERE key='epoch_julian'", [], |r| r.get(0))?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies) })
+        let interventions = load_interventions(&conn)?;
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -1243,13 +1326,29 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies) })
+        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new() })
     }
 
     /// Swap the behaviour engine (e.g. a wasm-backed one). Must be set before any
     /// `catch_up`/`report` so generation is consistent.
     pub fn set_engine(&mut self, engine: Box<dyn PolicyEngine>) {
         self.engine = engine;
+    }
+
+    /// Inject a providence verb at today: a letter, a called loan, a legacy, a scandal, a
+    /// stranger at the cottage. It's logged, then folded into the world from today forward
+    /// (the frontier is regenerated so it takes effect at once). Caller should `catch_up`.
+    pub fn providence(&mut self, today: Date, kind: &str, target: &str, amount: i32, note: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(today).max(0);
+        self.conn.execute(
+            "INSERT INTO interventions(day,kind,target,amount,note) VALUES(?1,?2,?3,?4,?5)",
+            params![day, kind, target, amount, note],
+        )?;
+        self.interventions = load_interventions(&self.conn)?;
+        // invalidate the frontier so regeneration picks up the intervention
+        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day])?;
+        Ok(())
     }
 
     /// Salient events not yet rendered in voice, as (event_id, date, template_text).
@@ -1323,7 +1422,7 @@ impl Sim {
     fn world_at(&self, day: i64) -> World {
         let (mut world, from) = self.load_checkpoint(day);
         for d in from..=day {
-            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine);
+            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine, &self.interventions);
         }
         world
     }
@@ -1453,7 +1552,7 @@ impl Sim {
         let mut added = 0;
         for d in from..=target {
             let date = Date::from_julian_day((epoch_jd + d) as i32).unwrap();
-            for e in step_day(&mut world, d, date, seed, &*self.engine) {
+            for e in step_day(&mut world, d, date, seed, &*self.engine, &self.interventions) {
                 tx.execute(
                     "INSERT INTO events(day,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5)",
                     params![e.day, e.date, e.kind, e.actor, e.text],
