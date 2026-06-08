@@ -76,6 +76,12 @@ enum Cmd {
     },
     /// Fetch Sofia's real weather (forecast horizon) and record it for the days ahead.
     Weather,
+    /// Now and then, let Qwen invent a surprising one-off happening (effect-free flavour).
+    Wildcard {
+        /// Force one regardless of the throttle/chance.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -124,6 +130,24 @@ fn today() -> Date {
     OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .date()
+}
+
+const WILDCARD_PROMPT: &str = "You are inventing a single small, surprising, in-world incident for the chronicle of Thrushcombe St Mary, a 1934 West-Country market town. Invent ONE unexpected happening appropriate to the time and place — a travelling fair or circus, a chimney fire, a foundling left on a doorstep, a runaway beast, a strange light in the sky, a peddler or gypsy caravan, a lost child, a found purse, a mysterious visitor, a flood, a prize in a competition, a curiosity in the newspaper. One or two sentences, warm and wry, in the register of interwar English provincial comedy. You may name one of the townsfolk given, or none. No preamble, no quotation marks.";
+
+/// Ask Qwen to invent a wildcard happening. Returns the prose, or None on failure.
+fn wildcard_one(agent: &ureq::Agent, host: &str, model: &str, date: &str, season: &str, names: &[&str]) -> Option<String> {
+    let prompt = format!("It is {date}, in the season of {season}. Some of the townsfolk: {}. Invent the incident.", names.join(", "));
+    let body = serde_json::json!({
+        "model": model, "system": WILDCARD_PROMPT, "prompt": prompt,
+        "think": false, "stream": false, "options": { "num_ctx": 4096, "temperature": 0.95 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let s = resp.get("response")?.as_str()?.trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+fn day_hash(day: i64) -> u64 {
+    (day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((day as u64) >> 7).wrapping_mul(0xD1B5_4A32_D192_ED03)
 }
 
 /// Fetch Sofia's daily weather (recent + forecast) from open-meteo and record it for days
@@ -233,6 +257,36 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut sim = Sim::open(&cli.db)?;
             let stored = fetch_sofia_weather(&mut sim)?;
             println!("Recorded {stored} day(s) of Sofia weather over the days ahead.");
+        }
+        Cmd::Wildcard { force } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let day = sim.target_day(t).max(0);
+            // throttle: at most one every ~3 days, and only ~28% of eligible days
+            let recent = sim.last_wildcard_day()?.is_some_and(|last| day - last < 3);
+            if !force && (recent || day_hash(day) % 100 >= 28) {
+                return Ok(());
+            }
+            let season = thrush_core::Season::of(t).name();
+            let names = sim.grown_names(t);
+            let pick: Vec<&str> = if names.is_empty() {
+                vec![]
+            } else {
+                let n = names.len();
+                let h = day_hash(day) as usize;
+                (0..3).map(|k| names[h.wrapping_add(k * 7) % n].as_str()).collect()
+            };
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(180)).build();
+            match wildcard_one(&agent, &host, &model, &t.to_string(), season, &pick) {
+                Some(text) => {
+                    sim.log_wildcard(t, cur_phase(), "Thrushcombe", &text)?;
+                    println!("Wildcard: {text}");
+                }
+                None => eprintln!("oracle unavailable ({host}) — no wildcard this time."),
+            }
         }
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;

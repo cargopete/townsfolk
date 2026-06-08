@@ -2013,6 +2013,33 @@ impl Sim {
         Ok(())
     }
 
+    /// Append an LLM-invented wildcard happening to the chronicle. It is *effect-free* — a
+    /// recorded flavour event that never enters the deterministic fold, so the world stays
+    /// reproducible while the town can still surprise you.
+    pub fn log_wildcard(&self, date: Date, phase: Phase, actor: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,'wildcard',?4,?5)",
+            params![day, phase.ord(), date.to_string(), actor, text],
+        )?;
+        Ok(())
+    }
+
+    /// The day-index of the most recent wildcard, to throttle how often they happen.
+    pub fn last_wildcard_day(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn.query_row("SELECT MAX(day) FROM events WHERE kind='wildcard'", [], |r| r.get(0))
+    }
+
+    /// The present grown souls' names, for colouring a wildcard prompt.
+    pub fn grown_names(&self, today: Date) -> Vec<String> {
+        self.world_snapshot(today)
+            .agents
+            .iter()
+            .filter(|a| a.active() && a.archetype != "child")
+            .map(|a| a.name.clone())
+            .collect()
+    }
+
     fn last_day(&self) -> i64 {
         self.conn
             .query_row("SELECT COALESCE(MAX(day), -1) FROM events", [], |r| r.get(0))

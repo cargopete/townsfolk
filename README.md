@@ -53,8 +53,15 @@ It runs end to end:
 - **Providence** — you play the novelist: inject circumstance (a letter, a called
   loan, a legacy, a scandal, a stranger at the cottage) and the autonomous agents
   react in character.
+- **Gossip & the rumour mill** — beyond the news incidents throw off, scandal and
+  romance are *made* at the market, after church, and over the Pelican's beer:
+  courtships, affairs, drink, debt, airs. Each rumour spreads by diffusion and works
+  on the relationship ledger.
 - **Narration oracle** — a capped local Qwen renders the salient beats in voice,
   async and recorded, so replay stays deterministic.
+- **Wildcard happenings** — now and then Qwen *invents* a one-off incident (a
+  travelling fair, a chimney fire, a foundling, a strange light); recorded as
+  effect-free flavour, so the town can surprise even you without disturbing the fold.
 - **Snapshots** — the folded world is checkpointed yearly, so reads load the nearest
   checkpoint and fold only the remainder (`status` on a 50-year world ≈ 2 ms).
 
@@ -67,8 +74,9 @@ thrush init                              # found a town, epoch = today (companio
 thrush init --start 1976-06-08 --seed 7  # or backdate for instant decades of history
 thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wasm sandbox
 thrush weather                           # record Sofia's real sky for the days ahead
-thrush tick                              # advance the chronicle to today (the daily cron)
+thrush tick                              # advance the chronicle to the current phase
 thrush narrate                           # render new salient beats in voice (local Qwen)
+thrush wildcard                          # now and then, let Qwen invent a happening
 thrush status                            # the town at a glance
 thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit
 
