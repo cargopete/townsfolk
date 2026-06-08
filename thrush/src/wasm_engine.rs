@@ -8,7 +8,8 @@ use thrush_core::{arch_ord, season_ord, Action, Observation, PolicyEngine};
 use wasmtime::{Engine, Instance, Module, Store, TypedFunc};
 
 /// The guest's exported signature: (archetype, observation…, rng) -> action ordinal.
-type DecideFn = TypedFunc<(i32, i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>;
+type DecideArgs = (i32, i32, i32, i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i64);
+type DecideFn = TypedFunc<DecideArgs, i32>;
 
 pub struct WasmPolicies {
     store: RefCell<Store<()>>,
@@ -23,7 +24,7 @@ impl WasmPolicies {
         let mut store = Store::new(&engine, ());
         let instance = Instance::new(&mut store, &module, &[]).map_err(|e| e.to_string())?;
         let decide = instance
-            .get_typed_func::<(i32, i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>(&mut store, "decide")
+            .get_typed_func::<DecideArgs, i32>(&mut store, "decide")
             .map_err(|e| e.to_string())?;
         Ok(Self { store: RefCell::new(store), decide })
     }
@@ -50,6 +51,10 @@ impl PolicyEngine for WasmPolicies {
                     o.is_market as i32,
                     o.is_sunday as i32,
                     o.top_standing,
+                    o.goal,
+                    o.mood,
+                    o.friend_present as i32,
+                    o.rival_present as i32,
                     o.rng as i64,
                 ),
             )

@@ -36,6 +36,11 @@ It runs end to end:
   fulfilling it is a **triumph**. A **mood** moves with what befalls them — and not
   uniformly: **temperament** is by type (the gentry touchy about face, the hill folk
   stoic and dour, the improver mercurial), so a snub wounds one far more than another.
+- **Situation-aware** — `decide()` reacts to its own goal and mood *and to who's about
+  it this phase*: the gentry are far busier at the calling hour when a friend or a
+  rival is present (company to keep, or a standing to defend), the debtor economises,
+  the riser spends on face. The flat scalar ABI just gains a few derived fields, so
+  native/wasm parity still holds bit-for-bit.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

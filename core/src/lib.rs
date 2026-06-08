@@ -460,16 +460,42 @@ fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: 
     let actors: Vec<usize> = (0..world.agents.len())
         .filter(|&i| world.agents[i].active() && acts_in_phase(&world.agents[i].archetype, phase))
         .collect();
+    // where everyone is this phase, so a soul can know who's about them
+    let wd = date.weekday();
+    let places: Vec<String> = (0..world.agents.len())
+        .map(|j| if world.agents[j].active() { placement(&world.agents[j], phase, wd) } else { String::new() })
+        .collect();
     for i in actors {
-        let obs = observe(world, i, day, date, top, seed, phase);
+        let (friend, rival) = present_ties(world, i, &places);
+        let obs = observe(world, i, day, date, top, seed, phase, friend, rival);
         let action = engine.decide(&world.agents[i].archetype, &obs);
-        // temper the choice by the soul's mood and ambition
-        let mut trng = rng_for(seed ^ 0x600A_0000_0000, (day * PHASES + phase.ord()) ^ (i as i64).rotate_left(11));
-        let action = temper(action, &world.agents[i], &mut trng);
         if !matches!(action, Action::Idle) {
             arbitrate(world, i, action, day, date, phase, out, seed);
         }
     }
+}
+
+/// Is a friend (warm) or a rival (cold) co-located with `i` this phase?
+fn present_ties(world: &World, i: usize, places: &[String]) -> (bool, bool) {
+    let (mut friend, mut rival) = (false, false);
+    if places[i].is_empty() {
+        return (false, false);
+    }
+    for j in 0..world.agents.len() {
+        if j == i || places[j].is_empty() || places[j] != places[i] {
+            continue;
+        }
+        let a = world.aff(i, j);
+        if a >= 25 {
+            friend = true;
+        } else if a <= -25 {
+            rival = true;
+        }
+        if friend && rival {
+            break;
+        }
+    }
+    (friend, rival)
 }
 
 // ----------------------------------------------------------------------------- behaviour
@@ -492,6 +518,10 @@ pub struct Observation {
     pub is_market: bool, // Wednesday
     pub is_sunday: bool,
     pub top_standing: i32, // the grandest in town — the bar status is measured against
+    pub goal: i32,         // their ambition (kind ordinal)
+    pub mood: i32,         // their present spirits
+    pub friend_present: bool,
+    pub rival_present: bool,
     pub rng: u64,          // per-agent, per-day deterministic seed for stochastic choice
 }
 
@@ -511,7 +541,7 @@ pub enum Action {
     Round,      // vet: the rounds, the connector
 }
 
-fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, phase: Phase) -> Observation {
+fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, phase: Phase, friend: bool, rival: bool) -> Observation {
     let a = &world.agents[i];
     Observation {
         standing: a.standing,
@@ -522,6 +552,10 @@ fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, p
         is_market: date.weekday() == Weekday::Wednesday,
         is_sunday: date.weekday() == Weekday::Sunday,
         top_standing: top,
+        goal: a.goal as i32,
+        mood: a.mood as i32,
+        friend_present: friend,
+        rival_present: rival,
         rng: seed
             ^ 0xB6E1_0000_0000
             ^ ((day * PHASES + phase.ord()) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -790,6 +824,10 @@ fn decide(archetype: &str, o: &Observation) -> Action {
         o.is_market as i32,
         o.is_sunday as i32,
         o.top_standing,
+        o.goal,
+        o.mood,
+        o.friend_present as i32,
+        o.rival_present as i32,
         o.rng,
     ))
 }
@@ -1277,45 +1315,6 @@ fn goal_triumph(world: &World, i: usize) -> String {
         4 => format!("{nm} has, at long last, got the better of {who}."),
         5 => format!("{nm} has made a fortune, and means everyone to know it."),
         _ => format!("{nm} is well content with their lot."),
-    }
-}
-
-/// Temper a chosen action by the soul's mood and goal — so their ambition and spirits show
-/// in what they actually do.
-fn temper(action: Action, a: &Agent, rng: &mut ChaCha8Rng) -> Action {
-    // the grieving and low withdraw
-    if a.mood <= -45 && rng.gen_bool(0.6) {
-        return Action::Idle;
-    }
-    match a.goal {
-        1 => match action {
-            // clearing debt: no extravagance; mend and make do, drive a bargain
-            Action::GiveDinner | Action::KeepUp => Action::Economise,
-            Action::Idle if a.archetype == "hill_farmer" && rng.gen_bool(0.3) => Action::Haggle,
-            other => other,
-        },
-        2 | 4 => match action {
-            // rising / outdoing a rival: be seen, spend on standing
-            Action::Idle if a.archetype == "genteel_status_seeker" && rng.gen_bool(0.4) => {
-                if a.purse > 0 && rng.gen_bool(0.5) { Action::GiveDinner } else { Action::PayCall }
-            }
-            other => other,
-        },
-        5 => match action {
-            // making a fortune: deal and scheme
-            Action::Idle if rng.gen_bool(0.3) => {
-                if a.archetype == "scheming_improver" { Action::Scheme } else { Action::Haggle }
-            }
-            other => other,
-        },
-        _ => {
-            // the triumphant gentry grow lavish
-            if a.mood >= 45 && a.archetype == "genteel_status_seeker" && matches!(action, Action::PayCall) && rng.gen_bool(0.5) {
-                Action::GiveDinner
-            } else {
-                action
-            }
-        }
     }
 }
 
@@ -2094,7 +2093,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 11;
+const SNAPSHOT_VERSION: i64 = 12;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2490,7 +2489,7 @@ impl Sim {
             let (doing, beat) = if let Some(txt) = beats.get(&ph) {
                 (txt.clone(), true)
             } else if a.archetype != "child" && acts_in_phase(&a.archetype, phase) {
-                let o = observe(&world, idx, day, date, top, self.seed, phase);
+                let o = observe(&world, idx, day, date, top, self.seed, phase, false, false);
                 match self.engine.decide(&a.archetype, &o) {
                     Action::Idle => (routine_doing(a, phase, wd), false),
                     act => (act.label().to_string(), false),
@@ -2516,7 +2515,7 @@ impl Sim {
         let do_at = |i: usize, day: i64, ph: Phase| {
             let a = &world.agents[i];
             if acts_in_phase(&a.archetype, ph) {
-                let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph);
+                let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph, false, false);
                 match self.engine.decide(&a.archetype, &o) {
                     Action::Idle => routine_doing(a, ph, wd),
                     act => act.label().to_string(),
