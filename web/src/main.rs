@@ -22,6 +22,22 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+fn parse_date(s: &str) -> Option<Date> {
+    let p: Vec<&str> = s.split('-').collect();
+    if p.len() != 3 {
+        return None;
+    }
+    let m: u8 = p[1].parse().ok()?;
+    Date::from_calendar_date(p[0].parse().ok()?, time::Month::try_from(m).ok()?, p[2].parse().ok()?).ok()
+}
+
+fn qparam(url: &str, key: &str) -> Option<String> {
+    url.split('?').nth(1)?.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
+}
+
 const CSS: &str = "
 :root{--ink:#2b2620;--faint:#8a7f70;--rule:#e2d9c8;--bg:#f5f0e6;--link:#7a4a2b;--card:#fbf8f1}
 *{box-sizing:border-box}
@@ -53,7 +69,7 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
          <title>{}</title><style>{}</style></head><body><div class=wrap>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a></div>{}</div></body></html>",
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
 }
@@ -219,6 +235,27 @@ fn person(sim: &Sim, idx: usize) -> String {
         body.push_str(&format!("<h2>Where they stand</h2>{}", ties_html));
     }
 
+    // their day, phase by phase — recorded beats slotted into the routine
+    if a.active() {
+        if let Ok(lines) = sim.person_day(idx, t) {
+            let cur = phase_now().name();
+            body.push_str("<h2>Their day</h2><table><tr><th>Phase</th><th>Where</th><th>Doing</th></tr>");
+            for l in lines {
+                let hi = if l.phase == cur { " style='background:#f3ecda'" } else { "" };
+                let doing = if l.beat {
+                    format!("<b>{}</b>", esc(&l.doing))
+                } else {
+                    format!("<span class=next>{}</span>", esc(&l.doing))
+                };
+                body.push_str(&format!(
+                    "<tr{hi}><td class=where>{}</td><td class=where>{}</td><td>{}</td></tr>",
+                    esc(&l.phase), esc(&l.location), doing
+                ));
+            }
+            body.push_str("</table>");
+        }
+    }
+
     // kin
     let mut kin = String::new();
     if let Some(s) = a.spouse { kin.push_str(&format!("married to {} &middot; ", link(s))); }
@@ -278,7 +315,7 @@ fn graph(sim: &Sim) -> String {
          body{{margin:0}}#net{{height:88vh;border:1px solid var(--rule)}}.legend{{color:var(--faint);font-size:.85rem}}</style>\
          <script src='https://unpkg.com/vis-network/standalone/umd/vis-network.min.js'></script></head>\
          <body><div class=wrap style='max-width:1100px'>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a></div>\
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a></div>\
          <h1>Kinship</h1><div class=legend>marriages dashed &middot; descent arrowed &middot; drag to explore, click a soul to open them</div>\
          <div id=net></div>\
          <script>\
@@ -291,6 +328,43 @@ fn graph(sim: &Sim) -> String {
     )
 }
 
+const PHASE_NAMES: [&str; 5] = ["dawn", "forenoon", "afternoon", "evening", "night"];
+
+/// Time-travel: the chronicle of a chosen date, grouped by phase, with prev/next.
+fn day(sim: &Sim, url: &str) -> String {
+    let date = qparam(url, "d").as_deref().and_then(parse_date).unwrap_or_else(today);
+    let ds = date.to_string();
+    let prev = date.previous_day().map(|d| d.to_string()).unwrap_or_else(|| ds.clone());
+    let next = date.next_day().map(|d| d.to_string()).unwrap_or_else(|| ds.clone());
+    let mut body = format!(
+        "<h1>{}, {}</h1>\
+         <div class=sub><a href=/day?d={}>&larr; the day before</a> &middot; \
+         <form style='display:inline' method=get action=/day><input type=date name=d value={}> <button>go</button></form> \
+         &middot; <a href=/day?d={}>the day after &rarr;</a></div>",
+        date.weekday(), esc(&ds), esc(&prev), esc(&ds), esc(&next)
+    );
+    match sim.events_on(&ds, 800) {
+        Ok(es) if !es.is_empty() => {
+            for (ph, label) in PHASE_NAMES.iter().enumerate() {
+                let slot: Vec<&_> = es.iter().filter(|e| e.phase == ph as i64).collect();
+                if slot.is_empty() {
+                    continue;
+                }
+                body.push_str(&format!("<h2>{}</h2>", esc(label)));
+                for e in slot {
+                    body.push_str(&format!(
+                        "<div class=entry><span class=date>{}</span> {}</div>",
+                        esc(&e.actor), esc(&e.text)
+                    ));
+                }
+            }
+        }
+        Ok(_) => body.push_str("<p class=sub>Nothing the town saw fit to record that day.</p>"),
+        Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+    }
+    page(&format!("Thrushcombe — {ds}"), &body)
+}
+
 fn route(sim: &Sim, url: &str) -> String {
     let path = url.split('?').next().unwrap_or("/");
     if path == "/" {
@@ -299,6 +373,8 @@ fn route(sim: &Sim, url: &str) -> String {
         folk(sim)
     } else if path == "/graph" {
         graph(sim)
+    } else if path == "/day" {
+        day(sim, url)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),

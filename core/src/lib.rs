@@ -636,21 +636,69 @@ fn placement(a: &Agent, phase: Phase, wd: Weekday) -> String {
         },
         "blunt_hand" => match phase {
             Phase::Dawn => "the yard".into(),
-            Phase::Forenoon | Phase::Afternoon => "at work in the town".into(),
+            // a tradesperson is at their own place of work; a hired hand is "about the town"
+            Phase::Forenoon | Phase::Afternoon => if a.trade.is_some() { home } else { "at work about the town".into() },
             Phase::Evening => "The Pelican".into(),
-            Phase::Night => home,
+            Phase::Night => a.seat.clone(),
         },
         "official" => match phase {
             Phase::Dawn => "the study".into(),
-            Phase::Forenoon | Phase::Afternoon => "on parish visits".into(),
+            Phase::Forenoon | Phase::Afternoon => if a.trade.is_some() { home } else { "on parish visits".into() },
             Phase::Evening => "the vestry".into(),
-            Phase::Night => home,
+            Phase::Night => a.seat.clone(),
         },
         "child" => match phase {
             Phase::Forenoon | Phase::Afternoon => "the school".into(),
             _ => home,
         },
         _ => home,
+    }
+}
+
+/// What an agent is *about* when they aren't doing anything notable — the routine verb for
+/// the phase, so "doing now" never reads as idle while the placement implies activity.
+fn routine_doing(a: &Agent, phase: Phase, wd: Weekday) -> String {
+    if wd == Weekday::Sunday && matches!(phase, Phase::Forenoon) {
+        return "at church".into();
+    }
+    let trade_verb = |t: &str| match t {
+        "baker" => "at the oven",
+        "butcher" => "at the block",
+        "miller" => "at the wheel",
+        "postmistress" => "at the counter",
+        "dressmaker" => "at her needle",
+        "carrier" => "on the road",
+        "stationmaster" | "railway porter" => "at the station",
+        "schoolmistress" => "hearing lessons",
+        "gamekeeper" => "out on the estate",
+        "sexton" => "tending the churchyard",
+        "knacker" => "about his grim trade",
+        "solicitor" | "bank manager" => "at his desk",
+        _ => "at their trade",
+    };
+    match a.archetype.as_str() {
+        "genteel_status_seeker" => match phase {
+            Phase::Afternoon => "paying calls",
+            Phase::Evening => "at dinner",
+            _ => "at home",
+        }
+        .into(),
+        "hill_farmer" | "scheming_improver" => match phase {
+            Phase::Dawn => "at the milking",
+            Phase::Forenoon => if wd == Weekday::Wednesday { "at the market" } else { "in the fields" },
+            Phase::Afternoon => "in the fields",
+            Phase::Evening => "by the fire",
+            Phase::Night => "abed",
+        }
+        .into(),
+        "practitioner" => "on the rounds".into(),
+        "official" => a.trade.as_deref().map(trade_verb).unwrap_or("about the parish").into(),
+        "blunt_hand" => match phase {
+            Phase::Evening => "at the Pelican".into(),
+            _ => a.trade.as_deref().map(trade_verb).unwrap_or("at their work").into(),
+        },
+        "child" => "at lessons and mischief".into(),
+        _ => "about the day".into(),
     }
 }
 
@@ -1654,9 +1702,18 @@ pub struct Sim {
 /// A structured chronicle line for readers (web/legends).
 pub struct ChronEntry {
     pub date: String,
+    pub phase: i64,
     pub kind: String,
     pub actor: String,
     pub text: String,
+}
+
+/// One phase of a soul's day: where they were and what they were about.
+pub struct DayLine {
+    pub phase: String,
+    pub location: String,
+    pub doing: String,
+    pub beat: bool, // true if this was an actual recorded happening (not just routine)
 }
 
 /// Everything we can surface about one soul, right now.
@@ -1932,12 +1989,12 @@ impl Sim {
     /// The most recent chronicle entries, oracle prose preferred over the template line.
     pub fn chronicle(&self, limit: i64) -> rusqlite::Result<Vec<ChronEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.date, e.kind, e.actor, COALESCE(n.text, e.text)
+            "SELECT e.date, e.phase, e.kind, e.actor, COALESCE(n.text, e.text)
              FROM events e LEFT JOIN narration n ON n.event_id = e.id
              ORDER BY e.id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
-            Ok(ChronEntry { date: r.get(0)?, kind: r.get(1)?, actor: r.get(2)?, text: r.get(3)? })
+            Ok(ChronEntry { date: r.get(0)?, phase: r.get(1)?, kind: r.get(2)?, actor: r.get(3)?, text: r.get(4)? })
         })?;
         rows.collect()
     }
@@ -1946,15 +2003,73 @@ impl Sim {
     pub fn person_events(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<ChronEntry>> {
         let like = format!("%{name}%");
         let mut stmt = self.conn.prepare(
-            "SELECT e.date, e.kind, e.actor, COALESCE(n.text, e.text)
+            "SELECT e.date, e.phase, e.kind, e.actor, COALESCE(n.text, e.text)
              FROM events e LEFT JOIN narration n ON n.event_id = e.id
              WHERE e.actor = ?1 OR e.text LIKE ?2
              ORDER BY e.id DESC LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![name, like, limit], |r| {
-            Ok(ChronEntry { date: r.get(0)?, kind: r.get(1)?, actor: r.get(2)?, text: r.get(3)? })
+            Ok(ChronEntry { date: r.get(0)?, phase: r.get(1)?, kind: r.get(2)?, actor: r.get(3)?, text: r.get(4)? })
         })?;
         rows.collect()
+    }
+
+    /// All the chronicle of a given date, in order (for time-travel to a day).
+    pub fn events_on(&self, date: &str, limit: i64) -> rusqlite::Result<Vec<ChronEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.date, e.phase, e.kind, e.actor, COALESCE(n.text, e.text)
+             FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             WHERE e.date = ?1 ORDER BY e.id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![date, limit], |r| {
+            Ok(ChronEntry { date: r.get(0)?, phase: r.get(1)?, kind: r.get(2)?, actor: r.get(3)?, text: r.get(4)? })
+        })?;
+        rows.collect()
+    }
+
+    /// The full folded world at the end of `date` — for the historical town board.
+    pub fn world_on(&self, date: Date) -> World {
+        self.world_at(self.target_day(date).max(0) * PHASES + (PHASES - 1))
+    }
+
+    /// A soul's whole day on `date`: each phase, where they were and what they were about —
+    /// their recorded beats slotted into the routine.
+    pub fn person_day(&self, idx: usize, date: Date) -> rusqlite::Result<Vec<DayLine>> {
+        let day = self.target_day(date).max(0);
+        let world = self.world_at(day * PHASES + (PHASES - 1));
+        let wd = date.weekday();
+        let Some(a) = world.agents.get(idx) else { return Ok(Vec::new()) };
+        let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
+
+        // recorded beats for this soul on this day, by phase
+        let mut stmt = self.conn.prepare(
+            "SELECT e.phase, COALESCE(n.text, e.text) FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             WHERE e.actor = ?1 AND e.day = ?2 ORDER BY e.id",
+        )?;
+        let mut beats: BTreeMap<i64, String> = BTreeMap::new();
+        let rows = stmt.query_map(params![a.name, day], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (ph, txt) = row?;
+            beats.entry(ph).or_insert(txt);
+        }
+
+        let mut lines = Vec::new();
+        for ph in 0..PHASES {
+            let phase = Phase::from_ord(ph);
+            let (doing, beat) = if let Some(txt) = beats.get(&ph) {
+                (txt.clone(), true)
+            } else if a.archetype != "child" && acts_in_phase(&a.archetype, phase) {
+                let o = observe(&world, idx, day, date, top, self.seed, phase);
+                match self.engine.decide(&a.archetype, &o) {
+                    Action::Idle => (routine_doing(a, phase, wd), false),
+                    act => (act.label().to_string(), false),
+                }
+            } else {
+                (routine_doing(a, phase, wd), false)
+            };
+            lines.push(DayLine { phase: phase.name().to_string(), location: placement(a, phase, wd), doing, beat });
+        }
+        Ok(lines)
     }
 
     /// A full detailed read of the town: every present soul's place, doings, kin and
@@ -1965,9 +2080,19 @@ impl Sim {
         let wd = today.weekday();
         let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
 
-        let act_label = |i: usize, day: i64, ph: Phase| {
-            let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph);
-            self.engine.decide(&world.agents[i].archetype, &o).label().to_string()
+        // what a soul is about in a given phase: their notable action if they roll one,
+        // else the routine verb for the phase (so it never reads as idle).
+        let do_at = |i: usize, day: i64, ph: Phase| {
+            let a = &world.agents[i];
+            if acts_in_phase(&a.archetype, ph) {
+                let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph);
+                match self.engine.decide(&a.archetype, &o) {
+                    Action::Idle => routine_doing(a, ph, wd),
+                    act => act.label().to_string(),
+                }
+            } else {
+                routine_doing(a, ph, wd)
+            }
         };
 
         let mut people = Vec::new();
@@ -1976,27 +2101,10 @@ impl Sim {
             if !a.active() {
                 continue;
             }
-            // what they're about this phase (if they're out), and at their next outing
-            let doing = if a.archetype == "child" {
-                "at lessons and mischief".to_string()
-            } else if acts_in_phase(&a.archetype, phase) {
-                act_label(i, target, phase)
-            } else {
-                "about the day's round".to_string()
-            };
-            let next = if a.archetype == "child" {
-                "growing".to_string()
-            } else {
-                let mut lbl = "later in the day".to_string();
-                for step in 1..=PHASES {
-                    let s = target * PHASES + phase.ord() + step;
-                    let nph = Phase::from_ord(s);
-                    if acts_in_phase(&a.archetype, nph) {
-                        lbl = act_label(i, s.div_euclid(PHASES), nph);
-                        break;
-                    }
-                }
-                lbl
+            let doing = do_at(i, target, phase);
+            let next = {
+                let s = target * PHASES + phase.ord() + 1;
+                do_at(i, s.div_euclid(PHASES), Phase::from_ord(s))
             };
             let children: Vec<String> = (0..world.agents.len())
                 .filter(|&j| world.agents[j].parent == Some(i) && world.agents[j].active())
