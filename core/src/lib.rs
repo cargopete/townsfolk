@@ -283,10 +283,25 @@ pub struct Report {
     pub chronicle: Vec<String>,
 }
 
+/// Event kinds worth rendering in voice. Pure flavour (market, vet rounds) keeps its
+/// template line; the salient beats get the oracle.
+pub const SALIENT: &[&str] = &[
+    "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household",
+];
+
+fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
+    // The recorded oracle: an LLM is non-deterministic at generation time, so we log
+    // its output once, keyed by event, and replay the stored text forever.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS narration(event_id INTEGER PRIMARY KEY, text TEXT NOT NULL);",
+    )
+}
+
 impl Sim {
     /// Open an existing world (must have been `init`ed).
     pub fn open(path: &str) -> rusqlite::Result<Sim> {
         let conn = Connection::open(path)?;
+        ensure_aux(&conn)?;
         let seed: i64 = conn.query_row("SELECT val FROM meta WHERE key='seed'", [], |r| r.get(0))?;
         let ej: i64 = conn.query_row("SELECT val FROM meta WHERE key='epoch_julian'", [], |r| r.get(0))?;
         Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap() })
@@ -303,9 +318,40 @@ impl Sim {
                 kind TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_events_day ON events(day);",
         )?;
+        ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
         Ok(Sim { conn, seed, epoch })
+    }
+
+    /// Salient events not yet rendered in voice, as (event_id, date, template_text).
+    pub fn unnarrated_salient(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String)>> {
+        let placeholders = SALIENT.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT e.id, e.date, e.text FROM events e
+             LEFT JOIN narration n ON n.event_id = e.id
+             WHERE n.event_id IS NULL AND e.kind IN ({placeholders})
+             ORDER BY e.id ASC LIMIT ?",
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = SALIENT
+            .iter()
+            .map(|k| k as &dyn rusqlite::ToSql)
+            .chain(std::iter::once(&limit as &dyn rusqlite::ToSql))
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Record the oracle's rendering of an event, verbatim.
+    pub fn save_narration(&self, event_id: i64, text: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO narration(event_id, text) VALUES(?1, ?2)",
+            params![event_id, text],
+        )?;
+        Ok(())
     }
 
     fn last_day(&self) -> i64 {
@@ -358,7 +404,12 @@ impl Sim {
         }
 
         let mut chronicle = Vec::new();
-        let mut stmt = self.conn.prepare("SELECT date, text FROM events ORDER BY id DESC LIMIT 14")?;
+        // Prefer the oracle's rendering once it exists; fall back to the template line.
+        let mut stmt = self.conn.prepare(
+            "SELECT e.date, COALESCE(n.text, e.text)
+             FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             ORDER BY e.id DESC LIMIT 14",
+        )?;
         let rows = stmt.query_map([], |r| {
             let date: String = r.get(0)?;
             let text: String = r.get(1)?;

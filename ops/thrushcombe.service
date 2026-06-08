@@ -1,0 +1,7 @@
+[Unit]
+Description=Thrushcombe — advance the town and narrate the day
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/pepe/townsfolk/ops/daily.sh

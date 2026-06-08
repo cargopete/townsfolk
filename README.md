@@ -28,9 +28,14 @@ cargo build
 ./target/debug/thrush init            # found a town, epoch = today
 ./target/debug/thrush init --start 2026-04-01 --seed 7   # or backdate for instant history
 ./target/debug/thrush tick            # advance the chronicle to today (cron runs this daily)
+./target/debug/thrush narrate         # render new salient beats in voice (local Qwen)
 ./target/debug/thrush status          # the town at a glance
 ./target/debug/thrush watch           # live TUI monitor (q to quit)
 ```
+
+The town runs itself on a daily systemd user timer — see [`ops/`](ops/). Each beat
+advances to today and narrates the new salient events; both steps are idempotent and
+self-heal across missed days.
 
 ## Layout
 

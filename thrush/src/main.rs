@@ -47,10 +47,42 @@ enum Cmd {
     },
     /// Advance the chronicle forward to today (catches up missed days).
     Tick,
+    /// Render salient un-narrated events in voice via the local Qwen oracle.
+    Narrate {
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
     Watch,
+}
+
+const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a small West-Country market town in 1934. Render the given event as a single short, warm, wry diary-style sentence or two, in the register of interwar English provincial comedy — gentle misfortune borne with dignity, the small humiliation, the understated joke. Never melodrama. No preamble, no quotation marks.";
+
+/// One call to the recorded oracle. Returns the rendered prose, or None on failure
+/// (container down, timeout) so a batch degrades gracefully instead of dying.
+fn narrate_one(agent: &ureq::Agent, host: &str, model: &str, _date: &str, text: &str) -> Option<String> {
+    let body = serde_json::json!({
+        "model": model,
+        "system": SYSTEM_PROMPT,
+        "prompt": text,
+        "think": false,
+        "stream": false,
+        "options": { "num_ctx": 4096, "temperature": 0.8 },
+    });
+    let resp: serde_json::Value = agent
+        .post(&format!("{host}/api/generate"))
+        .send_json(body)
+        .ok()?
+        .into_json()
+        .ok()?;
+    let s = resp.get("response")?.as_str()?.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn today() -> Date {
@@ -110,6 +142,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut sim = Sim::open(&cli.db)?;
             let added = sim.catch_up(today())?;
             println!("Advanced to {}. {added} new event(s) logged.", today());
+        }
+        Cmd::Narrate { limit } => {
+            let sim = Sim::open(&cli.db)?;
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new()
+                .timeout_read(Duration::from_secs(180)) // survive a cold model load
+                .build();
+            let items = sim.unnarrated_salient(limit)?;
+            if items.is_empty() {
+                println!("Nothing to narrate — the chronicle is current.");
+            }
+            let mut done = 0;
+            for (id, date, text) in items {
+                match narrate_one(&agent, &host, &model, &date, &text) {
+                    Some(prose) => {
+                        sim.save_narration(id, &prose)?;
+                        println!("  {date}  {prose}");
+                        done += 1;
+                    }
+                    None => {
+                        eprintln!("oracle unavailable (is {host} up?) — stopping after {done} rendered.");
+                        break;
+                    }
+                }
+            }
         }
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;
