@@ -78,6 +78,12 @@ It runs end to end:
 - **Animals** — a herd across the farms (cows, sheep, horses, dogs) with health,
   gestation and value; calving and lambing in season, the vet's ailments, the knacker
   for fallen stock.
+- **The Show** — the year's great set-piece, the Thrushcombe & District Show each 23rd
+  of August: classes judged and rosettes awarded (best beast, best garden produce, best
+  preserves) and the silver Champion's Cup for best in show. A win lifts a soul's standing
+  and spirits; the losing of it — the improver beaten to the beast prize by a hill farmer,
+  going home black as thunder — is its own small tragedy, and a disputed judging can end
+  a friendship. Deterministic, in the fold.
 - **Providence** — you play the novelist: inject circumstance (a letter, a called
   loan, a legacy, a scandal, a stranger at the cottage) and the autonomous agents
   react in character.

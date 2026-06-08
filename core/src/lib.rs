@@ -440,6 +440,10 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
         world.spawn_news("Lady Aldermaston", "Lady Aldermaston's splendid garden party", 1, day, &[]);
         world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's made-over frock at the party", -1, day, &["Lady Aldermaston"]);
     }
+    // the year's great set-piece: the Thrushcombe & District Show
+    if matches!(phase, Phase::Afternoon) && date.month() == Month::August && date.day() == 23 {
+        out.extend(the_show(world, day, date, seed));
+    }
 
     // --- the behaviour layer: whoever is out and about this phase acts in character ---
     behaviour_phase(world, day, phase, date, seed, engine, &mut out);
@@ -1814,6 +1818,104 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
     out
 }
 
+/// The Thrushcombe & District Show — the year's great set-piece. Classes are judged, rosettes
+/// and the silver cup awarded; a win lifts a soul's standing and spirits, and the losing of it
+/// (especially by the improver, to a hill farmer) is its own small tragedy. Deterministic.
+fn the_show(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut rng = rng_for(seed ^ 0x5409_0000_0000, day);
+    let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "show".into(), actor: actor.into(), text };
+    let mut out = vec![mk(
+        "Thrushcombe",
+        "The Thrushcombe & District Show was held on the green, the whole town turned out among the marquees, the prize beasts and the produce tents.".into(),
+    )];
+
+    let active: Vec<usize> = (0..world.agents.len()).filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child").collect();
+    // a win is mostly merit (standing) but the rosette is never certain — luck judges too
+    let pick = |rng: &mut ChaCha8Rng, cands: &[usize], merit: &dyn Fn(usize) -> i64| -> Option<usize> {
+        if cands.is_empty() {
+            return None;
+        }
+        let w: Vec<i64> = cands.iter().map(|&i| (merit(i) + rng.gen_range(0..45)).max(1)).collect();
+        let total: i64 = w.iter().sum();
+        let mut r = rng.gen_range(0..total);
+        for (k, &c) in cands.iter().enumerate() {
+            r -= w[k];
+            if r < 0 {
+                return Some(c);
+            }
+        }
+        cands.last().copied()
+    };
+    let award = |world: &mut World, i: usize, st: i32, md: i16, purse: i32| {
+        clamp_standing(&mut world.agents[i], st);
+        nudge_mood(&mut world.agents[i], md);
+        world.agents[i].purse += purse;
+    };
+
+    let mut champions: Vec<usize> = Vec::new();
+
+    // Best Beast — the farmers' class, and the improver's yearly heartbreak
+    let farmers: Vec<usize> = active.iter().copied().filter(|&i| matches!(world.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver")).collect();
+    if let Some(w) = pick(&mut rng, &farmers, &|i| world.agents[i].standing as i64 + world.agents[i].purse.max(0) as i64 / 6) {
+        award(world, w, 6, 18, 4);
+        let nm = world.agents[w].name.clone();
+        out.push(mk(&nm, format!("{nm}'s beast took the red rosette for the champion of the show.")));
+        world.spawn_news(&nm, &format!("{nm}'s prize beast at the Show"), 2, day, &[]);
+        champions.push(w);
+        // the improver, if beaten, takes it hard
+        for &f in &farmers {
+            if f != w && world.agents[f].archetype == "scheming_improver" {
+                nudge_mood(&mut world.agents[f], -10);
+                world.nudge_aff(f, w, -8);
+                let fn_ = world.agents[f].name.clone();
+                out.push(mk(&fn_, format!("{fn_}, who had counted on the beast prize, went home black as thunder.")));
+            }
+        }
+    }
+
+    // Best Garden & Produce — the gentlefolk's quiet war of marrows and roses
+    let gentry: Vec<usize> = active.iter().copied().filter(|&i| world.agents[i].archetype == "genteel_status_seeker").collect();
+    if let Some(w) = pick(&mut rng, &gentry, &|i| world.agents[i].standing as i64) {
+        award(world, w, 4, 12, 0);
+        let nm = world.agents[w].name.clone();
+        out.push(mk(&nm, format!("{nm} carried off the cup for best garden produce, to no little satisfaction.")));
+        champions.push(w);
+    }
+
+    // Best Preserves & Baking — the women's class
+    let women: Vec<usize> = active.iter().copied().filter(|&i| world.agents[i].sex == 0).collect();
+    if let Some(w) = pick(&mut rng, &women, &|i| world.agents[i].standing as i64 / 2 + 10) {
+        award(world, w, 3, 10, 2);
+        let nm = world.agents[w].name.clone();
+        out.push(mk(&nm, format!("{nm}'s preserves took first in the produce tent, and the recipe was begged the whole afternoon.")));
+        champions.push(w);
+    }
+
+    // the silver Champion's Cup — best in show, from among the day's winners
+    if let Some(&best) = champions.iter().max_by_key(|&&i| world.agents[i].standing) {
+        award(world, best, 5, 14, 0);
+        let nm = world.agents[best].name.clone();
+        out.push(mk(&nm, format!("And the silver Champion's Cup, best in the whole Show, went to {nm} — the talk of the green.")));
+        world.spawn_news(&nm, &format!("{nm} taking the Champion's Cup at the Show"), 2, day, &[]);
+    }
+
+    // now and then a judging is disputed, and a friendship founders on a rosette
+    if farmers.len() >= 2 && rng.gen_bool(0.18) {
+        let a = farmers[rng.gen_range(0..farmers.len())];
+        let mut b = farmers[rng.gen_range(0..farmers.len())];
+        if a == b {
+            b = *farmers.iter().find(|&&x| x != a).unwrap_or(&a);
+        }
+        if a != b {
+            world.nudge_aff(a, b, -14);
+            world.nudge_aff(b, a, -14);
+            let (na, nb) = (world.agents[a].name.clone(), world.agents[b].name.clone());
+            out.push(mk(&na, format!("{na} disputed the judging hotly with {nb}, and the two were not on speaking terms by teatime.")));
+        }
+    }
+    out
+}
+
 /// The rumour mill — where the town's gossip is actually *made*: scandal and romance
 /// whispered at the market, after church, and over the Pelican's beer. Spicier and more
 /// frequent than the news that incidents throw off, and most of it unkind.
@@ -2187,12 +2289,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 15;
+const SNAPSHOT_VERSION: i64 = 16;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3050,11 +3152,11 @@ impl Sim {
                 p.push(format!("{} in calf — due in {}d  (health {})", an.name, an.gest, an.health));
             }
         }
-        // the Show, ~18 July
-        if let Ok(show) = Date::from_calendar_date(today.year(), Month::July, 18) {
+        // the Thrushcombe & District Show, 23 August
+        if let Ok(show) = Date::from_calendar_date(today.year(), Month::August, 23) {
             let days = (show.to_julian_day() - today.to_julian_day()) as i64;
             if days > 0 {
-                p.push(format!("Agricultural Show — in {days}d"));
+                p.push(format!("the Thrushcombe & District Show — in {days}d"));
             }
         }
         p
