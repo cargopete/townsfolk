@@ -132,18 +132,25 @@ fn today() -> Date {
         .date()
 }
 
-const WILDCARD_PROMPT: &str = "You are inventing a single small, surprising, in-world incident for the chronicle of Thrushcombe St Mary, a 1934 West-Country market town. Invent ONE unexpected happening appropriate to the time and place — a travelling fair or circus, a chimney fire, a foundling left on a doorstep, a runaway beast, a strange light in the sky, a peddler or gypsy caravan, a lost child, a found purse, a mysterious visitor, a flood, a prize in a competition, a curiosity in the newspaper. One or two sentences, warm and wry, in the register of interwar English provincial comedy. You may name one of the townsfolk given, or none. No preamble, no quotation marks.";
+const WILDCARD_KINDS: &[&str] = &["fire", "windfall", "fair", "blight", "scandal", "stranger", "foundling", "wonder"];
 
-/// Ask Qwen to invent a wildcard happening. Returns the prose, or None on failure.
-fn wildcard_one(agent: &ureq::Agent, host: &str, model: &str, date: &str, season: &str, names: &[&str]) -> Option<String> {
-    let prompt = format!("It is {date}, in the season of {season}. Some of the townsfolk: {}. Invent the incident.", names.join(", "));
+const WILDCARD_PROMPT: &str = "You invent ONE surprising in-world incident for the chronicle of Thrushcombe St Mary, a 1934 West-Country market town. Respond ONLY as JSON: {\"kind\": ..., \"target\": ..., \"text\": ...}. \"kind\" must be exactly one of: fire (a blaze that costs someone), windfall (good fortune for someone — a prize, a legacy, a found purse), fair (a travelling fair or feast that lifts the whole town), blight (crop or animal sickness on the farms), scandal (a damaging revelation about someone), stranger (a mysterious newcomer arrives), foundling (a baby left at a door), wonder (a marvel with no material effect — a comet, a strange light, a curiosity). \"target\" is one townsperson's name from the list given, or \"the town\". \"text\" is one or two warm, wry sentences in the register of interwar English provincial comedy describing the incident — no quotation marks.";
+
+/// Ask Qwen to invent a wildcard: an effect-kind (from the fixed vocabulary), a target, and
+/// the prose. Returns (kind, target, text), or None on failure.
+fn wildcard_one(agent: &ureq::Agent, host: &str, model: &str, date: &str, season: &str, names: &[&str]) -> Option<(String, String, String)> {
+    let prompt = format!("It is {date}, in the season of {season}. The townsfolk include: {}. Invent the incident.", names.join(", "));
     let body = serde_json::json!({
         "model": model, "system": WILDCARD_PROMPT, "prompt": prompt,
-        "think": false, "stream": false, "options": { "num_ctx": 4096, "temperature": 0.95 },
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 4096, "temperature": 0.95 },
     });
     let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let s = resp.get("response")?.as_str()?.trim().to_string();
-    (!s.is_empty()).then_some(s)
+    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let kind = parsed.get("kind")?.as_str()?.trim().to_lowercase();
+    let kind = if WILDCARD_KINDS.contains(&kind.as_str()) { kind } else { "wonder".to_string() };
+    let target = parsed.get("target").and_then(|v| v.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("the town").to_string();
+    let text = parsed.get("text")?.as_str()?.trim().to_string();
+    (!text.is_empty()).then_some((kind, target, text))
 }
 
 fn day_hash(day: i64) -> u64 {
@@ -281,9 +288,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
             let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(180)).build();
             match wildcard_one(&agent, &host, &model, &t.to_string(), season, &pick) {
-                Some(text) => {
-                    sim.log_wildcard(t, cur_phase(), "Thrushcombe", &text)?;
-                    println!("Wildcard: {text}");
+                Some((kind, target, text)) => {
+                    sim.record_wildcard(t, &kind, &target, &text)?;
+                    sim.catch_up(today(), cur_phase())?; // re-fold the day so the effect lands
+                    println!("Wildcard [{kind} · {target}]: {text}");
                 }
                 None => eprintln!("oracle unavailable ({host}) — no wildcard this time."),
             }

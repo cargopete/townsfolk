@@ -59,9 +59,12 @@ It runs end to end:
   on the relationship ledger.
 - **Narration oracle** — a capped local Qwen renders the salient beats in voice,
   async and recorded, so replay stays deterministic.
-- **Wildcard happenings** — now and then Qwen *invents* a one-off incident (a
-  travelling fair, a chimney fire, a foundling, a strange light); recorded as
-  effect-free flavour, so the town can surprise even you without disturbing the fold.
+- **Wildcard happenings** — now and then Qwen *invents* a one-off incident (a fire, a
+  windfall, a travelling fair, a blight, a scandal, a stranger, a foundling, a wonder)
+  and picks an effect-*kind* from a fixed vocabulary; the host applies a bounded,
+  deterministic consequence (a fire costs someone, a fair lifts the town, a windfall
+  enriches them) and gossip carries it onward. Recorded and folded like weather and
+  providence, so the town surprises even you while staying reproducible to the byte.
 - **Snapshots** — the folded world is checkpointed yearly, so reads load the nearest
   checkpoint and fold only the remainder (`status` on a 50-year world ≈ 2 ms).
 

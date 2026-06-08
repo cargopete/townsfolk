@@ -378,7 +378,8 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 /// Advance the world by one *phase* (a fifth of a day). Systems are scheduled to when
 /// they'd really happen, so beats fall across the day instead of in a midnight lump.
 /// Deterministic in (seed, day, phase, world-state-from-prior-slots).
-fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>) -> Vec<Event> {
+#[allow(clippy::too_many_arguments)]
+fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>, wildcards: &BTreeMap<i64, Vec<Wildcard>>) -> Vec<Event> {
     let mut out = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
 
@@ -394,6 +395,9 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
         out.extend(animal_events(world, day, date, seed));
         if let Some(list) = interventions.get(&day) {
             out.extend(apply_interventions(world, day, date, list));
+        }
+        if let Some(list) = wildcards.get(&day) {
+            out.extend(apply_wildcards(world, day, date, list));
         }
         out.extend(seasonal_shock(world, day, date, seed, weather.get(&day).copied()));
     }
@@ -872,6 +876,16 @@ pub struct DayWeather {
     pub precip: f64, // mm
     pub tmax: f64,   // °C
     pub tmin: f64,
+}
+
+/// An LLM-invented happening, now with *consequences*: the model picks an effect-kind from a
+/// fixed vocabulary and writes the prose; the host applies a bounded, deterministic effect.
+/// Recorded (so replay holds) and folded at its day, like providence.
+#[derive(Clone)]
+pub struct Wildcard {
+    pub kind: String,   // fire|windfall|fair|blight|scandal|stranger|foundling|wonder
+    pub target: String, // a townsperson's name, or "the town"
+    pub text: String,   // the chronicler's prose
 }
 
 /// Apply the day's providence to the world, returning the beats it sets down.
@@ -1791,6 +1805,7 @@ pub struct Sim {
     engine: Box<dyn PolicyEngine>,
     interventions: BTreeMap<i64, Vec<Intervention>>,
     weather: BTreeMap<i64, DayWeather>,
+    wildcards: BTreeMap<i64, Vec<Wildcard>>,
 }
 
 /// A structured chronicle line for readers (web/legends).
@@ -1871,7 +1886,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 9;
+const SNAPSHOT_VERSION: i64 = 10;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -1887,8 +1902,88 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL,
             kind TEXT NOT NULL, target TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL);
          -- Real weather (Sofia), recorded so the fold stays deterministic.
-         CREATE TABLE IF NOT EXISTS weather(day INTEGER PRIMARY KEY, precip REAL, tmax REAL, tmin REAL);",
+         CREATE TABLE IF NOT EXISTS weather(day INTEGER PRIMARY KEY, precip REAL, tmax REAL, tmin REAL);
+         -- LLM-invented wildcards with bounded effects, recorded and folded at their day.
+         CREATE TABLE IF NOT EXISTS wildcards(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL);",
     )
+}
+
+fn load_wildcards(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, Vec<Wildcard>>> {
+    let mut stmt = conn.prepare("SELECT day, kind, target, text FROM wildcards ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, Wildcard { kind: r.get(1)?, target: r.get(2)?, text: r.get(3)? }))
+    })?;
+    let mut map: BTreeMap<i64, Vec<Wildcard>> = BTreeMap::new();
+    for row in rows {
+        let (day, wc) = row?;
+        map.entry(day).or_default().push(wc);
+    }
+    Ok(map)
+}
+
+/// Apply the day's wildcards: emit the prose, and a bounded effect by kind. Town-wide kinds
+/// touch many; targeted kinds touch one. Magnitudes are fixed (deterministic).
+fn apply_wildcards(world: &mut World, day: i64, date: Date, list: &[Wildcard]) -> Vec<Event> {
+    let mut out = Vec::new();
+    for wc in list {
+        let actor = if world.idx(&wc.target).is_some() { wc.target.clone() } else { "Thrushcombe".into() };
+        out.push(Event { day, date: date.to_string(), kind: "wildcard".into(), actor, text: wc.text.clone() });
+        let t = &wc.target;
+        let ti = world.idx(t);
+        match wc.kind.as_str() {
+            "fire" => {
+                if let Some(i) = ti {
+                    world.agents[i].purse -= 30;
+                    clamp_standing(&mut world.agents[i], -1);
+                }
+                world.spawn_news(t, &format!("the fire at {t}'s"), -1, day, &[]);
+            }
+            "windfall" => {
+                if let Some(i) = ti {
+                    world.agents[i].purse += 25;
+                    clamp_standing(&mut world.agents[i], 1);
+                }
+                world.spawn_news(t, &format!("{t}'s stroke of luck"), 2, day, &[]);
+            }
+            "fair" => {
+                for a in world.agents.iter_mut().filter(|a| a.active() && a.archetype != "child") {
+                    a.standing = (a.standing + 1).clamp(0, 100);
+                    if matches!(a.archetype.as_str(), "blunt_hand" | "hill_farmer") {
+                        a.purse += 3; // good trade at the fair
+                    }
+                }
+            }
+            "blight" => {
+                for a in world.agents.iter_mut().filter(|a| a.active() && matches!(a.archetype.as_str(), "hill_farmer" | "scheming_improver")) {
+                    a.purse -= 12;
+                }
+                for an in world.animals.iter_mut().filter(|an| an.health > 0) {
+                    an.health = (an.health - 6).clamp(0, 100);
+                }
+            }
+            "scandal" => {
+                if let Some(i) = ti {
+                    clamp_standing(&mut world.agents[i], -2);
+                }
+                world.spawn_news(t, &format!("the scandal of {t}"), -3, day, &[]);
+            }
+            "stranger" => {
+                let mut rng = rng_for(0x57A2_0000_0000 ^ day as u64, day);
+                let agent = new_incomer(&mut rng, day);
+                world.agents.push(agent);
+            }
+            "foundling" => {
+                let seat = ti.map(|i| world.agents[i].seat.clone()).unwrap_or_else(|| "the parish".into());
+                let mut child = make_agent("the foundling", "child", &seat, 6, 0, 0, 0, day);
+                child.parent = ti;
+                world.agents.push(child);
+                world.spawn_news(t, "the foundling left in the parish", 0, day, &[]);
+            }
+            _ => {} // "wonder" and anything unknown: pure talk, no material effect
+        }
+    }
+    out
 }
 
 fn load_weather(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, DayWeather>> {
@@ -1926,7 +2021,8 @@ impl Sim {
         let ej: i64 = conn.query_row("SELECT val FROM meta WHERE key='epoch_julian'", [], |r| r.get(0))?;
         let interventions = load_interventions(&conn)?;
         let weather = load_weather(&conn)?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather })
+        let wildcards = load_wildcards(&conn)?;
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather, wildcards })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -1943,7 +2039,7 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new() })
+        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new(), wildcards: BTreeMap::new() })
     }
 
     /// Record a day's real weather, but only for days not yet folded (so it can't rewrite
@@ -2013,21 +2109,24 @@ impl Sim {
         Ok(())
     }
 
-    /// Append an LLM-invented wildcard happening to the chronicle. It is *effect-free* — a
-    /// recorded flavour event that never enters the deterministic fold, so the world stays
-    /// reproducible while the town can still surprise you.
-    pub fn log_wildcard(&self, date: Date, phase: Phase, actor: &str, text: &str) -> rusqlite::Result<()> {
+    /// Record an LLM-invented wildcard (kind from the vocabulary, the model's prose) at today,
+    /// then invalidate the frontier so it folds in — with its bounded effect — at once.
+    /// Caller should `catch_up`. Recorded, so replay stays deterministic.
+    pub fn record_wildcard(&mut self, date: Date, kind: &str, target: &str, text: &str) -> rusqlite::Result<()> {
         let day = self.target_day(date).max(0);
         self.conn.execute(
-            "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,'wildcard',?4,?5)",
-            params![day, phase.ord(), date.to_string(), actor, text],
+            "INSERT INTO wildcards(day,kind,target,text) VALUES(?1,?2,?3,?4)",
+            params![day, kind, target, text],
         )?;
+        self.wildcards = load_wildcards(&self.conn)?;
+        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
         Ok(())
     }
 
     /// The day-index of the most recent wildcard, to throttle how often they happen.
     pub fn last_wildcard_day(&self) -> rusqlite::Result<Option<i64>> {
-        self.conn.query_row("SELECT MAX(day) FROM events WHERE kind='wildcard'", [], |r| r.get(0))
+        self.conn.query_row("SELECT MAX(day) FROM wildcards", [], |r| r.get(0))
     }
 
     /// The present grown souls' names, for colouring a wildcard prompt.
@@ -2096,7 +2195,7 @@ impl Sim {
         let (mut world, from) = self.load_checkpoint(slot);
         for s in from..=slot {
             let (day, phase, date) = self.decompose(s);
-            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather);
+            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards);
         }
         world
     }
@@ -2302,7 +2401,7 @@ impl Sim {
             let day = s.div_euclid(PHASES);
             let ph = Phase::from_ord(s);
             let date = Date::from_julian_day((epoch_jd + day) as i32).unwrap();
-            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather) {
+            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards) {
                 tx.execute(
                     "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5,?6)",
                     params![e.day, ph.ord(), e.date, e.kind, e.actor, e.text],
