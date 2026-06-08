@@ -490,6 +490,11 @@ fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
         mid.push(Line::from(Span::styled(p.name.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
         let role = p.trade.clone().unwrap_or_else(|| arch_tag(&p.archetype).to_string());
         mid.push(Line::from(format!("{}, {}y · of {}", role, p.age, p.seat)));
+        mid.push(Line::from(vec![
+            Span::raw("wants "),
+            Span::styled(p.wants.clone(), Style::default().fg(Color::Yellow)),
+            Span::styled(format!("  · {}", p.mood), Style::default().fg(Color::DarkGray)),
+        ]));
         if let Some(o) = &p.origin {
             mid.push(Line::from(Span::styled(format!("came from {o}"), Style::default().fg(Color::DarkGray))));
         }

@@ -81,6 +81,10 @@ pub struct Agent {
     pub parent: Option<usize>,    // mother/father index, for lineage & succession
     pub origin: Option<String>,   // where they came from; None = Thrushcombe-born
     pub trade: Option<String>,    // their specific occupation, distinct from the policy archetype
+    // --- individuation: who they are, beyond their archetype ---
+    pub goal: u8,                 // 0 Thrive · 1 ClearDebt · 2 Rise · 3 MarryOff · 4 Outdo · 5 Prosper
+    pub goal_target: i32,         // a child/rival index for MarryOff/Outdo, else -1
+    pub mood: i16,               // [-100,100] transient spirits; <0 low/grieving, >0 high/triumphant
 }
 
 impl Agent {
@@ -135,6 +139,9 @@ pub struct World {
 }
 
 impl World {
+    fn aff(&self, from: usize, to: usize) -> i16 {
+        *self.affinity.get(&(from as u32, to as u32)).unwrap_or(&0)
+    }
     fn nudge_aff(&mut self, from: usize, to: usize, d: i16) {
         let e = self.affinity.entry((from as u32, to as u32)).or_insert(0);
         *e = (*e + d).clamp(-100, 100);
@@ -176,6 +183,9 @@ impl World {
             parent: None,
             origin: None,
             trade: None,
+            goal: 0,
+            goal_target: -1,
+            mood: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -284,13 +294,21 @@ impl World {
             agents.push(c);
         }
 
-        World {
+        let mut w = World {
             agents,
             animals: seed_animals(),
             news: Vec::new(),
             next_news_id: 0,
             affinity,
+        };
+        // every adult opens with an ambition fitting their situation, at their resting mood
+        for i in 0..w.agents.len() {
+            let (g, t) = assess_goal(&w, i, 0);
+            w.agents[i].goal = g;
+            w.agents[i].goal_target = t;
+            w.agents[i].mood = temperament(&w.agents[i].archetype).1;
         }
+        w
     }
 
     fn agent_mut(&mut self, name: &str) -> Option<&mut Agent> {
@@ -445,6 +463,9 @@ fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: 
     for i in actors {
         let obs = observe(world, i, day, date, top, seed, phase);
         let action = engine.decide(&world.agents[i].archetype, &obs);
+        // temper the choice by the soul's mood and ambition
+        let mut trng = rng_for(seed ^ 0x600A_0000_0000, (day * PHASES + phase.ord()) ^ (i as i64).rotate_left(11));
+        let action = temper(action, &world.agents[i], &mut trng);
         if !matches!(action, Action::Idle) {
             arbitrate(world, i, action, day, date, phase, out, seed);
         }
@@ -1091,6 +1112,9 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         parent: None,
         origin: None,
         trade: None,
+        goal: 0,
+        goal_target: -1,
+        mood: temperament(arch).1,
     }
 }
 
@@ -1144,6 +1168,157 @@ fn find_heir(world: &World, dead: usize) -> Option<usize> {
     eldest_active_child(world, dead)
 }
 
+// ----------------------------------------------------------------------------- individuation
+//
+// Goals, memory and mood — what makes a soul an *individual* pursuing something, not just an
+// archetype reacting to stats. All deterministic.
+
+/// Temperament by type: (sensitivity %, resting baseline). Not everyone feels a blow or a
+/// boon the same — the gentry are touchy about face, the hill folk stoic and a touch dour,
+/// the improver mercurial, the working folk phlegmatic.
+fn temperament(archetype: &str) -> (i32, i16) {
+    match archetype {
+        "genteel_status_seeker" => (135, 0),  // volatile about standing
+        "hill_farmer" => (65, -8),            // taciturn, weathered
+        "scheming_improver" => (140, 6),      // mercurial optimist
+        "blunt_hand" => (80, 0),              // phlegmatic
+        "practitioner" => (90, 4),            // even, good-humoured
+        "official" => (85, 0),                // measured
+        "child" => (110, 10),                 // resilient and sunny
+        _ => (100, 0),
+    }
+}
+
+/// Nudge a soul's mood, scaled by their temperament — a snub wounds the gentry more than
+/// the hill folk.
+fn nudge_mood(a: &mut Agent, d: i16) {
+    let (sens, _) = temperament(&a.archetype);
+    let scaled = (d as i32 * sens / 100) as i16;
+    a.mood = (a.mood + scaled).clamp(-100, 100);
+}
+
+/// A word for a soul's present spirits.
+pub fn mood_word(m: i16) -> &'static str {
+    match m {
+        x if x <= -50 => "grieving",
+        x if x <= -20 => "low",
+        x if x < 20 => "content",
+        x if x < 50 => "in good spirits",
+        _ => "triumphant",
+    }
+}
+
+/// Their ambition, in words.
+pub fn goal_label(world: &World, kind: u8, target: i32) -> String {
+    let who = |t: i32| world.agents.get(t as usize).map(|a| a.name.clone()).unwrap_or_else(|| "—".into());
+    match kind {
+        1 => "to clear their debts".into(),
+        2 => "to rise in the world".into(),
+        3 => format!("to see {} well married", who(target)),
+        4 => format!("to get the better of {}", who(target)),
+        5 => "to make their fortune".into(),
+        _ => "to keep their place".into(),
+    }
+}
+
+/// Derive a soul's ambition from their situation.
+fn assess_goal(world: &World, i: usize, day: i64) -> (u8, i32) {
+    let a = &world.agents[i];
+    if a.archetype == "child" {
+        return (0, -1);
+    }
+    if a.purse < -15 {
+        return (1, -1); // ClearDebt
+    }
+    if let Some(child) = (0..world.agents.len()).find(|&c| {
+        let x = &world.agents[c];
+        x.active() && x.parent == Some(i) && x.archetype != "child" && x.spouse.is_none() && x.age(day) >= 18
+    }) {
+        return (3, child as i32); // MarryOff
+    }
+    let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
+    match a.archetype.as_str() {
+        "genteel_status_seeker" => {
+            if let Some(rival) = (0..world.agents.len()).find(|&j| {
+                j != i && world.agents[j].active() && world.agents[j].standing > a.standing + 6 && world.aff(i, j) <= -25
+            }) {
+                (4, rival as i32) // Outdo a disliked superior
+            } else if a.standing < top - 8 {
+                (2, -1) // Rise
+            } else {
+                (0, -1)
+            }
+        }
+        "hill_farmer" | "scheming_improver" => if (25..90).contains(&a.purse) { (5, -1) } else { (0, -1) },
+        _ => (0, -1),
+    }
+}
+
+fn goal_fulfilled(world: &World, i: usize, top: i32) -> bool {
+    let a = &world.agents[i];
+    match a.goal {
+        1 => a.purse >= 0,
+        2 => a.standing >= top - 2,
+        3 => a.goal_target < 0 || world.agents.get(a.goal_target as usize).map_or(true, |c| c.spouse.is_some() || !c.active()),
+        4 => a.goal_target >= 0 && world.agents.get(a.goal_target as usize).map_or(true, |r| a.standing > r.standing),
+        5 => a.purse >= 100,
+        _ => false,
+    }
+}
+
+fn goal_triumph(world: &World, i: usize) -> String {
+    let a = &world.agents[i];
+    let nm = &a.name;
+    let who = world.agents.get(a.goal_target as usize).map(|x| x.name.clone()).unwrap_or_else(|| "—".into());
+    match a.goal {
+        1 => format!("{nm} has cleared their debts at last, and walks the lighter for it."),
+        2 => format!("{nm} has risen to the front rank of the town, and knows it."),
+        3 => format!("{nm} has seen {who} well married, and is well content."),
+        4 => format!("{nm} has, at long last, got the better of {who}."),
+        5 => format!("{nm} has made a fortune, and means everyone to know it."),
+        _ => format!("{nm} is well content with their lot."),
+    }
+}
+
+/// Temper a chosen action by the soul's mood and goal — so their ambition and spirits show
+/// in what they actually do.
+fn temper(action: Action, a: &Agent, rng: &mut ChaCha8Rng) -> Action {
+    // the grieving and low withdraw
+    if a.mood <= -45 && rng.gen_bool(0.6) {
+        return Action::Idle;
+    }
+    match a.goal {
+        1 => match action {
+            // clearing debt: no extravagance; mend and make do, drive a bargain
+            Action::GiveDinner | Action::KeepUp => Action::Economise,
+            Action::Idle if a.archetype == "hill_farmer" && rng.gen_bool(0.3) => Action::Haggle,
+            other => other,
+        },
+        2 | 4 => match action {
+            // rising / outdoing a rival: be seen, spend on standing
+            Action::Idle if a.archetype == "genteel_status_seeker" && rng.gen_bool(0.4) => {
+                if a.purse > 0 && rng.gen_bool(0.5) { Action::GiveDinner } else { Action::PayCall }
+            }
+            other => other,
+        },
+        5 => match action {
+            // making a fortune: deal and scheme
+            Action::Idle if rng.gen_bool(0.3) => {
+                if a.archetype == "scheming_improver" { Action::Scheme } else { Action::Haggle }
+            }
+            other => other,
+        },
+        _ => {
+            // the triumphant gentry grow lavish
+            if a.mood >= 45 && a.archetype == "genteel_status_seeker" && matches!(action, Action::PayCall) && rng.gen_bool(0.5) {
+                Action::GiveDinner
+            } else {
+                action
+            }
+        }
+    }
+}
+
 /// Birth, marriage, ageing, death, succession — the slow turn of the cast that makes a
 /// run *history* rather than a loop. Runs once a day on its own RNG stream.
 fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
@@ -1180,6 +1355,12 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         world.agents[i].death_day = Some(day);
         out.push(mk("death", &name, format!("{name}, of {seat}, is dead.")));
         world.spawn_news_idx(i, &format!("the death of {name}"), 0, day, &[]);
+        // grief falls on the kin
+        for k in 0..world.agents.len() {
+            if world.agents[k].active() && (world.agents[k].spouse == Some(i) || world.agents[k].parent == Some(i) || world.agents[i].parent == Some(k)) {
+                nudge_mood(&mut world.agents[k], -35);
+            }
+        }
         if let Some(sp) = world.agents[i].spouse {
             if world.agents[sp].alive() {
                 world.agents[sp].spouse = None; // widowed
@@ -1374,6 +1555,25 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     }
 
     world.agents.extend(newcomers);
+
+    // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
+    let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
+    for i in 0..world.agents.len() {
+        if !world.agents[i].active() || world.agents[i].archetype == "child" {
+            continue;
+        }
+        if world.agents[i].goal != 0 && goal_fulfilled(world, i, top) {
+            let nm = world.agents[i].name.clone();
+            out.push(mk("triumph", &nm, goal_triumph(world, i)));
+            nudge_mood(&mut world.agents[i], 25);
+            world.agents[i].goal = 0; // their ambition met, they rest content (until the next resolve)
+            world.agents[i].goal_target = -1;
+        } else if day % 365 == (i as i64) % 365 {
+            let (g, t) = assess_goal(world, i, day);
+            world.agents[i].goal = g;
+            world.agents[i].goal_target = t;
+        }
+    }
     out
 }
 
@@ -1456,6 +1656,8 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
             if !world.agents[i].active() {
                 continue;
             }
+            let base = temperament(&world.agents[i].archetype).1; // spirits drift toward their baseline
+            world.agents[i].mood += (base - world.agents[i].mood).signum() * 2;
             if let Some(s) = world.agents[i].spouse {
                 if world.agents[s].active() {
                     world.nudge_aff(i, s, 3);
@@ -1490,6 +1692,8 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
         let (f, t) = cold[rng.gen_range(0..cold.len())];
         let (nf, nt) = (world.agents[f].name.clone(), world.agents[t].name.clone());
         world.nudge_aff(f, t, -4); // a public airing deepens it (hysteresis)
+        nudge_mood(&mut world.agents[f], -8);
+        nudge_mood(&mut world.agents[t], -5);
         let text = match rng.gen_range(0..3) {
             0 => format!("{nf} cut {nt} dead at the {place}, and the whole town marked it."),
             1 => format!("There was a frost between {nf} and {nt} at the {place} that could have iced the milk."),
@@ -1502,6 +1706,8 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
         let (f, t) = warm[rng.gen_range(0..warm.len())];
         let (nf, nt) = (world.agents[f].name.clone(), world.agents[t].name.clone());
         world.nudge_aff(f, t, 3);
+        nudge_mood(&mut world.agents[f], 6);
+        nudge_mood(&mut world.agents[t], 6);
         let text = match rng.gen_range(0..2) {
             0 => format!("{nf} and {nt} had their heads together at the {place}, the best of friends."),
             _ => format!("{nf} and {nt} were thick as thieves at the {place}."),
@@ -1843,6 +2049,8 @@ pub struct PersonDetail {
     pub parent: Option<String>,
     pub children: Vec<String>,
     pub origin: Option<String>,   // Some = came from away
+    pub wants: String,            // their ambition, in words
+    pub mood: String,             // their present spirits, in a word
     pub friends: Vec<String>,     // strongest warm ties
     pub rivals: Vec<String>,      // strongest cold ties
     pub recent: Vec<ChronEntry>,  // their latest beats
@@ -1881,12 +2089,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 10;
+const SNAPSHOT_VERSION: i64 = 11;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -1936,6 +2144,7 @@ fn apply_wildcards(world: &mut World, day: i64, date: Date, list: &[Wildcard]) -
                 if let Some(i) = ti {
                     world.agents[i].purse -= 30;
                     clamp_standing(&mut world.agents[i], -1);
+                    nudge_mood(&mut world.agents[i], -20);
                 }
                 world.spawn_news(t, &format!("the fire at {t}'s"), -1, day, &[]);
             }
@@ -1943,6 +2152,7 @@ fn apply_wildcards(world: &mut World, day: i64, date: Date, list: &[Wildcard]) -
                 if let Some(i) = ti {
                     world.agents[i].purse += 25;
                     clamp_standing(&mut world.agents[i], 1);
+                    nudge_mood(&mut world.agents[i], 18);
                 }
                 world.spawn_news(t, &format!("{t}'s stroke of luck"), 2, day, &[]);
             }
@@ -1965,6 +2175,7 @@ fn apply_wildcards(world: &mut World, day: i64, date: Date, list: &[Wildcard]) -
             "scandal" => {
                 if let Some(i) = ti {
                     clamp_standing(&mut world.agents[i], -2);
+                    nudge_mood(&mut world.agents[i], -15);
                 }
                 world.spawn_news(t, &format!("the scandal of {t}"), -3, day, &[]);
             }
@@ -2347,6 +2558,8 @@ impl Sim {
                 parent: a.parent.map(|p| world.agents[p].name.clone()),
                 children,
                 origin: a.origin.clone(),
+                wants: if a.archetype == "child" { "to grow up".into() } else { goal_label(&world, a.goal, a.goal_target) },
+                mood: mood_word(a.mood).to_string(),
                 friends: world.ties(i, true, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 rivals: world.ties(i, false, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 recent: self.person_events(&a.name, 4)?,

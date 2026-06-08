@@ -30,6 +30,12 @@ It runs end to end:
   inherits a seat keeps the comedy going with no new code. Runs behind a
   `decide(observation) -> action` boundary with two interchangeable engines —
   **native** and **wasm** (see below).
+- **Individuation — goals, mood, temperament** — each soul carries a personal
+  **ambition** fitting their situation (clear the debt, rise in the world, marry a
+  child off, get the better of a rival, make a fortune), which *shapes what they do*;
+  fulfilling it is a **triumph**. A **mood** moves with what befalls them — and not
+  uniformly: **temperament** is by type (the gentry touchy about face, the hill folk
+  stoic and dour, the improver mercurial), so a snub wounds one far more than another.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

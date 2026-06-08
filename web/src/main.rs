@@ -109,13 +109,13 @@ fn dashboard(sim: &Sim) -> String {
     // the detailed town board: where everyone is, what they're about, and next
     body.push_str("<h2>The town, this ");
     body.push_str(&esc(&d.phase));
-    body.push_str("</h2><table><tr><th>Soul</th><th class=hidesm>Where</th><th>Doing now</th><th class=hidesm>Next</th><th>Standing</th><th>£</th></tr>");
+    body.push_str("</h2><table><tr><th>Soul</th><th class=hidesm>Where</th><th>Doing now</th><th class=hidesm>Wants</th><th>Standing</th><th>£</th></tr>");
     for p in &d.people {
         body.push_str(&format!(
-            "<tr><td><a href=/folk/{}>{}</a> <span class=date>{}y</span></td>\
+            "<tr><td><a href=/folk/{}>{}</a> <span class=date>{}y &middot; {}</span></td>\
              <td class='where hidesm'>{}</td><td class=doing>{}</td><td class='next hidesm'>{}</td>\
              <td><span class=bars>{}</span></td><td>{}</td></tr>",
-            p.idx, esc(&p.name), p.age, esc(&p.location), esc(&p.doing), esc(&p.next), bar(p.standing), p.purse
+            p.idx, esc(&p.name), p.age, esc(&p.mood), esc(&p.location), esc(&p.doing), esc(&p.wants), bar(p.standing), p.purse
         ));
     }
     body.push_str("</table>");
@@ -218,8 +218,9 @@ fn person(sim: &Sim, idx: usize) -> String {
         if let Ok(d) = sim.detail(t, phase_now()) {
             if let Some(p) = d.people.iter().find(|p| p.idx == idx) {
                 body.push_str(&format!(
-                    "<br><span class=where>{}</span> &middot; <span class=doing>{}</span> &middot; next: <span class=next>{}</span>",
-                    esc(&p.location), esc(&p.doing), esc(&p.next)
+                    "<br><span class=where>{}</span> &middot; <span class=doing>{}</span> &middot; next: <span class=next>{}</span>\
+                     <br>wants <b>{}</b> &middot; {}",
+                    esc(&p.location), esc(&p.doing), esc(&p.next), esc(&p.wants), esc(&p.mood)
                 ));
                 if !p.friends.is_empty() {
                     ties_html.push_str(&format!("<div class=doing>thick with {}</div>", esc(&p.friends.join(", "))));
