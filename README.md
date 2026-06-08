@@ -55,9 +55,14 @@ It runs end to end:
 - **Speak to a soul** — on the dashboard's *A word…* page you adopt one soul's voice and
   converse with another; Qwen answers in character, mindful of who's addressing them and
   what they remember. Each soul's page has a *speak to me directly* button. When you end
-  the conversation the oracle judges its residue — a **warming or cooling, a memory kept** —
-  and only that recorded effect enters the fold, so souls genuinely learn from talking to
-  you while the world stays exact.
+  the conversation the oracle judges its residue — a **warming or cooling, a memory kept,
+  and sometimes a change of heart about what they want** — and only that recorded effect
+  enters the fold, so souls genuinely learn from talking while the world stays exact.
+- **Souls talk among themselves** — and not only to you: each day two souls fall into
+  conversation of their own accord (a courting pair, friends, rivals, or two who simply
+  met), Qwen plays both, and the same residue is recorded for each — a memory kept, a
+  warming or cooling, now and then a resolve (to clear a debt, to rise, to mend a quarrel).
+  The town's relationships and ambitions drift through talk, all of it folded deterministically.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

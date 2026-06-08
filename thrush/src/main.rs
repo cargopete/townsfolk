@@ -88,6 +88,12 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Let two souls fall into conversation of their own accord; record what it leaves.
+    Converse {
+        /// Stage one even if the town has already talked today.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -164,6 +170,46 @@ fn day_hash(day: i64) -> u64 {
 }
 
 const HINGE_PROMPT: &str = "You decide, in character, what a soul of Thrushcombe St Mary — a 1934 West-Country market town — does at a genuine turning point in their life. You are given who they are, their situation, and their recent history. Weigh it as they would, in the register of interwar English provincial life. Choose EXACTLY ONE of the allowed options and write one or two sentences, in period voice and no quotation marks, of what they resolve to do and why. Respond ONLY as JSON: {\"choice\": one of the allowed options, \"reason\": the sentence}.";
+
+const CONVERSE_PROMPT: &str = "You write a short, natural conversation between two souls of Thrushcombe St Mary, a 1934 West-Country market town, as they fall into talk. Stay wholly in period voice and in character. Write 4 to 6 short lines in all, alternating, each line prefixed with the speaker's name and a colon. No narration, no stage directions, no preamble.";
+
+fn converse_scene(agent: &ureq::Agent, host: &str, model: &str, a_brief: &str, b_brief: &str, relation: &str) -> Option<String> {
+    let prompt = format!("{a_brief}\n{b_brief}\n{relation}\nThey meet and fall into conversation. Write it.");
+    let body = serde_json::json!({
+        "model": model, "system": CONVERSE_PROMPT, "prompt": prompt, "think": false, "stream": false,
+        "options": { "num_ctx": 8192, "temperature": 0.9 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let s = resp.get("response")?.as_str()?.trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Judge how a conversation left each of the two souls. Returns ((warmth,memory,sway) for a,
+/// then for b), each validated to the vocabulary.
+#[allow(clippy::type_complexity)]
+fn assess_pair(agent: &ureq::Agent, host: &str, model: &str, a: &str, b: &str, transcript: &str) -> Option<((String, String, String), (String, String, String))> {
+    let sys = format!(
+        "You judge how a conversation has affected each of two souls of a 1934 West-Country town. Respond ONLY as JSON: \
+         {{\"a\":{{\"warmth\":one of [warmer,colder,unchanged],\"memory\":one short sentence in {a}'s own voice of what they now think of {b},\"sway\":one of [none,debt,rise,prosper,content,reconcile]}},\"b\":{{\"warmth\":...,\"memory\":in {b}'s voice of {a},\"sway\":...}}}}. \
+         sway is whether the talk changed what the soul wants: debt=resolved to clear their debts, rise=spurred to rise in the world, prosper=talked into making a fortune, content=talked down to rest content, reconcile=moved to mend a quarrel, none=unchanged.",
+    );
+    let prompt = format!("The conversation:\n{transcript}\n\nHow did it leave {a}, and how {b}?");
+    let body = serde_json::json!({
+        "model": model, "system": sys, "prompt": prompt, "think": false, "stream": false, "format": "json",
+        "options": { "num_ctx": 8192, "temperature": 0.5 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let one = |o: &serde_json::Value| -> Option<(String, String, String)> {
+        let warmth = o.get("warmth")?.as_str()?.trim().to_lowercase();
+        let warmth = ["warmer", "colder", "unchanged"].into_iter().find(|w| warmth.contains(w)).unwrap_or("unchanged").to_string();
+        let memory = o.get("memory")?.as_str()?.trim().to_string();
+        let sway = o.get("sway").and_then(|s| s.as_str()).unwrap_or("none").trim().to_lowercase();
+        let sway = ["debt", "rise", "prosper", "content", "reconcile"].into_iter().find(|s| sway.contains(s)).unwrap_or("none").to_string();
+        (!memory.is_empty()).then_some((warmth, memory, sway))
+    };
+    Some((one(parsed.get("a")?)?, one(parsed.get("b")?)?))
+}
 
 /// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
 fn hinge_one(agent: &ureq::Agent, host: &str, model: &str, dossier: &str, options: &[String]) -> Option<(String, String)> {
@@ -359,6 +405,34 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("Hinge [{} · {} → {choice}]: {reason}", h.kind, h.subject_name);
                 }
                 None => eprintln!("oracle unavailable ({host}) — the decision waits."),
+            }
+        }
+        Cmd::Converse { force } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let day = sim.target_day(t).max(0);
+            // the town has at most one conversation of its own accord a day
+            if !force && sim.last_dialogue_day()?.is_some_and(|last| last >= day) {
+                return Ok(());
+            }
+            let Some(p) = sim.converse_pair(t) else { return Ok(()) };
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            let Some(scene) = converse_scene(&agent, &host, &model, &p.a_brief, &p.b_brief, &p.relation) else {
+                eprintln!("oracle unavailable ({host}) — no conversation today.");
+                return Ok(());
+            };
+            match assess_pair(&agent, &host, &model, &p.a_name, &p.b_name, &scene) {
+                Some(((wa, ma, sa), (wb, mb, sb))) => {
+                    // record each soul's residue: record_dialogue(source, target) keeps target's memory of source
+                    sim.record_dialogue(t, &p.a_name, &p.b_name, &scene, &mb, &wb, &sb)?; // b's memory of a
+                    sim.record_dialogue(t, &p.b_name, &p.a_name, &scene, &ma, &wa, &sa)?; // a's memory of b
+                    sim.catch_up(today(), cur_phase())?;
+                    println!("Conversation [{} & {}]: {} came away {wa}; {} came away {wb}.", p.a_name, p.b_name, p.a_name, p.b_name);
+                }
+                None => eprintln!("oracle unavailable ({host}) — conversation unrecorded."),
             }
         }
         Cmd::Status => {

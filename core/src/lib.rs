@@ -972,6 +972,17 @@ pub struct Decree {
     pub text: String,    // the chronicler's prose
 }
 
+/// Two souls the driver can set talking of their own accord, with the briefs to stage it.
+pub struct ConversePair {
+    pub a: usize,
+    pub a_name: String,
+    pub a_brief: String,
+    pub b: usize,
+    pub b_name: String,
+    pub b_brief: String,
+    pub relation: String,
+}
+
 /// A turning point the driver can put to the oracle — assembled from world state for the bin.
 pub struct Hinge {
     pub subject: usize,
@@ -2294,7 +2305,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 16;
+const SNAPSHOT_VERSION: i64 = 17;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2404,22 +2415,41 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     world.affinity.insert((si as u32, t as u32), -10);
                 }
             }
-            // the felt residue of a conversation (subject = the soul spoken to, target = who spoke)
-            ("dialogue", "warmer") => {
-                if let Some(t) = ti {
-                    world.nudge_aff(si, t, 14);
-                    world.nudge_aff(t, si, 8);
+            // the felt residue of a conversation (subject = the soul spoken to, target = who spoke).
+            // choice is "warmth:sway" — a warming or cooling, and any sway over what they now want.
+            ("dialogue", c) => {
+                let mut parts = c.split(':');
+                match parts.next().unwrap_or("") {
+                    "warmer" => {
+                        if let Some(t) = ti {
+                            world.nudge_aff(si, t, 14);
+                            world.nudge_aff(t, si, 8);
+                        }
+                        nudge_mood(&mut world.agents[si], 7);
+                    }
+                    "colder" => {
+                        if let Some(t) = ti {
+                            world.nudge_aff(si, t, -14);
+                            world.nudge_aff(t, si, -6);
+                        }
+                        nudge_mood(&mut world.agents[si], -7);
+                    }
+                    _ => {}
                 }
-                nudge_mood(&mut world.agents[si], 7);
-            }
-            ("dialogue", "colder") => {
-                if let Some(t) = ti {
-                    world.nudge_aff(si, t, -14);
-                    world.nudge_aff(t, si, -6);
+                // a conversation can change a soul's mind about what they want
+                match parts.next().unwrap_or("none") {
+                    "debt" => world.agents[si].goal = 1,    // resolved to clear their debts
+                    "rise" => world.agents[si].goal = 2,    // spurred to rise in the world
+                    "prosper" => world.agents[si].goal = 5, // talked into making their fortune
+                    "content" => world.agents[si].goal = 0, // talked down, to rest content
+                    "reconcile" => {
+                        if let Some(t) = ti {
+                            world.affinity.insert((si as u32, t as u32), world.aff(si, t).max(15));
+                        }
+                    }
+                    _ => {}
                 }
-                nudge_mood(&mut world.agents[si], -7);
             }
-            ("dialogue", _) => {} // an exchange that left things as they were
             _ => {}
         }
     }
@@ -2676,21 +2706,93 @@ impl Sim {
 
     /// Record a conversation: store its transcript and the memory the target keeps, and fold
     /// its felt residue (a warming or cooling, a lift or sinking of spirits) into the world.
-    pub fn record_dialogue(&mut self, date: Date, source: &str, target: &str, transcript: &str, memory: &str, warmth: &str) -> rusqlite::Result<()> {
+    pub fn record_dialogue(&mut self, date: Date, source: &str, target: &str, transcript: &str, memory: &str, warmth: &str, sway: &str) -> rusqlite::Result<()> {
         let day = self.target_day(date).max(0);
         self.conn.execute(
             "INSERT INTO dialogues(day,source,target,transcript,memory) VALUES(?1,?2,?3,?4,?5)",
             params![day, source, target, transcript, memory],
         )?;
-        // the world-effect rides the decree mechanism: subject = the soul spoken to, target = who spoke
+        // the world-effect rides the decree mechanism: subject = the soul spoken to, target = who spoke.
+        // choice encodes both the warming/cooling and any sway over what the soul now wants.
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'dialogue',?3,?4,?5)",
-            params![day, target, source, warmth, memory],
+            params![day, target, source, format!("{warmth}:{sway}"), memory],
         )?;
         self.decrees = load_decrees(&self.conn)?;
         self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
         self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
         Ok(())
+    }
+
+    /// Pick two souls who would plausibly fall into conversation of their own accord — a
+    /// courting pair, friends, rivals, or two who simply met — with the briefs to stage it.
+    pub fn converse_pair(&self, today: Date) -> Option<ConversePair> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let adults: Vec<usize> = (0..w.agents.len()).filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        if adults.len() < 4 {
+            return None;
+        }
+        let mut rng = rng_for(self.seed ^ 0xC04E_0000_0000, day);
+        let (mut courting, mut warm, mut cold) = (Vec::new(), Vec::new(), Vec::new());
+        for &i in &adults {
+            let c = w.agents[i].courting;
+            if c >= 0 && w.agents.get(c as usize).map_or(false, |a| a.active()) {
+                courting.push((i, c as usize));
+            }
+            for &j in &adults {
+                if i < j {
+                    let a = w.aff(i, j);
+                    if a >= 30 {
+                        warm.push((i, j));
+                    } else if a <= -30 {
+                        cold.push((i, j));
+                    }
+                }
+            }
+        }
+        let pickv = |rng: &mut ChaCha8Rng, v: &[(usize, usize)]| if v.is_empty() { None } else { Some(v[rng.gen_range(0..v.len())]) };
+        let (a, b) = match rng.gen_range(0..10) {
+            0..=3 => pickv(&mut rng, &courting).or_else(|| pickv(&mut rng, &warm)).or_else(|| pickv(&mut rng, &cold)),
+            4..=6 => pickv(&mut rng, &warm).or_else(|| pickv(&mut rng, &cold)),
+            7..=8 => pickv(&mut rng, &cold).or_else(|| pickv(&mut rng, &warm)),
+            _ => None,
+        }
+        .or_else(|| {
+            let (a, b) = (adults[rng.gen_range(0..adults.len())], adults[rng.gen_range(0..adults.len())]);
+            (a != b).then_some((a, b))
+        })?;
+
+        let brief = |i: usize| {
+            let ag = &w.agents[i];
+            let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
+                "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+                "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
+            }.to_string());
+            format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}.",
+                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_word(ag.mood), goal_label(&w, ag.goal, ag.goal_target))
+        };
+        let relation = if w.agents[a].spouse == Some(b) {
+            "They are man and wife.".to_string()
+        } else if w.agents[a].courting == b as i32 || w.agents[b].courting == a as i32 {
+            format!("{} is courting {}.", w.agents[a].name, w.agents[b].name)
+        } else {
+            let af = w.aff(a, b);
+            if af >= 30 { "They are the best of friends.".into() }
+            else if af <= -30 { "They are at bitter odds.".into() }
+            else if af > 0 { "They are on friendly enough terms.".into() }
+            else { "They are barely acquainted.".into() }
+        };
+        Some(ConversePair {
+            a, a_name: w.agents[a].name.clone(), a_brief: brief(a),
+            b, b_name: w.agents[b].name.clone(), b_brief: brief(b),
+            relation,
+        })
+    }
+
+    /// The day-index of the most recent conversation, to keep the town from chattering nonstop.
+    pub fn last_dialogue_day(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn.query_row("SELECT MAX(day) FROM dialogues", [], |r| r.get(0))
     }
 
     /// What a soul has come to remember of others, from the conversations they've had.

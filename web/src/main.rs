@@ -441,11 +441,12 @@ fn chat_reply(system: &str, history: &[(String, String)], message: &str) -> Opti
 
 /// At the end of a conversation, have the oracle judge its residue: did the target warm or
 /// cool toward the source, and what one line do they keep of it?
-fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Option<(String, String)> {
+fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Option<(String, String, String)> {
     let (host, model) = ollama();
     let sys = format!(
         "You judge how a conversation has left {target}, a soul of a 1934 West-Country town, feeling about {source}. \
-         Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence, in {target}'s own voice, of what they now think or remember of {source}}}.",
+         Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence in {target}'s own voice of what they now think of {source}, \"sway\": one of [none, debt, rise, prosper, content, reconcile]}}. \
+         sway is whether the talk changed what {target} wants: debt=resolved to clear their debts, rise=spurred to rise, prosper=to make a fortune, content=to rest content, reconcile=to mend a quarrel, none=unchanged.",
         target = target_name, source = source_name,
     );
     let prompt = format!("The conversation:\n{transcript}\n\nHow has it left {target_name} toward {source_name}?");
@@ -458,8 +459,10 @@ fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Op
     let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
     let warmth = parsed.get("warmth")?.as_str()?.trim().to_lowercase();
     let warmth = ["warmer", "colder", "unchanged"].into_iter().find(|w| warmth.contains(w)).unwrap_or("unchanged").to_string();
+    let sway = parsed.get("sway").and_then(|s| s.as_str()).unwrap_or("none").trim().to_lowercase();
+    let sway = ["debt", "rise", "prosper", "content", "reconcile"].into_iter().find(|s| sway.contains(s)).unwrap_or("none").to_string();
     let memory = parsed.get("memory")?.as_str()?.trim().to_string();
-    (!memory.is_empty()).then_some((warmth, memory))
+    (!memory.is_empty()).then_some((warmth, memory, sway))
 }
 
 /// The conversation page: pick a source and a target, then talk.
@@ -581,8 +584,8 @@ fn handle_end(sim: &mut Sim, body: &str) -> String {
         _ => return serde_json::json!({"warmth": "unchanged", "memory": ""}).to_string(),
     };
     match assess_dialogue(&tn, &sn, &transcript) {
-        Some((warmth, memory)) => {
-            let _ = sim.record_dialogue(today(), &sn, &tn, &transcript, &memory, &warmth);
+        Some((warmth, memory, sway)) => {
+            let _ = sim.record_dialogue(today(), &sn, &tn, &transcript, &memory, &warmth, &sway);
             let _ = sim.catch_up(today(), phase_now());
             serde_json::json!({ "warmth": warmth, "memory": memory }).to_string()
         }
