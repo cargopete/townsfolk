@@ -701,26 +701,27 @@ fn placement(a: &Agent, phase: Phase, wd: Weekday) -> String {
             Phase::Dawn => "the byre".into(),
             Phase::Forenoon => if market { "the market".into() } else { "the fields".into() },
             Phase::Afternoon => "the fields".into(),
-            Phase::Evening => if pubnight { "The Pelican".into() } else { home },
+            Phase::Evening => if pubnight && a.sex == 1 { "The Pelican".into() } else { home },
             Phase::Night => home,
         },
         "practitioner" => match phase {
             Phase::Dawn => "the surgery".into(),
             Phase::Forenoon | Phase::Afternoon => "on the rounds".into(),
-            Phase::Evening => if pubnight { "The Pelican".into() } else { "the surgery".into() },
-            Phase::Night => "on call".into(),
+            Phase::Evening => if pubnight && a.sex == 1 { "The Pelican".into() } else { home },
+            Phase::Night => home,
         },
         "blunt_hand" => match phase {
             Phase::Dawn => "the yard".into(),
             // a tradesperson is at their own place of work; a hired hand is "about the town"
             Phase::Forenoon | Phase::Afternoon => if a.trade.is_some() { home } else { "at work about the town".into() },
-            Phase::Evening => "The Pelican".into(),
+            Phase::Evening => if pubnight && a.sex == 1 { "The Pelican".into() } else { a.seat.clone() },
             Phase::Night => a.seat.clone(),
         },
         "official" => match phase {
             Phase::Dawn => "the study".into(),
             Phase::Forenoon | Phase::Afternoon => if a.trade.is_some() { home } else { "on parish visits".into() },
-            Phase::Evening => "the vestry".into(),
+            // the parson sits over his sermon of an evening; the rest are at home
+            Phase::Evening => if a.seat == "The Vicarage" { "the vestry".into() } else { a.seat.clone() },
             Phase::Night => a.seat.clone(),
         },
         "child" => match phase {
@@ -732,11 +733,30 @@ fn placement(a: &Agent, phase: Phase, wd: Weekday) -> String {
 }
 
 /// What an agent is *about* when they aren't doing anything notable — the routine verb for
-/// the phase, so "doing now" never reads as idle while the placement implies activity.
+/// the phase, so "doing now" reads sensibly and never out of its hour (no lessons at dinner).
 fn routine_doing(a: &Agent, phase: Phase, wd: Weekday) -> String {
     if wd == Weekday::Sunday && matches!(phase, Phase::Forenoon) {
         return "at church".into();
     }
+    // night: the town is abed
+    if matches!(phase, Phase::Night) {
+        return if a.archetype == "practitioner" { "abed, unless called out".into() } else { "abed".into() };
+    }
+    // evening: dinner and the fireside; the working men to the Pelican on a pub-night
+    if matches!(phase, Phase::Evening) {
+        let pub_men = matches!(wd, Weekday::Friday | Weekday::Saturday) && a.sex == 1;
+        return match a.archetype.as_str() {
+            "genteel_status_seeker" => "at dinner",
+            "hill_farmer" | "scheming_improver" => if pub_men { "at the Pelican" } else { "by the fire" },
+            "blunt_hand" => if pub_men { "at the Pelican" } else { "at home of an evening" },
+            "practitioner" => "at home, of an evening",
+            "official" if a.seat == "The Vicarage" => "at his sermon",
+            "child" => "at supper, then bed",
+            _ => "at home of an evening",
+        }
+        .into();
+    }
+    // the working day proper: dawn, forenoon, afternoon
     let trade_verb = |t: &str| match t {
         "baker" => "at the oven",
         "butcher" => "at the block",
@@ -755,25 +775,31 @@ fn routine_doing(a: &Agent, phase: Phase, wd: Weekday) -> String {
     match a.archetype.as_str() {
         "genteel_status_seeker" => match phase {
             Phase::Afternoon => "paying calls",
-            Phase::Evening => "at dinner",
             _ => "at home",
         }
         .into(),
         "hill_farmer" | "scheming_improver" => match phase {
             Phase::Dawn => "at the milking",
             Phase::Forenoon => if wd == Weekday::Wednesday { "at the market" } else { "in the fields" },
-            Phase::Afternoon => "in the fields",
-            Phase::Evening => "by the fire",
-            Phase::Night => "abed",
+            _ => "in the fields",
         }
         .into(),
-        "practitioner" => "on the rounds".into(),
-        "official" => a.trade.as_deref().map(trade_verb).unwrap_or("about the parish").into(),
+        "practitioner" => match phase {
+            Phase::Dawn => "at the surgery".into(),
+            _ => "on the rounds".into(),
+        },
+        "official" => match phase {
+            Phase::Dawn => "at home".into(),
+            _ => a.trade.as_deref().map(trade_verb).unwrap_or("about the parish").into(),
+        },
         "blunt_hand" => match phase {
-            Phase::Evening => "at the Pelican".into(),
+            Phase::Dawn => "in the yard".into(),
             _ => a.trade.as_deref().map(trade_verb).unwrap_or("at their work").into(),
         },
-        "child" => "at lessons and mischief".into(),
+        "child" => match phase {
+            Phase::Dawn => "at home".into(),
+            _ => "at lessons and mischief".into(),
+        },
         _ => "about the day".into(),
     }
 }
@@ -2305,7 +2331,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 17;
+const SNAPSHOT_VERSION: i64 = 18;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3090,6 +3116,14 @@ impl Sim {
                 continue;
             }
             let doing = do_at(i, target, phase);
+            // when a soul is out on a notable errand, the where follows the doing
+            let location = match doing.as_str() {
+                "paying calls" => "out paying calls".to_string(),
+                "dealing at the mart" => "the market".to_string(),
+                "on the rounds" => "on the rounds".to_string(),
+                "about the parish" => "about the parish".to_string(),
+                _ => placement(a, phase, wd),
+            };
             let next = {
                 let s = target * PHASES + phase.ord() + 1;
                 do_at(i, s.div_euclid(PHASES), Phase::from_ord(s))
@@ -3108,7 +3142,7 @@ impl Sim {
                 standing: a.standing,
                 purse: a.purse,
                 married: a.spouse.is_some(),
-                location: placement(a, phase, wd),
+                location,
                 doing,
                 next,
                 spouse: a.spouse.map(|s| world.agents[s].name.clone()),
