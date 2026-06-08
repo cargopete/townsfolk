@@ -142,30 +142,56 @@ impl World {
             parent: None,
         };
         let mut agents = vec![
-            a("Mrs Cynthia Pelham", "genteel_status_seeker", "The Laurels", 60, -18, 42, 0),
-            a("Mr Robert Pelham", "genteel_status_seeker", "The Laurels", 58, 5, 46, 1),
-            a("Lady Aldermaston", "genteel_status_seeker", "Crale Court", 90, 420, 70, 0),
-            a("Revd Mr Soames", "official", "The Vicarage", 70, 30, 58, 1),
-            a("Mr Farran MRCVS", "practitioner", "Beck House", 65, 25, 45, 1),
-            a("Mr Sunter", "hill_farmer", "High Foldside", 48, 12, 55, 1),
-            a("Mr Rupert Crale", "scheming_improver", "Home Farm", 55, -40, 28, 1),
-            a("Tot Wragg", "blunt_hand", "Home Farm", 40, 4, 20, 1),
-            // the rising generation, who will grow up, marry, and inherit
-            a("Jack Sunter", "hill_farmer", "High Foldside", 38, 3, 21, 1),
-            a("Robin Pelham", "child", "The Laurels", 20, 0, 11, 1),
-            a("Vicky Pelham", "child", "The Laurels", 18, 0, 8, 0),
+            // The Laurels (Provincial Lady)            idx
+            a("Mrs Cynthia Pelham", "genteel_status_seeker", "The Laurels", 60, -18, 42, 0), // 0
+            a("Mr Robert Pelham", "genteel_status_seeker", "The Laurels", 58, 5, 46, 1),      // 1
+            a("Robin Pelham", "child", "The Laurels", 20, 0, 11, 1),                          // 2
+            a("Vicky Pelham", "child", "The Laurels", 18, 0, 8, 0),                           // 3
+            // Crale Court & the Home Farm (Clarkson)
+            a("Lady Aldermaston", "genteel_status_seeker", "Crale Court", 90, 420, 70, 0),    // 4
+            a("Mr Rupert Crale", "scheming_improver", "Home Farm", 55, -40, 28, 1),           // 5
+            a("Tot Wragg", "blunt_hand", "Home Farm", 40, 4, 20, 1),                          // 6
+            a("Sam Trotter", "blunt_hand", "Home Farm", 36, 6, 35, 1),                        // 7
+            // The Vicarage
+            a("Revd Mr Soames", "official", "The Vicarage", 72, 30, 58, 1),                   // 8
+            a("Mrs Soames", "genteel_status_seeker", "The Vicarage", 66, 8, 54, 0),           // 9
+            // The practice (Herriot)
+            a("Mr Farran MRCVS", "practitioner", "Beck House", 68, 25, 45, 1),                // 10
+            a("Mr James Herrick", "practitioner", "Beck House", 50, 10, 26, 1),               // 11
+            // High Foldside (the Sunters)
+            a("Mr Sunter", "hill_farmer", "High Foldside", 48, 12, 55, 1),                    // 12
+            a("Mrs Sunter", "hill_farmer", "High Foldside", 46, 6, 52, 0),                    // 13
+            a("Jack Sunter", "hill_farmer", "High Foldside", 38, 3, 21, 1),                   // 14
+            // Gunnerside (a second hill farm)
+            a("Mr Metcalfe", "hill_farmer", "Gunnerside", 50, 18, 48, 1),                     // 15
+            a("Mrs Metcalfe", "hill_farmer", "Gunnerside", 47, 5, 44, 0),                     // 16
+            a("Will Metcalfe", "hill_farmer", "Gunnerside", 38, 2, 19, 1),                    // 17
+            // Five Elms (a second genteel family)
+            a("Major Pringle", "genteel_status_seeker", "Five Elms", 74, 260, 60, 1),         // 18
+            a("Mrs Pringle", "genteel_status_seeker", "Five Elms", 70, 40, 55, 0),            // 19
+            a("Daphne Pringle", "genteel_status_seeker", "Five Elms", 52, 5, 24, 0),          // 20
+            // The Pelican, the shop, the forge — the levellers & trade
+            a("Mr Bunce", "blunt_hand", "The Pelican", 50, 30, 50, 1),                        // 21
+            a("Mrs Bunce", "blunt_hand", "The Pelican", 47, 12, 47, 0),                       // 22
+            a("Mr Pickering", "blunt_hand", "The Shop", 52, 35, 52, 1),                       // 23
+            a("Mr Garth", "blunt_hand", "The Forge", 46, 14, 40, 1),                          // 24
+            a("Mrs Toms (Cook)", "blunt_hand", "The Laurels", 38, 3, 45, 0),                  // 25
+            a("Gladys", "blunt_hand", "The Laurels", 28, 1, 19, 0),                           // 26
+            // The officials (Clarkson's friction)
+            a("Mr Crisp", "official", "the Committee", 44, 40, 48, 1),                        // 27
+            a("Constable Hodge", "official", "the Constabulary", 46, 12, 38, 1),              // 28
+            // The leveller-busybody & the doctor
+            a("Miss Pertwee", "genteel_status_seeker", "Ivy Cottage", 58, 22, 64, 0),         // 29
+            a("Dr Lydgate", "practitioner", "Springs House", 70, 60, 50, 1),                  // 30
         ];
-        // kinship: indices follow the order above
-        let (cynthia, robert) = (0usize, 1usize);
-        let (ladya, rupert) = (2usize, 6usize);
-        let (sunter, jack) = (5usize, 8usize);
-        let (robin, vicky) = (9usize, 10usize);
-        agents[cynthia].spouse = Some(robert);
-        agents[robert].spouse = Some(cynthia);
-        agents[rupert].parent = Some(ladya); // Crale Court's heir — the eventual earthquake
-        agents[jack].parent = Some(sunter);
-        agents[robin].parent = Some(cynthia);
-        agents[vicky].parent = Some(cynthia);
+        // kinship (indices match the comments above)
+        for &(h, w) in &[(0, 1), (8, 9), (12, 13), (15, 16), (18, 19), (21, 22)] {
+            agents[h].spouse = Some(w);
+            agents[w].spouse = Some(h);
+        }
+        for &(child, parent) in &[(2, 0), (3, 0), (14, 12), (17, 15), (20, 18), (5, 4)] {
+            agents[child].parent = Some(parent); // (5,4): Rupert is Lady Aldermaston's heir
+        }
 
         World {
             agents,
@@ -180,10 +206,6 @@ impl World {
 
     fn agent_mut(&mut self, name: &str) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| a.name == name && a.death_day.is_none())
-    }
-
-    fn alive_named(&self, name: &str) -> bool {
-        self.agents.iter().any(|a| a.name == name && a.death_day.is_none())
     }
 
     fn idx(&self, name: &str) -> Option<usize> {
@@ -319,19 +341,19 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's made-over frock at the party", -1, day, &["Lady Aldermaston"]);
     }
 
-    // --- the daily incident: drawn from the season's register ---
-    // (Scripted incidents assume their principals are alive; once a seat passes to an
-    // heir the named beats stop firing. The WASM policy layer will replace this.)
-    if rng.gen_bool(0.55) {
-        let season = Season::of(date);
-        // alternate the lens between household comedy and farm friction
-        let farm = rng.gen_bool(0.5);
-        if farm {
-            if world.alive_named("Mr Rupert Crale") || world.alive_named("Mr Sunter") {
-                farm_incident(world, season, day, &mut rng, &mk, &mut out);
-            }
-        } else if world.alive_named("Mrs Cynthia Pelham") || world.alive_named("Lady Aldermaston") {
-            household_incident(world, day, &mut rng, &mk, &mut out);
+    // --- the external-shock layer: weather, market, the form ---
+    out.extend(seasonal_shock(world, day, date, seed));
+
+    // --- the behaviour layer: every present adult acts in character ---
+    let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+    let actors: Vec<usize> = (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child")
+        .collect();
+    for i in actors {
+        let obs = observe(world, i, day, date, top, seed);
+        let action = decide(&world.agents[i].archetype, &obs);
+        if !matches!(action, Action::Idle) {
+            arbitrate(world, i, action, day, date, &mut out, seed);
         }
     }
 
@@ -344,66 +366,232 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     out
 }
 
-type Mk<'a> = dyn Fn(&str, &str, String) -> Event + 'a;
+// ----------------------------------------------------------------------------- behaviour
+//
+// The policy layer. Every present adult decides a day's intention from a flat
+// Observation and returns an Action the host arbitrates. This is the contract a WASM
+// guest would implement verbatim: `decide(observation) -> action`, one module per
+// archetype, host materialises the observation and applies the action. Today the
+// policies are native Rust behind that boundary; swapping in wasmtime is a substrate
+// change, not a redesign. Crucially it is *generative for any holder of a role* — a
+// great-grandchild who inherits The Laurels behaves in character with no new code.
 
-fn household_incident(world: &mut World, day: i64, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
-    match rng.gen_range(0..6) {
-        0 => out.push(mk("household", "Mrs Cynthia Pelham", "Cook gave notice once more, and was talked round before luncheon.".into())),
-        1 => {
-            if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, -1); }
-            out.push(mk("household", "Mrs Cynthia Pelham", "The soufflé collapsed before the Hendersons. Conversation was found for it.".into()));
-            world.spawn_news("Mrs Cynthia Pelham", "the soufflé that collapsed before the Hendersons", -1, day, &[]);
-        }
-        2 => {
-            if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { c.purse -= 3; clamp_standing(c, -1); }
-            out.push(mk("status", "Mrs Cynthia Pelham", "The account at the draper's was mentioned, very gently, across the counter.".into()));
-            world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's unpaid account at the draper's", -2, day, &[]);
-        }
-        3 => {
-            if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, 2); }
-            out.push(mk("status", "Mrs Cynthia Pelham", "Mrs Pelham paid a successful call at the Vicarage; the seed-cake was praised.".into()));
-            world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's much-praised seed-cake", 1, day, &["Revd Mr Soames"]);
-        }
-        4 => {
-            if let Some(l) = world.agent_mut("Lady Aldermaston") { clamp_standing(l, 2); }
-            if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, -1); }
-            out.push(mk("status", "Lady Aldermaston", "Lady Aldermaston's new motorcar was much admired in the square.".into()));
-            world.spawn_news("Lady Aldermaston", "Lady Aldermaston's splendid new motorcar", 1, day, &["Mrs Cynthia Pelham"]);
-        }
-        _ => out.push(mk("household", "Tot Wragg", "Gladys broke the second-best teapot and blamed the cat.".into())),
+/// What an agent can see of the world on a given day. Flat and self-contained.
+pub struct Observation {
+    pub standing: i32,
+    pub purse: i32,
+    pub age: i64,
+    pub married: bool,
+    pub season: Season,
+    pub is_market: bool, // Wednesday
+    pub is_sunday: bool,
+    pub top_standing: i32, // the grandest in town — the bar status is measured against
+    pub rng: u64,          // per-agent, per-day deterministic seed for stochastic choice
+}
+
+/// A day's intention. Most days are `Idle` (routine, no beat).
+pub enum Action {
+    Idle,
+    PayCall,    // genteel: cheap standing
+    GiveDinner, // genteel: standing up, purse down — face bought with money
+    Economise,  // genteel: purse up, a small loss of face
+    KeepUp,     // genteel: spend to hold standing
+    TendStock,  // farmer
+    Haggle,     // farmer: deal at market
+    Graft,      // hand: the work done, the master deflated
+    Scheme,     // improver: risky, gain or grief
+    Press,      // official: tithe / inspection / the law
+    Minister,   // official/parson: the parish in good order
+    Round,      // vet: the rounds, the connector
+}
+
+fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64) -> Observation {
+    let a = &world.agents[i];
+    Observation {
+        standing: a.standing,
+        purse: a.purse,
+        age: a.age(day),
+        married: a.spouse.is_some(),
+        season: Season::of(date),
+        is_market: date.weekday() == Weekday::Wednesday,
+        is_sunday: date.weekday() == Weekday::Sunday,
+        top_standing: top,
+        rng: seed
+            ^ 0xB6E1_0000_0000
+            ^ (day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (i as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
     }
 }
 
-fn farm_incident(world: &mut World, season: Season, day: i64, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
-    if matches!(season, Season::Hay) {
-        match rng.gen_range(0..6) {
-            0 => out.push(mk("weather", "Mr Sunter", "Rain threatened the cut hay; every hand in the dale turned out to cock it.".into())),
-            1 => {
-                if let Some(r) = world.agent_mut("Mr Rupert Crale") { r.purse -= 5; clamp_standing(r, -1); }
-                out.push(mk("scheme", "Mr Rupert Crale", "The elevator jammed at the Home Farm. Tot had said it would.".into()));
-                world.spawn_news("Mr Rupert Crale", "Rupert's elevator come to grief", -2, day, &["Tot Wragg"]);
+/// The pooled policy: dispatch by archetype, decide from the observation. A wasm host
+/// would route to one component per archetype instead of this match.
+fn decide(archetype: &str, o: &Observation) -> Action {
+    let mut rng = ChaCha8Rng::seed_from_u64(o.rng);
+    match archetype {
+        "genteel_status_seeker" => {
+            // the Provincial-Lady tension: solvency vs face.
+            if !rng.gen_bool(0.16) {
+                return Action::Idle;
             }
-            2 => {
-                if let Some(s) = world.agent_mut("Mr Sunter") { s.purse += 6; clamp_standing(s, 2); }
-                out.push(mk("windfall", "Mr Sunter", "A clear day — the hay came in dry and sweet, and was got under cover.".into()));
-                world.spawn_news("Mr Sunter", "the Sunters getting their hay in dry", 2, day, &[]);
+            let behind = o.standing < o.top_standing - 8;
+            if o.purse < -12 {
+                // broke — but face sometimes wins anyway (the comedy of the overdraft)
+                if behind && rng.gen_bool(0.4) { Action::KeepUp } else { Action::Economise }
+            } else if behind && o.purse > 0 {
+                if rng.gen_bool(0.5) { Action::GiveDinner } else { Action::PayCall }
+            } else {
+                Action::PayCall
             }
-            3 => {
-                if let Some(r) = world.agent_mut("Mr Rupert Crale") { clamp_standing(r, -2); }
-                out.push(mk("scheme", "Mr Rupert Crale", "The new tractor stuck fast in the gateway. Tot fetched the horses, saying nothing.".into()));
-                world.spawn_news("Mr Rupert Crale", "Rupert's tractor stuck fast in the gateway", -2, day, &["Tot Wragg"]);
-            }
-            4 => out.push(mk("practice", "Mr Farran MRCVS", "Mr Farran was called to a lame carthorse, and stayed for his tea.".into())),
-            _ => out.push(mk("market", "Mr Sunter", "The milk lorry was late again, and the churns stood warming in the sun.".into())),
         }
-    } else {
-        // generic farm texture for other seasons (until each gets its own table)
-        match rng.gen_range(0..3) {
-            0 => out.push(mk("practice", "Mr Farran MRCVS", "Mr Farran drove out to the hill farms on his rounds.".into())),
-            1 => out.push(mk("market", "Mr Sunter", format!("Quiet work on the land; it is {} hereabouts.", season.name().to_lowercase()))),
-            _ => out.push(mk("household", "Tot Wragg", "Tot got the day's work done despite the master's improvements.".into())),
+        "hill_farmer" => {
+            if o.is_market && rng.gen_bool(0.25) {
+                Action::Haggle
+            } else if rng.gen_bool(0.08) {
+                Action::TendStock
+            } else {
+                Action::Idle
+            }
         }
+        "scheming_improver" => {
+            if rng.gen_bool(0.14) { Action::Scheme } else { Action::Idle }
+        }
+        "blunt_hand" => {
+            if rng.gen_bool(0.07) { Action::Graft } else { Action::Idle }
+        }
+        "practitioner" => {
+            if rng.gen_bool(0.18) { Action::Round } else { Action::Idle }
+        }
+        "official" => {
+            if o.is_sunday && rng.gen_bool(0.5) {
+                Action::Minister
+            } else if matches!(o.season, Season::Winter | Season::Mart) && rng.gen_bool(0.06) {
+                Action::Press
+            } else {
+                Action::Idle
+            }
+        }
+        _ => Action::Idle,
     }
+}
+
+/// Apply an action: mutate the world, emit a chronicle beat, and (for the juicy ones)
+/// set news loose. The actor is named, so descendants generate beats too.
+fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, out: &mut Vec<Event>, seed: u64) {
+    let mut rng = rng_for(seed ^ 0xA7B1_0000_0000, day ^ (i as i64).rotate_left(17));
+    let name = world.agents[i].name.clone();
+    let seat = world.agents[i].seat.clone();
+    let mk = |kind: &str, text: String| Event {
+        day,
+        date: date.to_string(),
+        kind: kind.into(),
+        actor: name.clone(),
+        text,
+    };
+    match action {
+        Action::PayCall => {
+            clamp_standing(&mut world.agents[i], 2);
+            out.push(mk("status", format!("{name} paid a round of calls, and was thought to look very well.")));
+        }
+        Action::GiveDinner => {
+            clamp_standing(&mut world.agents[i], 3);
+            world.agents[i].purse -= 6;
+            out.push(mk("status", format!("{name} gave a little dinner — rather beyond the means of {seat}, but handsomely done.")));
+            world.spawn_news(&name, &format!("{name}'s handsome little dinner"), 2, day, &[]);
+        }
+        Action::Economise => {
+            world.agents[i].purse += 4;
+            clamp_standing(&mut world.agents[i], -1);
+            out.push(mk("household", format!("{name} made do and mended, and hoped no one would notice the turned collar.")));
+            if rng.gen_bool(0.4) {
+                world.spawn_news(&name, &format!("the straitened economies at {seat}"), -2, day, &[]);
+            }
+        }
+        Action::KeepUp => {
+            world.agents[i].purse -= 4;
+            clamp_standing(&mut world.agents[i], 1);
+            out.push(mk("status", format!("{name} kept up appearances, whatever the bank might think of it.")));
+        }
+        Action::TendStock => {
+            out.push(mk("practice", format!("{name} was out among the stock before light.")));
+        }
+        Action::Haggle => {
+            let good = rng.gen_bool(0.55);
+            world.agents[i].purse += if good { 6 } else { -2 };
+            out.push(mk("market", if good {
+                format!("{name} drove a hard bargain at the mart and came home pleased.")
+            } else {
+                format!("{name} found the mart slow, and the buyers slower.")
+            }));
+        }
+        Action::Graft => {
+            out.push(mk("household", format!("{name} got the work done, and said little about how.")));
+        }
+        Action::Scheme => {
+            let win = rng.gen_bool(0.45);
+            if win {
+                world.agents[i].purse += 8;
+                clamp_standing(&mut world.agents[i], 2);
+                out.push(mk("scheme", format!("{name}'s latest improvement actually answered, to general astonishment.")));
+                world.spawn_news(&name, &format!("{name}'s scheme that, against all odds, worked"), 2, day, &[]);
+            } else {
+                world.agents[i].purse -= 7;
+                clamp_standing(&mut world.agents[i], -2);
+                out.push(mk("scheme", format!("{name}'s latest improvement came to grief in the mud. Tot, or his like, had said it would.")));
+                world.spawn_news(&name, &format!("{name}'s improvement come to grief"), -2, day, &[]);
+            }
+        }
+        Action::Press => {
+            out.push(mk("bureaucracy", format!("{name} came round with a form and a fixed, courteous smile.")));
+            world.spawn_news(&name, &format!("{name} and his ruinous bit of paper"), -1, day, &[]);
+        }
+        Action::Minister => {
+            clamp_standing(&mut world.agents[i], 1);
+            out.push(mk("household", format!("{name} kept the parish in good order, and the sermon to a decent length.")));
+        }
+        Action::Round => {
+            out.push(mk("practice", format!("{name} drove the rounds from farm to farm, carrying the news from door to door.")));
+        }
+        Action::Idle => {}
+    }
+}
+
+/// The external-shock layer: weather, market, bureaucracy — exogenous, not chosen. Draws
+/// only from what the season has armed.
+fn seasonal_shock(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mut rng = rng_for(seed ^ 0x5403_0000_0000, day);
+    if !rng.gen_bool(0.04) {
+        return out;
+    }
+    let farmers: Vec<usize> = (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && matches!(world.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver"))
+        .collect();
+    let mk = |kind: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: "Thrushcombe".into(), text };
+    match Season::of(date) {
+        Season::Hay => {
+            for &f in &farmers {
+                world.agents[f].purse -= 3;
+            }
+            out.push(mk("weather", "A storm came over the tops and flattened the cut hay across the dale. A bad day for everyone with grass down.".into()));
+        }
+        Season::Harvest => {
+            for &f in &farmers {
+                world.agents[f].purse -= 3;
+            }
+            out.push(mk("weather", "Wet weather set in over the harvest, and the corn stood sprouting in the stook.".into()));
+        }
+        Season::Mart => {
+            for &f in &farmers {
+                world.agents[f].purse -= 2;
+            }
+            out.push(mk("market", "The Board cut the price again, and every farmer in the room did the same sum and reached the same gloom.".into()));
+        }
+        Season::Winter => {
+            out.push(mk("bureaucracy", "The tithe and the winter bills fell due together, as they always contrive to.".into()));
+        }
+        _ => {}
+    }
+    out
 }
 
 // ----------------------------------------------------------------------------- life cycle
@@ -642,9 +830,27 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         }
     }
 
+    // --- the floor: Thrushcombe never falls below a living town ---
+    let active_now = world.agents.iter().filter(|a| a.active()).count() + newcomers.iter().filter(|a| a.active()).count();
+    if active_now < MIN_TOWNSFOLK && rng.gen_bool(0.6) {
+        // an incomer takes a cottage — mostly working folk, so the town doesn't gentrify
+        let roles = ["blunt_hand", "blunt_hand", "hill_farmer", "genteel_status_seeker", "official", "practitioner"];
+        let arch = roles[rng.gen_range(0..roles.len())];
+        let sex = if rng.gen_bool(0.5) { 1 } else { 0 };
+        let first = if sex == 1 { pick(&mut rng, FIRST_M) } else { pick(&mut rng, FIRST_F) };
+        let title = if sex == 1 { "Mr" } else { "Miss" };
+        let name = format!("{title} {first} {}", pick(&mut rng, SURNAMES));
+        let agent = make_agent(&name, arch, "a cottage in the town", rng.gen_range(20..45), sex, rng.gen_range(22..44), day);
+        out.push(mk("newcomer", &name, format!("{name} came to Thrushcombe and took a cottage in the town.")));
+        newcomers.push(agent);
+    }
+
     world.agents.extend(newcomers);
     out
 }
+
+/// Thrushcombe holds at least this many souls — the floor tops up with incomers.
+const MIN_TOWNSFOLK: usize = 30;
 
 // ----------------------------------------------------------------------------- gossip
 
