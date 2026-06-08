@@ -419,6 +419,11 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
         out.extend(relationship_events(world, day, date, seed));
     }
 
+    // --- the rumour mill: scandal & romance at the market, after church, at the Pelican ---
+    if matches!(phase, Phase::Forenoon | Phase::Evening) {
+        out.extend(rumour_mill(world, day, phase, date, seed));
+    }
+
     // --- nightfall: the slow turn of the cast, and the day's news settling ---
     if matches!(phase, Phase::Night) {
         out.extend(life_tick(world, day, date, seed));
@@ -1492,6 +1497,95 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
     out
 }
 
+/// The rumour mill — where the town's gossip is actually *made*: scandal and romance
+/// whispered at the market, after church, and over the Pelican's beer. Spicier and more
+/// frequent than the news that incidents throw off, and most of it unkind.
+fn rumour_mill(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let wd = date.weekday();
+    let venue = if matches!(phase, Phase::Forenoon) && wd == Weekday::Sunday {
+        "after church"
+    } else if matches!(phase, Phase::Forenoon) && wd == Weekday::Wednesday {
+        "at the market"
+    } else if matches!(phase, Phase::Evening) {
+        "over the Pelican's beer"
+    } else {
+        return out;
+    };
+    let mut rng = rng_for(seed ^ 0x59ED_0000_0000, day * PHASES + phase.ord());
+    if !rng.gen_bool(0.42) {
+        return out;
+    }
+    let adults: Vec<usize> = (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child")
+        .collect();
+    if adults.len() < 6 {
+        return out;
+    }
+    let subj = adults[rng.gen_range(0..adults.len())];
+    let mut other = subj;
+    for _ in 0..4 {
+        let o = adults[rng.gen_range(0..adults.len())];
+        if o != subj {
+            other = o;
+            break;
+        }
+    }
+    let sname = world.agents[subj].name.clone();
+    let oname = world.agents[other].name.clone();
+    let s_married = world.agents[subj].spouse.is_some();
+    let o_married = world.agents[other].spouse.is_some();
+    let cross = stratum_archetype(&world.agents[subj].archetype) != stratum_archetype(&world.agents[other].archetype);
+    let broke = world.agents[subj].purse < -20;
+
+    let (topic, valence, line): (String, i32, String) = match rng.gen_range(0..11) {
+        0 | 1 if other != subj && (s_married || o_married) => (
+            format!("the goings-on between {sname} and {oname}"),
+            -3,
+            format!("It was whispered {venue} that {sname} and {oname} are a deal too friendly — and one of them spoken for."),
+        ),
+        2 if other != subj && cross && world.agents[subj].sex != world.agents[other].sex => (
+            format!("{sname} walking out with {oname}"),
+            -2,
+            format!("They do say {venue} that {sname} has been seen walking out with {oname}, and them not of the same sort at all."),
+        ),
+        3 if other != subj && world.agents[subj].sex != world.agents[other].sex => (
+            format!("{sname} being sweet on {oname}"),
+            1,
+            format!("It's the talk {venue} that {sname} is sweet on {oname}."),
+        ),
+        4 => (
+            format!("{sname}'s fondness for the bottle"),
+            -2,
+            format!("{sname} was the worse for drink {venue}, by all accounts — not for the first time."),
+        ),
+        5 if broke => (
+            format!("{sname} being over the ears in debt"),
+            -3,
+            format!("It's no secret {venue} now that {sname} is over the ears in debt."),
+        ),
+        6 => (
+            format!("the sorry state of {sname}'s affairs"),
+            -2,
+            format!("They were saying {venue} that {sname}'s affairs are in a worse tangle than anyone lets on."),
+        ),
+        7 => (
+            format!("the airs {sname} gives themselves"),
+            -1,
+            format!("It was remarked {venue} that {sname} has been giving themselves no end of airs of late."),
+        ),
+        8 => (
+            format!("a secret of {sname}'s"),
+            -1,
+            format!("There's a deal more to {sname} than meets the eye, they reckon {venue}."),
+        ),
+        _ => return out, // most idle sessions add nothing — keeps it spicy, not constant
+    };
+    out.push(Event { day, date: date.to_string(), kind: "gossip".into(), actor: sname.clone(), text: line });
+    world.spawn_news(&sname, &topic, valence, day, &[oname.as_str()]);
+    out
+}
+
 /// The animal & agricultural layer: births across the stock, the vet's ailments, the odd
 /// catastrophe — first-class beasts that make or ruin a day.
 fn animal_events(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
@@ -1777,7 +1871,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 8;
+const SNAPSHOT_VERSION: i64 = 9;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
