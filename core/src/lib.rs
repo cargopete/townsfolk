@@ -260,6 +260,30 @@ impl World {
         affinity.insert((0, 4), -18); // Cynthia eyes Lady Aldermaston
         affinity.insert((6, 5), -22); // Tot's low opinion of Rupert's schemes
 
+        // the children of the town — every household has its young (name, seat, age, sex, parent)
+        let kid_specs: &[(&str, &str, i64, u8, usize)] = &[
+            ("Sam Pelham", "The Laurels", 5, 1, 0),
+            ("Tom Soames", "The Vicarage", 13, 1, 8),
+            ("Milly Soames", "The Vicarage", 9, 0, 8),
+            ("Tilly Sunter", "High Foldside", 14, 0, 12),
+            ("Ned Sunter", "High Foldside", 10, 1, 12),
+            ("Annie Metcalfe", "Gunnerside", 13, 0, 15),
+            ("Georgie Metcalfe", "Gunnerside", 8, 1, 15),
+            ("Rose Pringle", "Five Elms", 15, 0, 18),
+            ("Phoebe Pringle", "Five Elms", 11, 0, 18),
+            ("Bertie Bunce", "The Pelican", 12, 1, 21),
+            ("Lottie Bunce", "The Pelican", 7, 0, 21),
+            ("Dora Metcalfe", "Gunnerside", 5, 0, 16),
+        ];
+        for &(name, seat, age, sex, parent) in kid_specs {
+            let mut c = a(name, "child", seat, 12, 0, age, sex);
+            c.parent = Some(parent);
+            let idx = agents.len();
+            affinity.insert((idx as u32, parent as u32), 30);
+            affinity.insert((parent as u32, idx as u32), 30);
+            agents.push(c);
+        }
+
         World {
             agents,
             animals: seed_animals(),
@@ -1059,7 +1083,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     let mut out = Vec::new();
     let mut rng = rng_for(seed ^ 0x11FE_0000_0000, day);
     let n = world.agents.len();
-    let pop = world.agents.iter().filter(|a| a.active()).count();
+    let pop = world.agents.iter().filter(|a| a.active() && a.archetype != "child").count(); // adults — kids are additional
     let mut newcomers: Vec<Agent> = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event {
         day,
@@ -1218,13 +1242,13 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             let a = &world.agents[i];
             (a.active(), a.sex, a.archetype == "child", a.spouse, a.age(day), a.standing, a.seat.clone(), a.name.clone())
         };
-        if active && sex == 0 && !child && spouse.is_some() && (18..=42).contains(&age) && pop < SOFT_CAP + 6 {
+        if active && sex == 0 && !child && spouse.is_some() && (18..=42).contains(&age) {
             let young = world
                 .agents
                 .iter()
                 .filter(|c| c.active() && c.parent == Some(i) && c.age(day) < 18)
                 .count();
-            if young < 3 && rng.gen_bool((0.16 / 365.0_f64).clamp(0.0, 1.0)) {
+            if young < 4 && rng.gen_bool((0.15 / 365.0_f64).clamp(0.0, 1.0)) {
                 let bsex = if rng.gen_bool(0.5) { 1 } else { 0 };
                 let first = if bsex == 1 { pick(&mut rng, FIRST_M) } else { pick(&mut rng, FIRST_F) };
                 let surname = mother_name.rsplit(' ').next().unwrap_or("Pelham");
@@ -1239,7 +1263,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     // --- adults drift out: single, unsettled cottage-folk take work elsewhere ---
     // (gated above the floor, and never seat-holders or those with family, so lineages
     // and households are left intact)
-    let active_ct = world.agents.iter().filter(|a| a.active()).count();
+    let active_ct = world.agents.iter().filter(|a| a.active() && a.archetype != "child").count();
     if active_ct > MIN_TOWNSFOLK + 3 {
         let leavers: Vec<usize> = (0..n)
             .filter(|&i| {
@@ -1274,7 +1298,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     }
 
     // --- the floor: Thrushcombe never falls below a living town ---
-    let active_now = world.agents.iter().filter(|a| a.active()).count() + newcomers.iter().filter(|a| a.active()).count();
+    let active_now = world.agents.iter().filter(|a| a.active() && a.archetype != "child").count() + newcomers.iter().filter(|a| a.active() && a.archetype != "child").count();
     if active_now < MIN_TOWNSFOLK && rng.gen_bool(0.6) {
         let a = new_incomer(&mut rng, day);
         let from = a.origin.clone().unwrap_or_else(|| "away".into());
