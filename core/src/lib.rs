@@ -13,11 +13,12 @@
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use time::{Date, Month};
 
 // ----------------------------------------------------------------------------- calendar
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Season {
     Winter,
     Lambing,
@@ -63,7 +64,7 @@ impl Season {
 
 // ----------------------------------------------------------------------------- world
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub name: String,
     pub archetype: String,
@@ -92,7 +93,7 @@ impl Agent {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Animal {
     pub name: String,
     pub owner: String,
@@ -104,7 +105,7 @@ pub struct Animal {
 /// A piece of news loose in the town. It spreads across the social graph with delay
 /// (one hop a day) and distortion (it grows in the telling), and each new pair of ears
 /// nudges the subject's standing — gossip is *how* reputation actually moves.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct News {
     pub id: u32,
     pub subject: usize, // index into agents — who the talk concerns
@@ -117,7 +118,7 @@ pub struct News {
     pub broadcast: bool, // has "most of the town knows" already fired
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub agents: Vec<Agent>,
     pub animals: Vec<Animal>,
@@ -1007,11 +1008,19 @@ pub const SALIENT: &[&str] = &[
     "death", "succession", "marriage", "birth", "comingofage",
 ];
 
+/// Bump when World layout or step_day logic changes — older snapshots are then ignored
+/// and the world re-folds from genesis (and writes fresh checkpoints).
+const SNAPSHOT_VERSION: i64 = 1;
+/// Checkpoint cadence in days. A read folds at most this many days past the last one.
+const SNAPSHOT_EVERY: i64 = 365;
+
 fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
-    // The recorded oracle: an LLM is non-deterministic at generation time, so we log
-    // its output once, keyed by event, and replay the stored text forever.
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS narration(event_id INTEGER PRIMARY KEY, text TEXT NOT NULL);",
+        // The recorded oracle: an LLM is non-deterministic at generation time, so we log
+        // its output once, keyed by event, and replay the stored text forever.
+        "CREATE TABLE IF NOT EXISTS narration(event_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
+         -- Folded-world checkpoints, so a read need not re-fold from genesis.
+         CREATE TABLE IF NOT EXISTS snapshots(day INTEGER PRIMARY KEY, version INTEGER NOT NULL, blob BLOB NOT NULL);",
     )
 }
 
@@ -1082,44 +1091,75 @@ impl Sim {
         (today.to_julian_day() - self.epoch.to_julian_day()) as i64
     }
 
-    /// Advance the log forward until it has caught up to `today`. Returns days added.
-    /// Missing days self-heal: this regenerates every day from last+1..=target.
+    fn date_of(&self, day: i64) -> Date {
+        Date::from_julian_day((self.epoch.to_julian_day() as i64 + day) as i32).unwrap()
+    }
+
+    /// Load the nearest checkpoint <= `up_to` (current version); returns the folded world
+    /// and the next day to fold from. Falls back to genesis if there's no usable snapshot.
+    fn load_checkpoint(&self, up_to: i64) -> (World, i64) {
+        let row: Option<(i64, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT day, blob FROM snapshots WHERE day <= ?1 AND version = ?2 ORDER BY day DESC LIMIT 1",
+                params![up_to, SNAPSHOT_VERSION],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        match row.and_then(|(d, b)| bincode::deserialize::<World>(&b).ok().map(|w| (w, d))) {
+            Some((world, d)) => (world, d + 1),
+            None => (World::seed(), 0),
+        }
+    }
+
+    /// The folded world as of end-of-day `day`, using checkpoints (read-only; no events
+    /// or snapshots are written).
+    fn world_at(&self, day: i64) -> World {
+        let (mut world, from) = self.load_checkpoint(day);
+        for d in from..=day {
+            let _ = step_day(&mut world, d, self.date_of(d), self.seed);
+        }
+        world
+    }
+
+    /// Advance the log forward until it has caught up to `today`. Returns events added.
+    /// Missing days self-heal; checkpoints are written every SNAPSHOT_EVERY days.
     pub fn catch_up(&mut self, today: Date) -> rusqlite::Result<i64> {
         let target = self.target_day(today);
         let from = self.last_day() + 1;
         if target < from {
             return Ok(0);
         }
-        // Rebuild world state up to `from-1`, then generate the new days.
-        let mut world = World::seed();
-        for d in 0..from {
-            let date = Date::from_julian_day((self.epoch.to_julian_day() as i64 + d) as i32).unwrap();
-            let _ = step_day(&mut world, d, date, self.seed);
-        }
+        let mut world = self.world_at(from - 1); // cheap: nearest checkpoint + remainder
+        let seed = self.seed;
+        let epoch_jd = self.epoch.to_julian_day() as i64;
         let tx = self.conn.transaction()?;
         let mut added = 0;
         for d in from..=target {
-            let date = Date::from_julian_day((self.epoch.to_julian_day() as i64 + d) as i32).unwrap();
-            for e in step_day(&mut world, d, date, self.seed) {
+            let date = Date::from_julian_day((epoch_jd + d) as i32).unwrap();
+            for e in step_day(&mut world, d, date, seed) {
                 tx.execute(
                     "INSERT INTO events(day,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5)",
                     params![e.day, e.date, e.kind, e.actor, e.text],
                 )?;
                 added += 1;
             }
+            if d % SNAPSHOT_EVERY == 0 {
+                let blob = bincode::serialize(&world).expect("serialize world");
+                tx.execute(
+                    "INSERT OR REPLACE INTO snapshots(day,version,blob) VALUES(?1,?2,?3)",
+                    params![d, SNAPSHOT_VERSION, blob],
+                )?;
+            }
         }
         tx.commit()?;
         Ok(added)
     }
 
-    /// Fold the world to `today` (in memory) and read recent chronicle for display.
+    /// Fold the world to `today` (via checkpoints) and read recent chronicle for display.
     pub fn report(&self, today: Date) -> rusqlite::Result<Report> {
         let target = self.target_day(today).max(0);
-        let mut world = World::seed();
-        for d in 0..=target {
-            let date = Date::from_julian_day((self.epoch.to_julian_day() as i64 + d) as i32).unwrap();
-            let _ = step_day(&mut world, d, date, self.seed);
-        }
+        let world = self.world_at(target);
 
         let mut chronicle = Vec::new();
         // Prefer the oracle's rendering once it exists; fall back to the template line.
