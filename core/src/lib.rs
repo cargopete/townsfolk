@@ -326,7 +326,7 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 
 /// Advance the world by exactly one day, mutating it and returning that day's
 /// events. Deterministic in (seed, day, world-state-from-prior-days).
-fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>) -> Vec<Event> {
+fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>) -> Vec<Event> {
     let mut out = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event {
         day,
@@ -366,8 +366,8 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn Pol
         out.extend(apply_interventions(world, day, date, list));
     }
 
-    // --- the external-shock layer: weather, market, the form ---
-    out.extend(seasonal_shock(world, day, date, seed));
+    // --- the external-shock layer: real weather if we have it, else the season's dice ---
+    out.extend(seasonal_shock(world, day, date, seed, weather.get(&day).copied()));
 
     // --- the behaviour layer: every present adult acts in character ---
     let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
@@ -728,6 +728,15 @@ pub struct Intervention {
     pub note: String,
 }
 
+/// A day's real weather (Sofia), the companion-mode resonance: your actual sky drives the
+/// town's shocks. A recorded external input — fetched once, stored, folded deterministically.
+#[derive(Clone, Copy)]
+pub struct DayWeather {
+    pub precip: f64, // mm
+    pub tmax: f64,   // °C
+    pub tmin: f64,
+}
+
 /// Apply the day's providence to the world, returning the beats it sets down.
 fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Intervention]) -> Vec<Event> {
     let mut out = Vec::new();
@@ -772,17 +781,71 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
     out
 }
 
-/// The external-shock layer: weather, market, bureaucracy — exogenous, not chosen. Draws
-/// only from what the season has armed.
-fn seasonal_shock(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+fn farmers_of(world: &World) -> Vec<usize> {
+    (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && matches!(world.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver"))
+        .collect()
+}
+
+/// The external-shock layer. With real weather (Sofia), the sky drives it deterministically;
+/// otherwise the season rolls its own dice. Either way only what the season has armed.
+fn seasonal_shock(world: &mut World, day: i64, date: Date, seed: u64, wx: Option<DayWeather>) -> Vec<Event> {
+    match wx {
+        Some(w) => weather_shock(world, day, date, w),
+        None => rng_shock(world, day, date, seed),
+    }
+}
+
+/// Real Sofia weather → the town's day. Hard rain rots the hay/harvest; heat burns the
+/// grass; a hard frost takes lambs or freezes the pump.
+fn weather_shock(world: &mut World, day: i64, date: Date, w: DayWeather) -> Vec<Event> {
+    let mut out = Vec::new();
+    let farmers = farmers_of(world);
+    let mk = |kind: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: "Thrushcombe".into(), text };
+    let season = Season::of(date);
+    if w.precip >= 12.0 {
+        match season {
+            Season::Hay => {
+                for &f in &farmers { world.agents[f].purse -= 3; }
+                out.push(mk("weather", "A hard rain came over the tops and flattened the cut hay across the dale — a bad day for everyone with grass down.".into()));
+            }
+            Season::Harvest => {
+                for &f in &farmers { world.agents[f].purse -= 3; }
+                out.push(mk("weather", "The rain set in over the harvest, and the corn stood sprouting in the stook.".into()));
+            }
+            _ => {
+                out.push(mk("weather", "Rain all day; the becks ran high and the lane to the church was a river.".into()));
+            }
+        }
+    } else if w.tmax >= 32.0 && matches!(season, Season::Sowing | Season::Hay | Season::Harvest) {
+        for &f in &farmers { world.agents[f].purse -= 1; }
+        out.push(mk("weather", "A scorching day — the grass burnt brown and the becks shrank to a trickle.".into()));
+    } else if w.tmin <= -6.0 {
+        match season {
+            Season::Lambing | Season::Sowing => {
+                for &f in &farmers { world.agents[f].purse -= 2; }
+                out.push(mk("weather", "A hard frost in the night; the lambs suffered for it and the early sowing with them.".into()));
+            }
+            Season::Winter => {
+                out.push(mk("weather", "Bitter cold — the pump froze solid and the milk to ice in the churn.".into()));
+            }
+            _ => {
+                out.push(mk("weather", "A sharp, unseasonable frost whitened the fields by dawn.".into()));
+            }
+        }
+    }
+    out
+}
+
+/// The season's own dice, when there's no recorded weather (backdated runs, future days
+/// past the forecast). Unchanged from before, so weather-free worlds fold identically.
+fn rng_shock(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     let mut out = Vec::new();
     let mut rng = rng_for(seed ^ 0x5403_0000_0000, day);
     if !rng.gen_bool(0.04) {
         return out;
     }
-    let farmers: Vec<usize> = (0..world.agents.len())
-        .filter(|&i| world.agents[i].active() && matches!(world.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver"))
-        .collect();
+    let farmers = farmers_of(world);
     let mk = |kind: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: "Thrushcombe".into(), text };
     match Season::of(date) {
         Season::Hay => {
@@ -1454,6 +1517,7 @@ pub struct Sim {
     epoch: Date,
     engine: Box<dyn PolicyEngine>,
     interventions: BTreeMap<i64, Vec<Intervention>>,
+    weather: BTreeMap<i64, DayWeather>,
 }
 
 /// A structured chronicle line for readers (web/legends).
@@ -1493,6 +1557,7 @@ pub struct TownDetail {
     pub season: String,
     pub armed: String,
     pub phase: String,
+    pub weather: Option<String>, // today's real Sofia sky, if recorded
     pub population: usize,
     pub people: Vec<PersonDetail>,
     pub gossip: Vec<String>,
@@ -1537,8 +1602,23 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- Providence: the player's diegetic interventions, folded in at their day.
          CREATE TABLE IF NOT EXISTS interventions(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL,
-            kind TEXT NOT NULL, target TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL);",
+            kind TEXT NOT NULL, target TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL);
+         -- Real weather (Sofia), recorded so the fold stays deterministic.
+         CREATE TABLE IF NOT EXISTS weather(day INTEGER PRIMARY KEY, precip REAL, tmax REAL, tmin REAL);",
     )
+}
+
+fn load_weather(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, DayWeather>> {
+    let mut stmt = conn.prepare("SELECT day, precip, tmax, tmin FROM weather")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, DayWeather { precip: r.get(1)?, tmax: r.get(2)?, tmin: r.get(3)? }))
+    })?;
+    let mut map = BTreeMap::new();
+    for row in rows {
+        let (d, w) = row?;
+        map.insert(d, w);
+    }
+    Ok(map)
 }
 
 fn load_interventions(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, Vec<Intervention>>> {
@@ -1562,7 +1642,8 @@ impl Sim {
         let seed: i64 = conn.query_row("SELECT val FROM meta WHERE key='seed'", [], |r| r.get(0))?;
         let ej: i64 = conn.query_row("SELECT val FROM meta WHERE key='epoch_julian'", [], |r| r.get(0))?;
         let interventions = load_interventions(&conn)?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions })
+        let weather = load_weather(&conn)?;
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -1579,7 +1660,22 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new() })
+        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new() })
+    }
+
+    /// Record a day's real weather, but only for days not yet folded (so it can't rewrite
+    /// history). Returns true if stored. Fetch-then-tick keeps the frontier ahead of it.
+    pub fn record_weather(&mut self, date: Date, precip: f64, tmax: f64, tmin: f64) -> rusqlite::Result<bool> {
+        let day = self.target_day(date);
+        if day <= self.last_day() {
+            return Ok(false);
+        }
+        self.conn.execute(
+            "INSERT OR REPLACE INTO weather(day,precip,tmax,tmin) VALUES(?1,?2,?3,?4)",
+            params![day, precip, tmax, tmin],
+        )?;
+        self.weather.insert(day, DayWeather { precip, tmax, tmin });
+        Ok(true)
     }
 
     /// Swap the behaviour engine (e.g. a wasm-backed one). Must be set before any
@@ -1675,7 +1771,7 @@ impl Sim {
     fn world_at(&self, day: i64) -> World {
         let (mut world, from) = self.load_checkpoint(day);
         for d in from..=day {
-            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine, &self.interventions);
+            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine, &self.interventions, &self.weather);
         }
         world
     }
@@ -1784,6 +1880,10 @@ impl Sim {
             season: Season::of(today).name().to_string(),
             armed: Season::of(today).armed().to_string(),
             phase: phase.name().to_string(),
+            weather: self.weather.get(&target).map(|w| {
+                let sky = if w.precip >= 8.0 { "rain" } else if w.precip >= 1.0 { "showers" } else if w.tmax >= 30.0 { "hot" } else if w.tmin <= -3.0 { "frost" } else { "fair" };
+                format!("Sofia: {sky}, {:.0}°/{:.0}°C, {:.0}mm", w.tmax, w.tmin, w.precip)
+            }),
             population: people.len(),
             people,
             gossip: news_in_flight(&world, target),
@@ -1808,7 +1908,7 @@ impl Sim {
         let mut added = 0;
         for d in from..=target {
             let date = Date::from_julian_day((epoch_jd + d) as i32).unwrap();
-            for e in step_day(&mut world, d, date, seed, &*self.engine, &self.interventions) {
+            for e in step_day(&mut world, d, date, seed, &*self.engine, &self.interventions, &self.weather) {
                 tx.execute(
                     "INSERT INTO events(day,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5)",
                     params![e.day, e.date, e.kind, e.actor, e.text],

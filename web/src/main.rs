@@ -77,9 +77,10 @@ fn dashboard(sim: &Sim) -> String {
         Ok(d) => d,
         Err(e) => return page("error", &format!("<h1>err</h1><p>{}</p>", esc(&e.to_string()))),
     };
+    let wline = d.weather.as_ref().map(|w| format!(" &middot; {}", esc(w))).unwrap_or_default();
     let mut body = format!(
-        "<h1>Thrushcombe St Mary</h1><div class=sub>{}, {} &middot; {} ({}) &middot; {} souls<br><span class=date>armed this season: {}</span></div>",
-        esc(&d.weekday), esc(&d.date), esc(&d.season), esc(&d.phase), d.population, esc(&d.armed)
+        "<h1>Thrushcombe St Mary</h1><div class=sub>{}, {} &middot; {} ({}) &middot; {} souls{}<br><span class=date>armed this season: {}</span></div>",
+        esc(&d.weekday), esc(&d.date), esc(&d.season), esc(&d.phase), d.population, wline, esc(&d.armed)
     );
 
     // two columns: today's global events + news in flight, then upcoming

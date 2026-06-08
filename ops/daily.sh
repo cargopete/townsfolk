@@ -9,5 +9,6 @@ REPO=/home/pepe/townsfolk
 DB="$REPO/world.db"
 BIN="$REPO/target/release/thrush"
 
+"$BIN" --db "$DB" weather || true   # record Sofia's sky ahead of today (best-effort)
 "$BIN" --db "$DB" tick
 "$BIN" --db "$DB" narrate --limit 50

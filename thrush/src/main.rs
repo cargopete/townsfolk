@@ -74,6 +74,8 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+    /// Fetch Sofia's real weather (forecast horizon) and record it for the days ahead.
+    Weather,
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -122,6 +124,34 @@ fn today() -> Date {
     OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .date()
+}
+
+/// Fetch Sofia's daily weather (recent + forecast) from open-meteo and record it for days
+/// not yet folded. Free, no key; recorded so the fold stays deterministic.
+fn fetch_sofia_weather(sim: &mut Sim) -> Result<u32, Box<dyn Error>> {
+    let url = "https://api.open-meteo.com/v1/forecast?latitude=42.6975&longitude=23.3242\
+               &daily=precipitation_sum,temperature_2m_max,temperature_2m_min&timezone=Europe%2FSofia\
+               &past_days=7&forecast_days=16";
+    let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(30)).build();
+    let resp: serde_json::Value = agent.get(url).call()?.into_json()?;
+    let d = &resp["daily"];
+    let empty = vec![];
+    let times = d["time"].as_array().unwrap_or(&empty);
+    let pr = d["precipitation_sum"].as_array().unwrap_or(&empty);
+    let tx = d["temperature_2m_max"].as_array().unwrap_or(&empty);
+    let tn = d["temperature_2m_min"].as_array().unwrap_or(&empty);
+    let mut stored = 0;
+    for i in 0..times.len() {
+        let Some(ds) = times[i].as_str() else { continue };
+        let date = parse_date(ds);
+        let precip = pr.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let tmax = tx.get(i).and_then(|v| v.as_f64()).unwrap_or(15.0);
+        let tmin = tn.get(i).and_then(|v| v.as_f64()).unwrap_or(8.0);
+        if sim.record_weather(date, precip, tmax, tmin)? {
+            stored += 1;
+        }
+    }
+    Ok(stored)
 }
 
 fn parse_date(s: &str) -> Date {
@@ -198,6 +228,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+        }
+        Cmd::Weather => {
+            let mut sim = Sim::open(&cli.db)?;
+            let stored = fetch_sofia_weather(&mut sim)?;
+            println!("Recorded {stored} day(s) of Sofia weather over the days ahead.");
         }
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;
@@ -350,7 +385,10 @@ fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
             Span::styled(format!("[{}]", d.phase), Style::default().fg(Color::Cyan)),
             Span::raw(format!("  ·  {} souls", d.population)),
         ]),
-        Line::from(Span::styled(format!("{} — armed: {}", d.season, d.armed), Style::default().fg(Color::Green))),
+        Line::from(vec![
+            Span::styled(format!("{} — armed: {}", d.season, d.armed), Style::default().fg(Color::Green)),
+            Span::styled(d.weather.as_ref().map(|w| format!("   ☁ {w}")).unwrap_or_default(), Style::default().fg(Color::Blue)),
+        ]),
         Line::from(Span::styled(
             format!("real {:02}:{:02}  ·  sim-date = real-date  ·  ↑/↓ select a soul  ·  q to quit", real.hour(), real.minute()),
             Style::default().fg(Color::DarkGray),
