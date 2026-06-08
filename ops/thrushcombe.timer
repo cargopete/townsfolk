@@ -1,9 +1,11 @@
 [Unit]
-Description=Daily Thrushcombe tick (companion mode: one sim-day per real-day)
+Description=Hourly Thrushcombe tick (companion mode; the day has phases)
 
 [Timer]
-# Just after midnight; Persistent fires it on next boot if the machine was off.
-OnCalendar=*-*-* 00:10:00
+# Every hour at :07 — keeps the town caught up to the current phase of the day, so
+# morning, market, afternoon-calls and evening-pub beats land as the day passes.
+# Persistent fires it on next boot if the machine was off.
+OnCalendar=*-*-* *:07:00
 Persistent=true
 
 [Install]

@@ -17,10 +17,12 @@ always reproduce the same town, bit-for-bit.
 
 It runs end to end:
 
-- **Calendar & seasons** — one day per tick, five phases; a season state machine
-  (lambing → sowing → hay → harvest → mart → winter) that arms different risks and
-  windfalls and gates the external-shock layer (the storm on the cut hay, the Board's
-  price cut, the tithe falling due).
+- **Calendar, seasons & phases** — the simulation steps by *phase* (`slot = day×5 +
+  phase`: dawn, forenoon, afternoon, evening, night), so beats fall *through* the day —
+  weather and stock at dawn, the market and the rounds in the forenoon, the gentry's
+  calls in the afternoon, the Pelican in the evening, the life cycle at night. A season
+  state machine (lambing → sowing → hay → harvest → mart → winter) arms the
+  external-shock layer (the storm on the cut hay, the Board's price cut, the tithe).
 - **Behaviour layer** — every present adult decides a day's intention from a flat
   `Observation` and returns an `Action` the host arbitrates, encoding the genre
   tensions (the genteel weigh solvency vs face; the improver schemes and comes to
@@ -79,8 +81,9 @@ thrush providence stranger --note "Mr Silas Vane"
 thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717
 ```
 
-The town can run itself on a daily systemd **user timer** — see [`ops/`](ops/);
-each beat advances to today and narrates the new events, idempotent and self-healing.
+The town can run itself on an **hourly** systemd user timer — see [`ops/`](ops/); each
+beat catches the town up to the current phase, fetches the weather, and narrates the
+new events. Idempotent and self-healing across missed hours.
 
 ## The two engines (native ↔ wasm)
 
@@ -120,10 +123,11 @@ docs/           the design
 
 ## Time model
 
-**Companion mode, 1 sim-day : 1 real-day, full phase-lock.** Not a saga to binge — an
-ambient diary you live beside for years. The town ages at human pace; resonance with
-real life comes from seeding the shock layer with real weather, gated by the season
-machine. (Backdate the epoch when you want to generate decades at once.)
+**Companion mode, 1 sim-day : 1 real-day, full phase-lock** — and the day itself is
+phase-locked too, so the town's dawn/forenoon/afternoon/evening *is* yours. Ticked
+hourly, checking in at 3pm vs 8pm shows genuinely different fresh happenings. Not a
+saga to binge — an ambient diary you live beside for years, the town ageing at human
+pace. (Backdate the epoch when you want to generate decades at once.)
 
 ## Determinism
 
