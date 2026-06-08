@@ -46,6 +46,12 @@ It runs end to end:
   warming the slower for a suit pressed above one's station), until it builds to a
   wedding after a proper courtship — or comes to nothing when another gets there first
   or the feeling is never returned. Marriages are no longer sudden; they have a throughline.
+- **The LLM at the hinges** — at a soul's genuine turning point (a long feud that might
+  be forgiven, ruin to be faced, a match across the class line) the choice is put to a
+  local Qwen with that soul's whole **dossier** — who they are, their situation, their
+  recent history. It chooses from a fixed vocabulary and writes the line; the verdict is
+  **recorded and folded** with a bounded effect, so the decision is the model's but the
+  world stays exact. The genuine intelligence, only where it matters.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

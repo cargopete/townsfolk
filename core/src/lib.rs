@@ -402,7 +402,7 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 /// they'd really happen, so beats fall across the day instead of in a midnight lump.
 /// Deterministic in (seed, day, phase, world-state-from-prior-slots).
 #[allow(clippy::too_many_arguments)]
-fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>, wildcards: &BTreeMap<i64, Vec<Wildcard>>) -> Vec<Event> {
+fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>, wildcards: &BTreeMap<i64, Vec<Wildcard>>, decrees: &BTreeMap<i64, Vec<Decree>>) -> Vec<Event> {
     let mut out = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
 
@@ -421,6 +421,9 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
         }
         if let Some(list) = wildcards.get(&day) {
             out.extend(apply_wildcards(world, day, date, list));
+        }
+        if let Some(list) = decrees.get(&day) {
+            out.extend(apply_decrees(world, day, date, list));
         }
         out.extend(seasonal_shock(world, day, date, seed, weather.get(&day).copied()));
     }
@@ -950,6 +953,30 @@ pub struct Wildcard {
     pub kind: String,   // fire|windfall|fair|blight|scandal|stranger|foundling|wonder
     pub target: String, // a townsperson's name, or "the town"
     pub text: String,   // the chronicler's prose
+}
+
+/// An LLM verdict at one soul's turning point — the genuine intelligence. A hinge (a feud
+/// that might be forgiven, ruin faced, a match across the class line) is put to Qwen with
+/// the soul's whole dossier; it chooses from a fixed vocabulary and writes the line. Recorded
+/// and folded with a bounded effect, so the choice is the model's but the world stays exact.
+#[derive(Clone)]
+pub struct Decree {
+    pub subject: String, // the soul deciding
+    pub kind: String,    // feud | ruin | match
+    pub target: String,  // the other party (a rival, a suitor), or ""
+    pub choice: String,  // forgive|nurse · leave|stay|appeal · accept|refuse
+    pub text: String,    // the chronicler's prose
+}
+
+/// A turning point the driver can put to the oracle — assembled from world state for the bin.
+pub struct Hinge {
+    pub subject: usize,
+    pub subject_name: String,
+    pub kind: String,
+    pub target: i32,
+    pub target_name: String,
+    pub situation: String,   // the dilemma, in words
+    pub options: Vec<String>,
 }
 
 /// Apply the day's providence to the world, returning the beats it sets down.
@@ -2082,6 +2109,7 @@ pub struct Sim {
     interventions: BTreeMap<i64, Vec<Intervention>>,
     weather: BTreeMap<i64, DayWeather>,
     wildcards: BTreeMap<i64, Vec<Wildcard>>,
+    decrees: BTreeMap<i64, Vec<Decree>>,
 }
 
 /// A structured chronicle line for readers (web/legends).
@@ -2159,12 +2187,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 13;
+const SNAPSHOT_VERSION: i64 = 14;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2183,8 +2211,94 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS weather(day INTEGER PRIMARY KEY, precip REAL, tmax REAL, tmin REAL);
          -- LLM-invented wildcards with bounded effects, recorded and folded at their day.
          CREATE TABLE IF NOT EXISTS wildcards(
-            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL);",
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL);
+         -- LLM verdicts at a soul's turning point, recorded and folded with a bounded effect.
+         CREATE TABLE IF NOT EXISTS decrees(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, kind TEXT NOT NULL,
+            target TEXT NOT NULL, choice TEXT NOT NULL, text TEXT NOT NULL);",
     )
+}
+
+fn load_decrees(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, Vec<Decree>>> {
+    let mut stmt = conn.prepare("SELECT day, subject, kind, target, choice, text FROM decrees ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, Decree { subject: r.get(1)?, kind: r.get(2)?, target: r.get(3)?, choice: r.get(4)?, text: r.get(5)? }))
+    })?;
+    let mut map: BTreeMap<i64, Vec<Decree>> = BTreeMap::new();
+    for row in rows {
+        let (day, d) = row?;
+        map.entry(day).or_default().push(d);
+    }
+    Ok(map)
+}
+
+/// Apply the day's hinge verdicts: the prose, and a bounded effect by (kind, choice). The
+/// *choice* is the oracle's; the consequence is fixed here, so the world stays exact.
+fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Vec<Event> {
+    let mut out = Vec::new();
+    for d in list {
+        let Some(si) = world.idx(&d.subject) else { continue };
+        let ti = world.idx(&d.target);
+        out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
+        match (d.kind.as_str(), d.choice.as_str()) {
+            ("feud", "forgive") => {
+                if let Some(t) = ti {
+                    world.affinity.insert((si as u32, t as u32), 12);
+                    world.affinity.insert((t as u32, si as u32), 10);
+                    nudge_mood(&mut world.agents[si], 12);
+                    world.spawn_news(&d.subject, &format!("{}'s reconciliation with {}", d.subject, d.target), 1, day, &[]);
+                }
+            }
+            ("feud", "nurse") => {
+                if let Some(t) = ti {
+                    world.affinity.insert((si as u32, t as u32), -60);
+                    nudge_mood(&mut world.agents[si], -8);
+                    world.spawn_news(&d.subject, &format!("the lasting grudge between {} and {}", d.subject, d.target), -1, day, &[]);
+                }
+            }
+            ("ruin", "leave") => {
+                world.agents[si].departed = true;
+                world.agents[si].courting = -1;
+                world.spawn_news(&d.subject, &format!("{} leaving Thrushcombe", d.subject), -1, day, &[]);
+            }
+            ("ruin", "stay") => {
+                nudge_mood(&mut world.agents[si], 25);
+                clamp_standing(&mut world.agents[si], 4);
+            }
+            ("ruin", "appeal") => {
+                // a well-placed soul quietly comes to their aid
+                let helper = (0..world.agents.len())
+                    .filter(|&j| j != si && world.agents[j].active() && world.agents[j].purse > 40)
+                    .max_by_key(|&j| world.agents[j].standing);
+                world.agents[si].purse += 40;
+                nudge_mood(&mut world.agents[si], 12);
+                if let Some(h) = helper {
+                    world.agents[h].purse -= 40;
+                    clamp_standing(&mut world.agents[h], 2); // a charity that's noticed
+                }
+            }
+            ("match", "accept") => {
+                // the courted relents: the suit becomes mutual and will come to a wedding
+                if let Some(t) = ti {
+                    world.affinity.insert((si as u32, t as u32), 35);
+                    world.affinity.insert((t as u32, si as u32), 40);
+                    nudge_mood(&mut world.agents[si], 14);
+                    nudge_mood(&mut world.agents[t], 18);
+                }
+            }
+            ("match", "refuse") => {
+                // the suit is ended; the suitor goes away the worse for it
+                if let Some(t) = ti {
+                    world.agents[t].courting = -1;
+                    world.agents[t].courtship = 0;
+                    nudge_mood(&mut world.agents[t], -16);
+                    world.affinity.insert((si as u32, t as u32), -10);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn load_wildcards(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, Vec<Wildcard>>> {
@@ -2303,7 +2417,8 @@ impl Sim {
         let interventions = load_interventions(&conn)?;
         let weather = load_weather(&conn)?;
         let wildcards = load_wildcards(&conn)?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather, wildcards })
+        let decrees = load_decrees(&conn)?;
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather, wildcards, decrees })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -2320,7 +2435,7 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new(), wildcards: BTreeMap::new() })
+        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new(), wildcards: BTreeMap::new(), decrees: BTreeMap::new() })
     }
 
     /// Record a day's real weather, but only for days not yet folded (so it can't rewrite
@@ -2420,6 +2535,123 @@ impl Sim {
             .collect()
     }
 
+    /// Record the oracle's verdict at a soul's turning point, then invalidate the frontier so
+    /// it folds in — with its bounded effect — at once. Caller should `catch_up`.
+    pub fn record_decree(&mut self, date: Date, subject: &str, kind: &str, target: &str, choice: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![day, subject, kind, target, choice, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
+        Ok(())
+    }
+
+    /// Find a soul at a genuine turning point — a long feud that might be forgiven, ruin to be
+    /// faced, a match across the class line — for the driver to put to the oracle. Skips any
+    /// soul+kind decided in the last ~half-year, so the same hinge isn't put twice running.
+    pub fn pending_hinge(&self, today: Date) -> Option<Hinge> {
+        let world = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let recent = |subj: &str, kind: &str| -> bool {
+            self.conn
+                .query_row(
+                    "SELECT MAX(day) FROM decrees WHERE subject = ?1 AND kind = ?2",
+                    params![subj, kind],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .ok()
+                .flatten()
+                .map(|last| day - last < 180)
+                .unwrap_or(false)
+        };
+        let name = |i: usize| world.agents[i].name.clone();
+        let n = world.agents.len();
+
+        // a match stalled at the class line — the courted decides (accept across station, or refuse)
+        for c in 0..n {
+            let t = world.agents[c].courting;
+            if t < 0 || !world.agents[c].active() {
+                continue;
+            }
+            let cd = t as usize;
+            if world.agents[c].courtship >= 22
+                && world.agents[cd].standing > world.agents[c].standing + 15
+                && world.aff(cd, c) < 26
+                && !recent(&name(cd), "match")
+            {
+                return Some(Hinge {
+                    subject: cd,
+                    subject_name: name(cd),
+                    kind: "match".into(),
+                    target: c as i32,
+                    target_name: name(c),
+                    situation: format!(
+                        "{} (of {}, standing {}) has been courting {} these many weeks — a suit from well below their station. {} must decide whether to accept {} against what the town expects, or to refuse the match.",
+                        name(c), world.agents[c].seat, world.agents[c].standing, name(cd), name(cd), name(c)
+                    ),
+                    options: vec!["accept".into(), "refuse".into()],
+                });
+            }
+        }
+
+        // ruin — deep in debt and low in spirits; leave, weather it, or appeal for help
+        let mut ruined: Vec<usize> = (0..n)
+            .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child" && world.agents[i].purse < -40 && world.agents[i].mood < -25 && !recent(&world.agents[i].name, "ruin"))
+            .collect();
+        ruined.sort_by_key(|&i| world.agents[i].purse);
+        if let Some(&i) = ruined.first() {
+            return Some(Hinge {
+                subject: i,
+                subject_name: name(i),
+                kind: "ruin".into(),
+                target: -1,
+                target_name: String::new(),
+                situation: format!(
+                    "{} (of {}, once standing {}) is ruined — {}£ in debt and very low. They must decide: leave Thrushcombe for good, weather it out and stay, or swallow their pride and appeal to the town for help.",
+                    name(i), world.agents[i].seat, world.agents[i].standing, world.agents[i].purse
+                ),
+                options: vec!["leave".into(), "stay".into(), "appeal".into()],
+            });
+        }
+
+        // a long, bitter feud — to forgive at last, or to nurse the grudge
+        let mut worst: Option<(i16, usize, usize)> = None;
+        for i in 0..n {
+            if !world.agents[i].active() {
+                continue;
+            }
+            for j in 0..n {
+                if i == j || !world.agents[j].active() {
+                    continue;
+                }
+                let a = world.aff(i, j);
+                if a <= -55 && world.aff(j, i) <= -45 && !recent(&name(i), "feud") {
+                    if worst.map(|(w, _, _)| a < w).unwrap_or(true) {
+                        worst = Some((a, i, j));
+                    }
+                }
+            }
+        }
+        if let Some((_, i, j)) = worst {
+            return Some(Hinge {
+                subject: i,
+                subject_name: name(i),
+                kind: "feud".into(),
+                target: j as i32,
+                target_name: name(j),
+                situation: format!(
+                    "{} and {} have been at bitter odds for a long time now. {} must decide whether to forgive {} and mend the quarrel at last, or to nurse the grudge.",
+                    name(i), name(j), name(i), name(j)
+                ),
+                options: vec!["forgive".into(), "nurse".into()],
+            });
+        }
+        None
+    }
+
     fn last_day(&self) -> i64 {
         self.conn
             .query_row("SELECT COALESCE(MAX(day), -1) FROM events", [], |r| r.get(0))
@@ -2476,7 +2708,7 @@ impl Sim {
         let (mut world, from) = self.load_checkpoint(slot);
         for s in from..=slot {
             let (day, phase, date) = self.decompose(s);
-            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards);
+            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards, &self.decrees);
         }
         world
     }
@@ -2690,7 +2922,7 @@ impl Sim {
             let day = s.div_euclid(PHASES);
             let ph = Phase::from_ord(s);
             let date = Date::from_julian_day((epoch_jd + day) as i32).unwrap();
-            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards) {
+            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards, &self.decrees) {
                 tx.execute(
                     "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5,?6)",
                     params![e.day, ph.ord(), e.date, e.kind, e.actor, e.text],

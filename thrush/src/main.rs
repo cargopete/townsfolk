@@ -82,6 +82,12 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Put a soul's turning point (a feud, a ruin, a match) to Qwen with their dossier.
+    Hinge {
+        /// Resolve one even if the throttle would skip it.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -155,6 +161,23 @@ fn wildcard_one(agent: &ureq::Agent, host: &str, model: &str, date: &str, season
 
 fn day_hash(day: i64) -> u64 {
     (day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((day as u64) >> 7).wrapping_mul(0xD1B5_4A32_D192_ED03)
+}
+
+const HINGE_PROMPT: &str = "You decide, in character, what a soul of Thrushcombe St Mary — a 1934 West-Country market town — does at a genuine turning point in their life. You are given who they are, their situation, and their recent history. Weigh it as they would, in the register of interwar English provincial life. Choose EXACTLY ONE of the allowed options and write one or two sentences, in period voice and no quotation marks, of what they resolve to do and why. Respond ONLY as JSON: {\"choice\": one of the allowed options, \"reason\": the sentence}.";
+
+/// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
+fn hinge_one(agent: &ureq::Agent, host: &str, model: &str, dossier: &str, options: &[String]) -> Option<(String, String)> {
+    let prompt = format!("{dossier}\n\nAllowed choices: {}. Decide, in character.", options.join(", "));
+    let body = serde_json::json!({
+        "model": model, "system": HINGE_PROMPT, "prompt": prompt,
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.8 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let choice = parsed.get("choice")?.as_str()?.trim().to_lowercase();
+    let choice = options.iter().find(|o| choice.contains(o.as_str())).cloned()?;
+    let reason = parsed.get("reason")?.as_str()?.trim().to_string();
+    (!reason.is_empty()).then_some((choice, reason))
 }
 
 /// Fetch Sofia's daily weather (recent + forecast) from open-meteo and record it for days
@@ -294,6 +317,48 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("Wildcard [{kind} · {target}]: {text}");
                 }
                 None => eprintln!("oracle unavailable ({host}) — no wildcard this time."),
+            }
+        }
+        Cmd::Hinge { force } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let day = sim.target_day(t).max(0);
+            // throttle: a turning point is a rare thing — at most one every ~2 days
+            if !force && day_hash(day.wrapping_add(7)) % 100 >= 45 {
+                return Ok(());
+            }
+            let Some(h) = sim.pending_hinge(t) else {
+                if force {
+                    println!("No soul is at a turning point just now.");
+                }
+                return Ok(());
+            };
+            // assemble the dossier: who they are + their recent history
+            let a = &sim.world_snapshot(t).agents[h.subject];
+            let recent: Vec<String> = sim.person_events(&h.subject_name, 6).map(|es| es.into_iter().map(|e| format!("  {} — {}", e.date, e.text)).collect()).unwrap_or_default();
+            let dossier = format!(
+                "{name}, {role}, of {seat}, aged {age}. Standing {standing}, purse {purse}£, presently {mood}.\nThe situation: {sit}\nRecent days for {name}:\n{hist}",
+                name = h.subject_name,
+                role = a.trade.clone().unwrap_or_else(|| arch_tag(&a.archetype).to_string()),
+                seat = a.seat,
+                age = a.age(day),
+                standing = a.standing,
+                purse = a.purse,
+                mood = thrush_core::mood_word(a.mood),
+                sit = h.situation,
+                hist = if recent.is_empty() { "  (little to remark on of late)".to_string() } else { recent.join("\n") },
+            );
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            match hinge_one(&agent, &host, &model, &dossier, &h.options) {
+                Some((choice, reason)) => {
+                    sim.record_decree(t, &h.subject_name, &h.kind, &h.target_name, &choice, &reason)?;
+                    sim.catch_up(today(), cur_phase())?; // re-fold the day so the verdict lands
+                    println!("Hinge [{} · {} → {choice}]: {reason}", h.kind, h.subject_name);
+                }
+                None => eprintln!("oracle unavailable ({host}) — the decision waits."),
             }
         }
         Cmd::Status => {
