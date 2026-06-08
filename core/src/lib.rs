@@ -2259,7 +2259,7 @@ impl Sim {
         let mut gstmt = self.conn.prepare(
             "SELECT COALESCE(n.text, e.text) FROM events e LEFT JOIN narration n ON n.event_id = e.id
              WHERE e.day = ?1 AND (e.actor = 'Thrushcombe' OR e.kind IN
-                ('death','succession','birth','marriage','party','calving','gossip','newcomer','weather','bureaucracy'))
+                ('death','succession','birth','marriage','party','calving','gossip','newcomer','weather','bureaucracy','wildcard'))
              ORDER BY e.id",
         )?;
         let global_today: Vec<String> = gstmt
