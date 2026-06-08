@@ -1,0 +1,13 @@
+[package]
+name = "thrush-web"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "thrush-web"
+path = "src/main.rs"
+
+[dependencies]
+thrush-core = { path = "../core" }
+tiny_http = "0.12"
+time = { version = "0.3", features = ["local-offset"] }

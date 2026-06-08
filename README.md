@@ -31,7 +31,14 @@ cargo build
 ./target/debug/thrush narrate         # render new salient beats in voice (local Qwen)
 ./target/debug/thrush status          # the town at a glance
 ./target/debug/thrush watch           # live TUI monitor (q to quit)
+./target/debug/thrush --wasm init …   # run the behaviour layer through the wasm policy guests
+./target/debug/thrush-web world.db    # browse the chronicle & legends at http://127.0.0.1:8717
 ```
+
+The behaviour layer runs behind a `decide(observation) -> action` boundary with two
+interchangeable engines: native (in-process) and **wasm** (sandboxed guests via
+wasmtime). They run the same shared policy code, so `--wasm` is bit-for-bit identical
+to native — proof the substrate is transparent. Rebuild guests with `ops/build-wasm.sh`.
 
 The town runs itself on a daily systemd user timer — see [`ops/`](ops/). Each beat
 advances to today and narrates the new salient events; both steps are idempotent and
@@ -40,9 +47,13 @@ self-heal across missed days.
 ## Layout
 
 ```
-core/      deterministic event-sourced kernel (calendar · seasons · world · log)
-thrush/    CLI + ratatui live monitor — pure read-projection over the log
-llm/       capped, sandboxed local Qwen for narration (the recorded oracle)
+core/           deterministic event-sourced kernel (calendar · seasons · behaviour ·
+                gossip · life cycle · snapshots · the PolicyEngine boundary)
+policy-genteel/ shared no_std policy crate — compiled native AND to wasm
+wasm-genteel/   the genteel policy as a wasm guest (built by ops/build-wasm.sh)
+thrush/         CLI + ratatui monitor + the wasmtime-backed engine
+thrush-web →web/ read-only chronicle & legends browser
+llm/            capped, sandboxed local Qwen for narration (the recorded oracle)
 ```
 
 ## The narration oracle

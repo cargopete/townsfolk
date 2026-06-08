@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "thrush", "policy-genteel"]
+members = ["core", "thrush", "policy-genteel", "web"]
 exclude = ["wasm-genteel"] # wasm-only no_std cdylib; built standalone for wasm32
 resolver = "2"
 

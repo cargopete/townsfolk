@@ -1037,6 +1037,14 @@ pub struct Sim {
     engine: Box<dyn PolicyEngine>,
 }
 
+/// A structured chronicle line for readers (web/legends).
+pub struct ChronEntry {
+    pub date: String,
+    pub kind: String,
+    pub actor: String,
+    pub text: String,
+}
+
 pub struct Report {
     pub date: String,
     pub day: i64,
@@ -1150,6 +1158,11 @@ impl Sim {
         Date::from_julian_day((self.epoch.to_julian_day() as i64 + day) as i32).unwrap()
     }
 
+    /// Render a day-index as its calendar date (for readers).
+    pub fn day_to_date(&self, day: i64) -> String {
+        self.date_of(day).to_string()
+    }
+
     /// Load the nearest checkpoint <= `up_to` (current version); returns the folded world
     /// and the next day to fold from. Falls back to genesis if there's no usable snapshot.
     fn load_checkpoint(&self, up_to: i64) -> (World, i64) {
@@ -1175,6 +1188,40 @@ impl Sim {
             let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine);
         }
         world
+    }
+
+    /// The full folded world as of `today` (all agents, living and gone, with indices) —
+    /// for readers that need lineage and the complete cast.
+    pub fn world_snapshot(&self, today: Date) -> World {
+        self.world_at(self.target_day(today).max(0))
+    }
+
+    /// The most recent chronicle entries, oracle prose preferred over the template line.
+    pub fn chronicle(&self, limit: i64) -> rusqlite::Result<Vec<ChronEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.date, e.kind, e.actor, COALESCE(n.text, e.text)
+             FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             ORDER BY e.id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok(ChronEntry { date: r.get(0)?, kind: r.get(1)?, actor: r.get(2)?, text: r.get(3)? })
+        })?;
+        rows.collect()
+    }
+
+    /// Every chronicle entry that names a person — their life as the town recorded it.
+    pub fn person_events(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<ChronEntry>> {
+        let like = format!("%{name}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT e.date, e.kind, e.actor, COALESCE(n.text, e.text)
+             FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             WHERE e.actor = ?1 OR e.text LIKE ?2
+             ORDER BY e.id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![name, like, limit], |r| {
+            Ok(ChronEntry { date: r.get(0)?, kind: r.get(1)?, actor: r.get(2)?, text: r.get(3)? })
+        })?;
+        rows.collect()
     }
 
     /// Advance the log forward until it has caught up to `today`. Returns events added.
