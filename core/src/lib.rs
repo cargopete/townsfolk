@@ -351,34 +351,35 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 
 /// Advance the world by exactly one day, mutating it and returning that day's
 /// events. Deterministic in (seed, day, world-state-from-prior-days).
-fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>) -> Vec<Event> {
+/// Advance the world by one *phase* (a fifth of a day). Systems are scheduled to when
+/// they'd really happen, so beats fall across the day instead of in a midnight lump.
+/// Deterministic in (seed, day, phase, world-state-from-prior-slots).
+fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>) -> Vec<Event> {
     let mut out = Vec::new();
-    let mk = |kind: &str, actor: &str, text: String| Event {
-        day,
-        date: date.to_string(),
-        kind: kind.into(),
-        actor: actor.into(),
-        text,
-    };
+    let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
 
-    // --- day zero: the opening state, seeded onto the real date ---
-    if day == 0 {
-        out.push(mk("household", "Mrs Cynthia Pelham", "Cook has given notice — the fifth time this year.".into()));
-        out.push(mk("scheme", "Mr Rupert Crale", "A new tractor arrived at the Home Farm, which Rupert cannot drive.".into()));
-        out.push(mk("bureaucracy", "Revd Mr Soames", "A tithe demand for High Foldside sits in the Vicar's out-tray.".into()));
-        world.spawn_news("Mr Rupert Crale", "Rupert's grand tractor he cannot drive", -2, day, &["Tot Wragg"]);
-        world.spawn_news("Mr Sunter", "the tithe demand fallen on High Foldside", -1, day, &["Revd Mr Soames"]);
+    // --- the morning: weather, the stock, the day's circumstance ---
+    if matches!(phase, Phase::Dawn) {
+        if day == 0 {
+            out.push(mk("household", "Mrs Cynthia Pelham", "Cook has given notice — the fifth time this year.".into()));
+            out.push(mk("scheme", "Mr Rupert Crale", "A new tractor arrived at the Home Farm, which Rupert cannot drive.".into()));
+            out.push(mk("bureaucracy", "Revd Mr Soames", "A tithe demand for High Foldside sits in the Vicar's out-tray.".into()));
+            world.spawn_news("Mr Rupert Crale", "Rupert's grand tractor he cannot drive", -2, day, &["Tot Wragg"]);
+            world.spawn_news("Mr Sunter", "the tithe demand fallen on High Foldside", -1, day, &["Revd Mr Soames"]);
+        }
+        out.extend(animal_events(world, day, date, seed));
+        if let Some(list) = interventions.get(&day) {
+            out.extend(apply_interventions(world, day, date, list));
+        }
+        out.extend(seasonal_shock(world, day, date, seed, weather.get(&day).copied()));
     }
 
-    // --- the animal & agricultural layer: births, ailments, the odd catastrophe ---
-    out.extend(animal_events(world, day, date, seed));
-
-    // --- scheduled social event: Lady Aldermaston's garden party, the 14th ---
-    if date.month() == Month::June && date.day() == 14 {
+    // --- the afternoon: the set-pieces ---
+    if matches!(phase, Phase::Afternoon) && date.month() == Month::June && date.day() == 14 {
         if let Some(l) = world.agent_mut("Lady Aldermaston") { clamp_standing(l, 3); }
         if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") {
             clamp_standing(c, 1);
-            c.purse -= 8; // the dress, on credit — face bought with money she hasn't got
+            c.purse -= 8;
         }
         out.push(mk("party", "Lady Aldermaston",
             "Lady Aldermaston's garden party at Crale Court. Mrs Pelham attended in a made-over frock and a brave face.".into()));
@@ -386,37 +387,35 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn Pol
         world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's made-over frock at the party", -1, day, &["Lady Aldermaston"]);
     }
 
-    // --- providence: the player's diegetic interventions for this day ---
-    if let Some(list) = interventions.get(&day) {
-        out.extend(apply_interventions(world, day, date, list));
+    // --- the behaviour layer: whoever is out and about this phase acts in character ---
+    behaviour_phase(world, day, phase, date, seed, engine, &mut out);
+
+    // --- the forenoon hub: feuds and friendships at the market & church door ---
+    if matches!(phase, Phase::Forenoon) {
+        out.extend(relationship_events(world, day, date, seed));
     }
 
-    // --- the external-shock layer: real weather if we have it, else the season's dice ---
-    out.extend(seasonal_shock(world, day, date, seed, weather.get(&day).copied()));
-
-    // --- the behaviour layer: every present adult acts in character ---
-    let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
-    let actors: Vec<usize> = (0..world.agents.len())
-        .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child")
-        .collect();
-    for i in actors {
-        let obs = observe(world, i, day, date, top, seed);
-        let action = engine.decide(&world.agents[i].archetype, &obs);
-        if !matches!(action, Action::Idle) {
-            arbitrate(world, i, action, day, date, &mut out, seed);
-        }
+    // --- nightfall: the slow turn of the cast, and the day's news settling ---
+    if matches!(phase, Phase::Night) {
+        out.extend(life_tick(world, day, date, seed));
+        out.extend(diffuse(world, day, date, seed));
     }
-
-    // --- the slow turn of the cast: birth, marriage, ageing, death, succession ---
-    out.extend(life_tick(world, day, date, seed));
-
-    // --- the news spreads, with delay and distortion (and moves the ledger) ---
-    out.extend(diffuse(world, day, date, seed));
-
-    // --- the relationship ledger boils over on hub days ---
-    out.extend(relationship_events(world, day, date, seed));
 
     out
+}
+
+fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, out: &mut Vec<Event>) {
+    let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+    let actors: Vec<usize> = (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && acts_in_phase(&world.agents[i].archetype, phase))
+        .collect();
+    for i in actors {
+        let obs = observe(world, i, day, date, top, seed, phase);
+        let action = engine.decide(&world.agents[i].archetype, &obs);
+        if !matches!(action, Action::Idle) {
+            arbitrate(world, i, action, day, date, phase, out, seed);
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------- behaviour
@@ -458,7 +457,7 @@ pub enum Action {
     Round,      // vet: the rounds, the connector
 }
 
-fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64) -> Observation {
+fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, phase: Phase) -> Observation {
     let a = &world.agents[i];
     Observation {
         standing: a.standing,
@@ -471,7 +470,7 @@ fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64) -
         top_standing: top,
         rng: seed
             ^ 0xB6E1_0000_0000
-            ^ (day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ ((day * PHASES + phase.ord()) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ (i as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
     }
 }
@@ -524,6 +523,9 @@ pub enum Phase {
     Night,
 }
 
+/// Phases per day — the granularity of a simulation step.
+pub const PHASES: i64 = 5;
+
 impl Phase {
     pub fn from_hour(h: u8) -> Phase {
         match h {
@@ -531,6 +533,24 @@ impl Phase {
             8..=11 => Phase::Forenoon,
             12..=16 => Phase::Afternoon,
             17..=21 => Phase::Evening,
+            _ => Phase::Night,
+        }
+    }
+    pub fn ord(self) -> i64 {
+        match self {
+            Phase::Dawn => 0,
+            Phase::Forenoon => 1,
+            Phase::Afternoon => 2,
+            Phase::Evening => 3,
+            Phase::Night => 4,
+        }
+    }
+    pub fn from_ord(o: i64) -> Phase {
+        match o.rem_euclid(PHASES) {
+            0 => Phase::Dawn,
+            1 => Phase::Forenoon,
+            2 => Phase::Afternoon,
+            3 => Phase::Evening,
             _ => Phase::Night,
         }
     }
@@ -543,6 +563,21 @@ impl Phase {
             Phase::Night => "night",
         }
     }
+}
+
+/// When in the day each archetype is out and about and liable to generate a beat —
+/// the routine table as a behaviour gate. Gentry in the afternoon and evening; the
+/// working town in the forenoon; farmers also at dawn.
+fn acts_in_phase(arch: &str, phase: Phase) -> bool {
+    matches!(
+        (arch, phase),
+        ("genteel_status_seeker", Phase::Afternoon | Phase::Evening)
+            | ("hill_farmer", Phase::Dawn | Phase::Forenoon)
+            | ("scheming_improver", Phase::Dawn | Phase::Forenoon)
+            | ("practitioner", Phase::Forenoon | Phase::Afternoon)
+            | ("blunt_hand", Phase::Forenoon)
+            | ("official", Phase::Forenoon)
+    )
 }
 
 /// Where an agent is this phase, from the routine table — market day and Sunday pull the
@@ -659,8 +694,8 @@ fn decide(archetype: &str, o: &Observation) -> Action {
 
 /// Apply an action: mutate the world, emit a chronicle beat, and (for the juicy ones)
 /// set news loose. The actor is named, so descendants generate beats too.
-fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, out: &mut Vec<Event>, seed: u64) {
-    let mut rng = rng_for(seed ^ 0xA7B1_0000_0000, day ^ (i as i64).rotate_left(17));
+fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, phase: Phase, out: &mut Vec<Event>, seed: u64) {
+    let mut rng = rng_for(seed ^ 0xA7B1_0000_0000, (day * PHASES + phase.ord()) ^ (i as i64).rotate_left(17));
     let name = world.agents[i].name.clone();
     let seat = world.agents[i].seat.clone();
     let mk = |kind: &str, text: String| Event {
@@ -1661,9 +1696,9 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 7;
+const SNAPSHOT_VERSION: i64 = 8;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
-const SNAPSHOT_EVERY: i64 = 365;
+const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
 fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -1726,7 +1761,7 @@ impl Sim {
             "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, val INTEGER);
              CREATE TABLE IF NOT EXISTS events(
                 id INTEGER PRIMARY KEY,
-                day INTEGER NOT NULL, date TEXT NOT NULL,
+                day INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 0, date TEXT NOT NULL,
                 kind TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_events_day ON events(day);",
         )?;
@@ -1769,7 +1804,7 @@ impl Sim {
         self.interventions = load_interventions(&self.conn)?;
         // invalidate the frontier so regeneration picks up the intervention
         self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
-        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?; // snapshots keyed by slot
         Ok(())
     }
 
@@ -1839,20 +1874,35 @@ impl Sim {
         }
     }
 
-    /// The folded world as of end-of-day `day`, using checkpoints (read-only; no events
-    /// or snapshots are written).
-    fn world_at(&self, day: i64) -> World {
-        let (mut world, from) = self.load_checkpoint(day);
-        for d in from..=day {
-            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine, &self.interventions, &self.weather);
+    /// A slot is a (day, phase): slot = day*PHASES + phase. The atomic simulation step.
+    fn target_slot(&self, today: Date, phase: Phase) -> i64 {
+        self.target_day(today).max(0) * PHASES + phase.ord()
+    }
+    fn decompose(&self, slot: i64) -> (i64, Phase, Date) {
+        let day = slot.div_euclid(PHASES);
+        (day, Phase::from_ord(slot), self.date_of(day))
+    }
+    /// The last slot actually generated into the log — the frontier readers fold to.
+    fn last_slot(&self) -> i64 {
+        self.conn
+            .query_row(&format!("SELECT COALESCE(MAX(day*{PHASES}+phase), -1) FROM events"), [], |r| r.get(0))
+            .unwrap_or(-1)
+    }
+
+    /// The folded world as of `slot`, using checkpoints (read-only; nothing is written).
+    fn world_at(&self, slot: i64) -> World {
+        let (mut world, from) = self.load_checkpoint(slot);
+        for s in from..=slot {
+            let (day, phase, date) = self.decompose(s);
+            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather);
         }
         world
     }
 
-    /// The full folded world as of `today` (all agents, living and gone, with indices) —
-    /// for readers that need lineage and the complete cast.
-    pub fn world_snapshot(&self, today: Date) -> World {
-        self.world_at(self.target_day(today).max(0))
+    /// The full folded world at the current frontier (all agents, living and gone, with
+    /// indices) — for readers that need lineage and the complete cast.
+    pub fn world_snapshot(&self, _today: Date) -> World {
+        self.world_at(self.last_slot().max(0))
     }
 
     /// The most recent chronicle entries, oracle prose preferred over the template line.
@@ -1887,9 +1937,14 @@ impl Sim {
     /// record, plus the day's global events, the gossip in flight, and what's upcoming.
     pub fn detail(&self, today: Date, phase: Phase) -> rusqlite::Result<TownDetail> {
         let target = self.target_day(today).max(0);
-        let world = self.world_at(target);
+        let world = self.world_at(self.last_slot().max(0));
         let wd = today.weekday();
         let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+
+        let act_label = |i: usize, day: i64, ph: Phase| {
+            let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph);
+            self.engine.decide(&world.agents[i].archetype, &o).label().to_string()
+        };
 
         let mut people = Vec::new();
         for i in 0..world.agents.len() {
@@ -1897,17 +1952,27 @@ impl Sim {
             if !a.active() {
                 continue;
             }
+            // what they're about this phase (if they're out), and at their next outing
             let doing = if a.archetype == "child" {
                 "at lessons and mischief".to_string()
+            } else if acts_in_phase(&a.archetype, phase) {
+                act_label(i, target, phase)
             } else {
-                let o = observe(&world, i, target, self.date_of(target), top, self.seed);
-                self.engine.decide(&a.archetype, &o).label().to_string()
+                "about the day's round".to_string()
             };
             let next = if a.archetype == "child" {
                 "growing".to_string()
             } else {
-                let o = observe(&world, i, target + 1, self.date_of(target + 1), top, self.seed);
-                self.engine.decide(&a.archetype, &o).label().to_string()
+                let mut lbl = "later in the day".to_string();
+                for step in 1..=PHASES {
+                    let s = target * PHASES + phase.ord() + step;
+                    let nph = Phase::from_ord(s);
+                    if acts_in_phase(&a.archetype, nph) {
+                        lbl = act_label(i, s.div_euclid(PHASES), nph);
+                        break;
+                    }
+                }
+                lbl
             };
             let children: Vec<String> = (0..world.agents.len())
                 .filter(|&j| world.agents[j].parent == Some(i) && world.agents[j].active())
@@ -1967,11 +2032,11 @@ impl Sim {
         })
     }
 
-    /// Advance the log forward until it has caught up to `today`. Returns events added.
-    /// Missing days self-heal; checkpoints are written every SNAPSHOT_EVERY days.
-    pub fn catch_up(&mut self, today: Date) -> rusqlite::Result<i64> {
-        let target = self.target_day(today);
-        let from = self.last_day() + 1;
+    /// Advance the log forward until it has caught up to the current (day, phase). Returns
+    /// events added. Missing slots self-heal; checkpoints written every SNAPSHOT_EVERY slots.
+    pub fn catch_up(&mut self, today: Date, phase: Phase) -> rusqlite::Result<i64> {
+        let target = self.target_slot(today, phase);
+        let from = self.last_slot() + 1;
         if target < from {
             return Ok(0);
         }
@@ -1980,20 +2045,22 @@ impl Sim {
         let epoch_jd = self.epoch.to_julian_day() as i64;
         let tx = self.conn.transaction()?;
         let mut added = 0;
-        for d in from..=target {
-            let date = Date::from_julian_day((epoch_jd + d) as i32).unwrap();
-            for e in step_day(&mut world, d, date, seed, &*self.engine, &self.interventions, &self.weather) {
+        for s in from..=target {
+            let day = s.div_euclid(PHASES);
+            let ph = Phase::from_ord(s);
+            let date = Date::from_julian_day((epoch_jd + day) as i32).unwrap();
+            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather) {
                 tx.execute(
-                    "INSERT INTO events(day,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5)",
-                    params![e.day, e.date, e.kind, e.actor, e.text],
+                    "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5,?6)",
+                    params![e.day, ph.ord(), e.date, e.kind, e.actor, e.text],
                 )?;
                 added += 1;
             }
-            if d % SNAPSHOT_EVERY == 0 {
+            if s % SNAPSHOT_EVERY == 0 {
                 let blob = bincode::serialize(&world).expect("serialize world");
                 tx.execute(
                     "INSERT OR REPLACE INTO snapshots(day,version,blob) VALUES(?1,?2,?3)",
-                    params![d, SNAPSHOT_VERSION, blob],
+                    params![s, SNAPSHOT_VERSION, blob],
                 )?;
             }
         }
@@ -2004,7 +2071,7 @@ impl Sim {
     /// Fold the world to `today` (via checkpoints) and read recent chronicle for display.
     pub fn report(&self, today: Date) -> rusqlite::Result<Report> {
         let target = self.target_day(today).max(0);
-        let world = self.world_at(target);
+        let world = self.world_at(self.last_slot().max(0));
 
         let mut chronicle = Vec::new();
         // Prefer the oracle's rendering once it exists; fall back to the template line.

@@ -317,7 +317,7 @@ fn main() {
         eprintln!("could not open {db}: {e}");
         std::process::exit(1);
     });
-    let _ = sim.catch_up(today());
+    let _ = sim.catch_up(today(), thrush_core::Phase::from_hour(now().hour()));
 
     let server = Server::http(&addr).unwrap_or_else(|e| {
         eprintln!("could not bind {addr}: {e}");

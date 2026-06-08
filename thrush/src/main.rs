@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let epoch = start.as_deref().map(parse_date).unwrap_or_else(today);
             let mut sim = Sim::init(&cli.db, epoch, seed)?;
             apply_engine(&mut sim, cli.wasm);
-            let added = sim.catch_up(today())?;
+            let added = sim.catch_up(today(), cur_phase())?;
             println!(
                 "Thrushcombe founded. epoch={epoch}  seed={seed}  logged {added} event(s) catching up to {}.",
                 today()
@@ -200,7 +200,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Cmd::Tick => {
             let mut sim = Sim::open(&cli.db)?;
             apply_engine(&mut sim, cli.wasm);
-            let added = sim.catch_up(today())?;
+            let added = sim.catch_up(today(), cur_phase())?;
             println!("Advanced to {}. {added} new event(s) logged.", today());
         }
         Cmd::Narrate { limit } => {
@@ -237,7 +237,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;
             apply_engine(&mut sim, cli.wasm);
-            sim.catch_up(today())?;
+            sim.catch_up(today(), cur_phase())?;
             print_status(&sim.report(today())?);
         }
         Cmd::Watch => {
@@ -249,7 +249,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut sim = Sim::open(&cli.db)?;
             apply_engine(&mut sim, cli.wasm);
             sim.providence(today(), &kind, &target, amount, &note)?;
-            let added = sim.catch_up(today())?;
+            let added = sim.catch_up(today(), cur_phase())?;
             println!("Providence — {kind} upon {target}. {added} event(s) re-folded; the town will make of it what it will.");
             print_status(&sim.report(today())?);
         }
@@ -337,7 +337,7 @@ fn watch_loop<B: ratatui::backend::Backend>(
     let mut state = ListState::default();
     state.select(Some(0));
     loop {
-        sim.catch_up(today())?;
+        sim.catch_up(today(), cur_phase())?;
         let d = sim.detail(today(), cur_phase())?;
         let n = d.people.len().max(1);
         let sel = state.selected().unwrap_or(0).min(n - 1);
