@@ -442,6 +442,105 @@ impl Action {
             _ => Action::Idle,
         }
     }
+
+    /// A present-tense gloss of what the agent is about.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Action::Idle => "about the day's round",
+            Action::PayCall => "paying calls",
+            Action::GiveDinner => "giving a dinner",
+            Action::Economise => "economising",
+            Action::KeepUp => "keeping up appearances",
+            Action::TendStock => "tending the stock",
+            Action::Haggle => "dealing at the mart",
+            Action::Graft => "at the work",
+            Action::Scheme => "hatching a scheme",
+            Action::Press => "pressing the forms",
+            Action::Minister => "about the parish",
+            Action::Round => "on the rounds",
+        }
+    }
+}
+
+/// The five phases of the day; in companion mode the current one is read off the clock.
+#[derive(Clone, Copy)]
+pub enum Phase {
+    Dawn,
+    Forenoon,
+    Afternoon,
+    Evening,
+    Night,
+}
+
+impl Phase {
+    pub fn from_hour(h: u8) -> Phase {
+        match h {
+            5..=7 => Phase::Dawn,
+            8..=11 => Phase::Forenoon,
+            12..=16 => Phase::Afternoon,
+            17..=21 => Phase::Evening,
+            _ => Phase::Night,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Phase::Dawn => "dawn",
+            Phase::Forenoon => "forenoon",
+            Phase::Afternoon => "afternoon",
+            Phase::Evening => "evening",
+            Phase::Night => "night",
+        }
+    }
+}
+
+/// Where an agent is this phase, from the routine table — market day and Sunday pull the
+/// whole town to the square and the church.
+fn placement(a: &Agent, phase: Phase, wd: Weekday) -> String {
+    let home = a.seat.clone();
+    let sunday = wd == Weekday::Sunday;
+    let market = wd == Weekday::Wednesday;
+    let pubnight = matches!(wd, Weekday::Friday | Weekday::Saturday);
+    if sunday && matches!(phase, Phase::Forenoon) {
+        return "the church".into();
+    }
+    match a.archetype.as_str() {
+        "genteel_status_seeker" => match phase {
+            Phase::Dawn => home,
+            Phase::Forenoon => if market { "the market square".into() } else { "at the writing-desk".into() },
+            Phase::Afternoon => "paying calls about the parish".into(),
+            Phase::Evening | Phase::Night => home,
+        },
+        "hill_farmer" | "scheming_improver" => match phase {
+            Phase::Dawn => "the byre".into(),
+            Phase::Forenoon => if market { "the market".into() } else { "the fields".into() },
+            Phase::Afternoon => "the fields".into(),
+            Phase::Evening => if pubnight { "The Pelican".into() } else { home },
+            Phase::Night => home,
+        },
+        "practitioner" => match phase {
+            Phase::Dawn => "the surgery".into(),
+            Phase::Forenoon | Phase::Afternoon => "on the rounds".into(),
+            Phase::Evening => if pubnight { "The Pelican".into() } else { "the surgery".into() },
+            Phase::Night => "on call".into(),
+        },
+        "blunt_hand" => match phase {
+            Phase::Dawn => "the yard".into(),
+            Phase::Forenoon | Phase::Afternoon => "at work in the town".into(),
+            Phase::Evening => "The Pelican".into(),
+            Phase::Night => home,
+        },
+        "official" => match phase {
+            Phase::Dawn => "the study".into(),
+            Phase::Forenoon | Phase::Afternoon => "on parish visits".into(),
+            Phase::Evening => "the vestry".into(),
+            Phase::Night => home,
+        },
+        "child" => match phase {
+            Phase::Forenoon | Phase::Afternoon => "the school".into(),
+            _ => home,
+        },
+        _ => home,
+    }
 }
 
 pub fn season_ord(s: Season) -> i32 {
@@ -945,6 +1044,28 @@ fn meet_rate(a: &Agent, b: &Agent, date: Date) -> f64 {
     r.clamp(0.0, 0.95)
 }
 
+/// Live rumours as display strings (freshest first): topic, reach, and whether it's grown.
+fn news_in_flight(world: &World, target: i64) -> Vec<String> {
+    let living = world.agents.iter().filter(|a| a.active()).count();
+    let mut live: Vec<&News> = world
+        .news
+        .iter()
+        .filter(|it| {
+            let known = it.knowers.iter().filter(|&&k| world.agents[k].active()).count();
+            target - it.born <= 21 && known < living
+        })
+        .collect();
+    live.sort_by_key(|it| std::cmp::Reverse(it.born));
+    live.iter()
+        .take(8)
+        .map(|it| {
+            let known = it.knowers.iter().filter(|&&k| world.agents[k].active()).count();
+            let grown = if it.distortion >= 2 { " · grown in the telling" } else { "" };
+            format!("{}  {}/{} know{}", it.topic, known, living, grown)
+        })
+        .collect()
+}
+
 /// News spreads one hop a day from the start-of-day knowers; each fresh pair of ears
 /// nudges the subject's standing (capped) and may garble the tale.
 fn diffuse(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
@@ -1043,6 +1164,40 @@ pub struct ChronEntry {
     pub kind: String,
     pub actor: String,
     pub text: String,
+}
+
+/// Everything we can surface about one soul, right now.
+pub struct PersonDetail {
+    pub idx: usize,
+    pub name: String,
+    pub archetype: String,
+    pub seat: String,
+    pub age: i64,
+    pub standing: i32,
+    pub purse: i32,
+    pub married: bool,
+    pub location: String,         // where they are this phase
+    pub doing: String,            // what they're about today
+    pub next: String,             // what they're likely about tomorrow
+    pub spouse: Option<String>,
+    pub parent: Option<String>,
+    pub children: Vec<String>,
+    pub recent: Vec<ChronEntry>,  // their latest beats
+}
+
+/// A full, detailed read of the town at a moment — for the dashboard and the TUI.
+pub struct TownDetail {
+    pub date: String,
+    pub weekday: String,
+    pub season: String,
+    pub armed: String,
+    pub phase: String,
+    pub population: usize,
+    pub people: Vec<PersonDetail>,
+    pub gossip: Vec<String>,
+    pub upcoming: Vec<String>,
+    pub global_today: Vec<String>,
+    pub recent: Vec<ChronEntry>,
 }
 
 pub struct Report {
@@ -1224,6 +1379,82 @@ impl Sim {
         rows.collect()
     }
 
+    /// A full detailed read of the town: every present soul's place, doings, kin and
+    /// record, plus the day's global events, the gossip in flight, and what's upcoming.
+    pub fn detail(&self, today: Date, phase: Phase) -> rusqlite::Result<TownDetail> {
+        let target = self.target_day(today).max(0);
+        let world = self.world_at(target);
+        let wd = today.weekday();
+        let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+
+        let mut people = Vec::new();
+        for i in 0..world.agents.len() {
+            let a = &world.agents[i];
+            if !a.active() {
+                continue;
+            }
+            let doing = if a.archetype == "child" {
+                "at lessons and mischief".to_string()
+            } else {
+                let o = observe(&world, i, target, self.date_of(target), top, self.seed);
+                self.engine.decide(&a.archetype, &o).label().to_string()
+            };
+            let next = if a.archetype == "child" {
+                "growing".to_string()
+            } else {
+                let o = observe(&world, i, target + 1, self.date_of(target + 1), top, self.seed);
+                self.engine.decide(&a.archetype, &o).label().to_string()
+            };
+            let children: Vec<String> = (0..world.agents.len())
+                .filter(|&j| world.agents[j].parent == Some(i) && world.agents[j].active())
+                .map(|j| world.agents[j].name.clone())
+                .collect();
+            people.push(PersonDetail {
+                idx: i,
+                name: a.name.clone(),
+                archetype: a.archetype.clone(),
+                seat: a.seat.clone(),
+                age: a.age(target),
+                standing: a.standing,
+                purse: a.purse,
+                married: a.spouse.is_some(),
+                location: placement(a, phase, wd),
+                doing,
+                next,
+                spouse: a.spouse.map(|s| world.agents[s].name.clone()),
+                parent: a.parent.map(|p| world.agents[p].name.clone()),
+                children,
+                recent: self.person_events(&a.name, 4)?,
+            });
+        }
+        people.sort_by(|x, y| y.standing.cmp(&x.standing));
+
+        // global events on the current day — shocks, deaths, parties, gossip milestones
+        let mut gstmt = self.conn.prepare(
+            "SELECT COALESCE(n.text, e.text) FROM events e LEFT JOIN narration n ON n.event_id = e.id
+             WHERE e.day = ?1 AND (e.actor = 'Thrushcombe' OR e.kind IN
+                ('death','succession','birth','marriage','party','calving','gossip','newcomer','weather','bureaucracy'))
+             ORDER BY e.id",
+        )?;
+        let global_today: Vec<String> = gstmt
+            .query_map(params![target], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        Ok(TownDetail {
+            date: today.to_string(),
+            weekday: wd.to_string(),
+            season: Season::of(today).name().to_string(),
+            armed: Season::of(today).armed().to_string(),
+            phase: phase.name().to_string(),
+            population: people.len(),
+            people,
+            gossip: news_in_flight(&world, target),
+            upcoming: self.pending(today, &world),
+            global_today,
+            recent: self.chronicle(16)?,
+        })
+    }
+
     /// Advance the log forward until it has caught up to `today`. Returns events added.
     /// Missing days self-heal; checkpoints are written every SNAPSHOT_EVERY days.
     pub fn catch_up(&mut self, today: Date) -> rusqlite::Result<i64> {
@@ -1282,26 +1513,7 @@ impl Sim {
 
         let pending = self.pending(today, &world);
 
-        // news in flight: live rumours, freshest first
-        let living = world.agents.iter().filter(|a| a.active()).count();
-        let mut live: Vec<&News> = world
-            .news
-            .iter()
-            .filter(|it| {
-                let known = it.knowers.iter().filter(|&&k| world.agents[k].active()).count();
-                target - it.born <= 21 && known < living
-            })
-            .collect();
-        live.sort_by_key(|it| std::cmp::Reverse(it.born));
-        let news: Vec<String> = live
-            .iter()
-            .take(6)
-            .map(|it| {
-                let known = it.knowers.iter().filter(|&&k| world.agents[k].active()).count();
-                let grown = if it.distortion >= 2 { " · grown in the telling" } else { "" };
-                format!("{}  {}/{} know{}", it.topic, known, living, grown)
-            })
-            .collect();
+        let news = news_in_flight(&world, target);
 
         // the present cast, grandest first
         let mut agents: Vec<Agent> = world.agents.iter().filter(|a| a.active()).cloned().collect();

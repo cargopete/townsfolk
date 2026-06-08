@@ -20,12 +20,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use time::{Date, Month, OffsetDateTime};
 
-use thrush_core::{Report, Sim};
+use thrush_core::{Phase, Report, Sim, TownDetail};
 
 mod wasm_engine;
 use wasm_engine::WasmPolicies;
@@ -140,11 +140,6 @@ fn bar(v: i32) -> String {
     let v = v.clamp(0, 100) as usize;
     let n = v / 10;
     format!("{}{}", "\u{2588}".repeat(n), "\u{00b7}".repeat(10 - n))
-}
-
-/// Map a purse (pounds, roughly -50..+50 of interest) to a 0..100 solvency reading.
-fn solvency(purse: i32) -> i32 {
-    (purse + 50).clamp(0, 100)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -276,18 +271,31 @@ fn run_watch(sim: &mut Sim) -> Result<(), Box<dyn Error>> {
     res
 }
 
+fn cur_phase() -> Phase {
+    let h = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()).hour();
+    Phase::from_hour(h)
+}
+
 fn watch_loop<B: ratatui::backend::Backend>(
     sim: &mut Sim,
     terminal: &mut Terminal<B>,
 ) -> Result<(), Box<dyn Error>> {
+    let mut state = ListState::default();
+    state.select(Some(0));
     loop {
         sim.catch_up(today())?;
-        let r = sim.report(today())?;
-        terminal.draw(|f| draw(f, &r))?;
+        let d = sim.detail(today(), cur_phase())?;
+        let n = d.people.len().max(1);
+        let sel = state.selected().unwrap_or(0).min(n - 1);
+        state.select(Some(sel));
+        terminal.draw(|f| draw(f, &d, &mut state))?;
         if event::poll(Duration::from_millis(1000))? {
             if let CEvent::Key(k) = event::read()? {
-                if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
-                    break;
+                match k.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Down | KeyCode::Char('j') => state.select(Some((sel + 1).min(n - 1))),
+                    KeyCode::Up | KeyCode::Char('k') => state.select(Some(sel.saturating_sub(1))),
+                    _ => {}
                 }
             }
         }
@@ -295,7 +303,20 @@ fn watch_loop<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-fn draw(f: &mut Frame, r: &Report) {
+fn arch_tag(a: &str) -> &'static str {
+    match a {
+        "genteel_status_seeker" => "genteel",
+        "hill_farmer" => "farmer",
+        "practitioner" => "practice",
+        "scheming_improver" => "improver",
+        "blunt_hand" => "working",
+        "official" => "parish",
+        "child" => "child",
+        _ => "—",
+    }
+}
+
+fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(0)])
@@ -306,80 +327,98 @@ fn draw(f: &mut Frame, r: &Report) {
     let head = vec![
         Line::from(vec![
             Span::styled("THRUSHCOMBE ST MARY", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(format!("   sim {} {}  ·  day {}   ", r.weekday, r.date, r.day)),
-            Span::styled(format!("[{}]", phase_now()), Style::default().fg(Color::Cyan)),
+            Span::raw(format!("   {} {}  ·  ", d.weekday, d.date)),
+            Span::styled(format!("[{}]", d.phase), Style::default().fg(Color::Cyan)),
+            Span::raw(format!("  ·  {} souls", d.population)),
         ]),
+        Line::from(Span::styled(format!("{} — armed: {}", d.season, d.armed), Style::default().fg(Color::Green))),
         Line::from(Span::styled(
-            format!("{} — armed: {}", r.season, r.armed),
-            Style::default().fg(Color::Green),
-        )),
-        Line::from(Span::styled(
-            format!("real {:04}-{:02}-{:02} {:02}:{:02}   ·   sim-date = real-date (companion lock)   ·   q to quit",
-                real.year(), real.month() as u8, real.day(), real.hour(), real.minute()),
+            format!("real {:02}:{:02}  ·  sim-date = real-date  ·  ↑/↓ select a soul  ·  q to quit", real.hour(), real.minute()),
             Style::default().fg(Color::DarkGray),
         )),
     ];
     f.render_widget(Paragraph::new(head).block(Block::default().borders(Borders::BOTTOM)), root[0]);
 
-    // --- body: three columns ---
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(30), Constraint::Percentage(32)])
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(30), Constraint::Percentage(28)])
         .split(root[1]);
 
-    // left: the town
-    let mut town: Vec<Line> = Vec::new();
-    for a in &r.agents {
-        town.push(Line::from(Span::styled(
-            format!("{} ({}y)", a.name, a.age(r.day)),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        town.push(Line::from(format!("  {} {}  £{}", short_arch(&a.archetype), bar(a.standing), a.purse)));
-    }
-    f.render_widget(
-        Paragraph::new(town).block(Block::default().borders(Borders::ALL).title(" The town (standing) ")),
-        cols[0],
-    );
+    // left: selectable town board — name, where, doing
+    let items: Vec<ListItem> = d.people.iter().map(|p| {
+        ListItem::new(vec![
+            Line::from(vec![
+                Span::styled(format!("{:<22}", p.name), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" {:>3}y {:<9}", p.age, arch_tag(&p.archetype)), Style::default().fg(Color::DarkGray)),
+                Span::styled(bar(p.standing), Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("  {:<26}", trunc(&p.location, 26)), Style::default().fg(Color::Cyan)),
+                Span::styled(p.doing.clone(), Style::default().fg(Color::Green)),
+            ]),
+        ])
+    }).collect();
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(format!(" The town, this {} ", d.phase)))
+        .highlight_style(Style::default().bg(Color::Rgb(60, 50, 40)).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▌");
+    f.render_stateful_widget(list, cols[0], state);
 
-    // middle: tensions, stock, calendar
+    // middle: the selected soul, then the day's events / gossip / calendar
+    let sel = state.selected().unwrap_or(0).min(d.people.len().saturating_sub(1));
     let mut mid: Vec<Line> = Vec::new();
-    mid.push(Line::from(Span::styled("Tensions", Style::default().fg(Color::Magenta))));
-    if let Some(c) = r.agents.iter().find(|a| a.name.contains("Cynthia")) {
-        mid.push(Line::from(format!("  Cynthia  solvency {}", bar(solvency(c.purse)))));
-        mid.push(Line::from(format!("           face     {}", bar(c.standing))));
-    }
-    if let Some(rp) = r.agents.iter().find(|a| a.name.contains("Rupert")) {
-        mid.push(Line::from(format!("  Rupert   modern   {}", bar(70))));
-        mid.push(Line::from(format!("           respect  {}", bar(rp.standing))));
-    }
-    mid.push(Line::from(""));
-    mid.push(Line::from(Span::styled("News in flight", Style::default().fg(Color::Magenta))));
-    if r.news.is_empty() {
-        mid.push(Line::from("  (the town is quiet)"));
-    }
-    for nws in &r.news {
-        mid.push(Line::from(format!("  ~ {nws}")));
-    }
-    mid.push(Line::from(""));
-    mid.push(Line::from(Span::styled("Stock", Style::default().fg(Color::Magenta))));
-    for an in &r.animals {
-        let g = if an.gest > 0 { format!(" calf {}d", an.gest) } else { String::new() };
-        mid.push(Line::from(format!("  {:<10} {}{}", an.name, bar(an.health), g)));
+    if let Some(p) = d.people.get(sel) {
+        mid.push(Line::from(Span::styled(p.name.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        mid.push(Line::from(format!("{}, {}y · of {}", arch_tag(&p.archetype), p.age, p.seat)));
+        mid.push(Line::from(format!("standing {} {}", bar(p.standing), p.standing)));
+        mid.push(Line::from(format!("purse    £{}", p.purse)));
+        mid.push(Line::from(vec![Span::raw("now:  "), Span::styled(format!("{} · {}", p.location, p.doing), Style::default().fg(Color::Green))]));
+        mid.push(Line::from(vec![Span::raw("next: "), Span::styled(p.next.clone(), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))]));
+        let mut kin = String::new();
+        if let Some(s) = &p.spouse { kin.push_str(&format!("⚭ {}  ", s)); }
+        if let Some(par) = &p.parent { kin.push_str(&format!("↑ {}  ", par)); }
+        if !p.children.is_empty() { kin.push_str(&format!("↓ {}", p.children.join(", "))); }
+        if !kin.is_empty() { mid.push(Line::from(Span::styled(kin, Style::default().fg(Color::Magenta)))); }
+        if !p.recent.is_empty() {
+            mid.push(Line::from(""));
+            mid.push(Line::from(Span::styled("their record", Style::default().fg(Color::DarkGray))));
+            for e in &p.recent {
+                mid.push(Line::from(format!("· {} {}", e.date, e.text)));
+            }
+        }
     }
     mid.push(Line::from(""));
-    mid.push(Line::from(Span::styled("On the calendar", Style::default().fg(Color::Magenta))));
-    for p in &r.pending {
-        mid.push(Line::from(format!("  · {p}")));
-    }
+    section(&mut mid, "Today in Thrushcombe", &d.global_today);
+    section(&mut mid, "News in flight", &d.gossip);
+    section(&mut mid, "On the calendar", &d.upcoming);
     f.render_widget(
-        Paragraph::new(mid).block(Block::default().borders(Borders::ALL).title(" State ")).wrap(Wrap { trim: true }),
+        Paragraph::new(mid).block(Block::default().borders(Borders::ALL).title(" The soul & the day ")).wrap(Wrap { trim: true }),
         cols[1],
     );
 
     // right: chronicle
-    let chron: Vec<Line> = r.chronicle.iter().map(|c| Line::from(c.clone())).collect();
+    let chron: Vec<Line> = d.recent.iter().map(|e| Line::from(format!("{}  {}", e.date, e.text))).collect();
     f.render_widget(
         Paragraph::new(chron).block(Block::default().borders(Borders::ALL).title(" Chronicle ")).wrap(Wrap { trim: true }),
         cols[2],
     );
+}
+
+fn section(out: &mut Vec<Line>, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    out.push(Line::from(Span::styled(title.to_string(), Style::default().fg(Color::Magenta))));
+    for i in items {
+        out.push(Line::from(format!("  ~ {i}")));
+    }
+    out.push(Line::from(""));
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
 }
