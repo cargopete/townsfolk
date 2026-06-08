@@ -188,9 +188,10 @@ fn print_status(r: &Report) {
     println!("  The town");
     for a in &r.agents {
         println!(
-            "    {:<22} {}  standing {}  purse £{}",
+            "    {:<22} {} {:>3}y  standing {}  purse £{}",
             a.name,
             short_arch(&a.archetype),
+            a.age(r.day),
             bar(a.standing),
             a.purse
         );
@@ -227,6 +228,7 @@ fn short_arch(a: &str) -> &'static str {
         "scheming_improver" => "[improver]",
         "blunt_hand" => "[hand]   ",
         "official" => "[parson] ",
+        "child" => "[child]  ",
         _ => "[—]      ",
     }
 }
@@ -302,7 +304,10 @@ fn draw(f: &mut Frame, r: &Report) {
     // left: the town
     let mut town: Vec<Line> = Vec::new();
     for a in &r.agents {
-        town.push(Line::from(Span::styled(a.name.clone(), Style::default().add_modifier(Modifier::BOLD))));
+        town.push(Line::from(Span::styled(
+            format!("{} ({}y)", a.name, a.age(r.day)),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
         town.push(Line::from(format!("  {} {}  £{}", short_arch(&a.archetype), bar(a.standing), a.purse)));
     }
     f.render_widget(
@@ -313,7 +318,7 @@ fn draw(f: &mut Frame, r: &Report) {
     // middle: tensions, stock, calendar
     let mut mid: Vec<Line> = Vec::new();
     mid.push(Line::from(Span::styled("Tensions", Style::default().fg(Color::Magenta))));
-    if let Some(c) = r.agents.iter().find(|a| a.name.contains("Pelham")) {
+    if let Some(c) = r.agents.iter().find(|a| a.name.contains("Cynthia")) {
         mid.push(Line::from(format!("  Cynthia  solvency {}", bar(solvency(c.purse)))));
         mid.push(Line::from(format!("           face     {}", bar(c.standing))));
     }
