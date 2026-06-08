@@ -53,7 +53,7 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
          <title>{}</title><style>{}</style></head><body><div class=wrap>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a></div>{}</div></body></html>",
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
 }
@@ -228,12 +228,59 @@ fn person(sim: &Sim, idx: usize) -> String {
     page(&format!("Thrushcombe — {}", a.name), &body)
 }
 
+fn jstr(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The kinship graph — marriages (dashed) and descent (arrows), laid out by vis-network.
+fn graph(sim: &Sim) -> String {
+    let world = sim.world_snapshot(today());
+    let mut nodes = String::new();
+    let mut edges = String::new();
+    for i in 0..world.agents.len() {
+        let a = &world.agents[i];
+        if !a.active() {
+            continue;
+        }
+        nodes.push_str(&format!("{{id:{},label:{},group:{}}},", i, jstr(&a.name), jstr(pretty_arch(&a.archetype))));
+        if let Some(s) = a.spouse {
+            if i < s && world.agents.get(s).map(|x| x.active()).unwrap_or(false) {
+                edges.push_str(&format!("{{from:{},to:{},dashes:true,color:{{color:'#c0392b'}},width:2}},", i, s));
+            }
+        }
+        if let Some(p) = a.parent {
+            if world.agents.get(p).map(|x| x.active()).unwrap_or(false) {
+                edges.push_str(&format!("{{from:{},to:{},arrows:'to',color:{{color:'#8a7f70'}}}},", p, i));
+            }
+        }
+    }
+    format!(
+        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
+         <title>Thrushcombe — Kinship</title><style>{}\
+         body{{margin:0}}#net{{height:88vh;border:1px solid var(--rule)}}.legend{{color:var(--faint);font-size:.85rem}}</style>\
+         <script src='https://unpkg.com/vis-network/standalone/umd/vis-network.min.js'></script></head>\
+         <body><div class=wrap style='max-width:1100px'>\
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a></div>\
+         <h1>Kinship</h1><div class=legend>marriages dashed &middot; descent arrowed &middot; drag to explore, click a soul to open them</div>\
+         <div id=net></div>\
+         <script>\
+         var nodes=new vis.DataSet([{}]);var edges=new vis.DataSet([{}]);\
+         var net=new vis.Network(document.getElementById('net'),{{nodes:nodes,edges:edges}},\
+           {{nodes:{{shape:'dot',size:12,font:{{face:'Georgia',size:15}}}},physics:{{stabilization:true,barnesHut:{{springLength:120}}}}}});\
+         net.on('click',function(p){{if(p.nodes.length)location.href='/folk/'+p.nodes[0];}});\
+         </script></div></body></html>",
+        CSS, nodes, edges
+    )
+}
+
 fn route(sim: &Sim, url: &str) -> String {
     let path = url.split('?').next().unwrap_or("/");
     if path == "/" {
         dashboard(sim)
     } else if path == "/folk" {
         folk(sim)
+    } else if path == "/graph" {
+        graph(sim)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),
