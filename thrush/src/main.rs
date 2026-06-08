@@ -200,6 +200,12 @@ fn print_status(r: &Report) {
         let gest = if an.gest > 0 { format!("in calf {}d", an.gest) } else { "—".into() };
         println!("    {:<12} ({:<18}) health {}  £{}  {}", an.name, an.owner, bar(an.health), an.value, gest);
     }
+    if !r.news.is_empty() {
+        println!("\n  News in flight");
+        for nws in &r.news {
+            println!("    ~ {nws}");
+        }
+    }
     if !r.pending.is_empty() {
         println!("\n  On the calendar");
         for p in &r.pending {
@@ -314,6 +320,14 @@ fn draw(f: &mut Frame, r: &Report) {
     if let Some(rp) = r.agents.iter().find(|a| a.name.contains("Rupert")) {
         mid.push(Line::from(format!("  Rupert   modern   {}", bar(70))));
         mid.push(Line::from(format!("           respect  {}", bar(rp.standing))));
+    }
+    mid.push(Line::from(""));
+    mid.push(Line::from(Span::styled("News in flight", Style::default().fg(Color::Magenta))));
+    if r.news.is_empty() {
+        mid.push(Line::from("  (the town is quiet)"));
+    }
+    for nws in &r.news {
+        mid.push(Line::from(format!("  ~ {nws}")));
     }
     mid.push(Line::from(""));
     mid.push(Line::from(Span::styled("Stock", Style::default().fg(Color::Magenta))));

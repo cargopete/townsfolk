@@ -81,10 +81,28 @@ pub struct Animal {
     pub value: i32,
 }
 
+/// A piece of news loose in the town. It spreads across the social graph with delay
+/// (one hop a day) and distortion (it grows in the telling), and each new pair of ears
+/// nudges the subject's standing — gossip is *how* reputation actually moves.
+#[derive(Clone)]
+pub struct News {
+    pub id: u32,
+    pub subject: usize, // index into agents — who the talk concerns
+    pub topic: String,
+    pub valence: i32, // reputational direction; magnitude grows as it distorts
+    pub born: i64,
+    pub knowers: Vec<usize>,
+    pub distortion: u32,
+    pub applied: i32,  // standing nudges spent so far (capped, so one rumour can't run away)
+    pub broadcast: bool, // has "most of the town knows" already fired
+}
+
 #[derive(Clone)]
 pub struct World {
     pub agents: Vec<Agent>,
     pub animals: Vec<Animal>,
+    pub news: Vec<News>,
+    pub next_news_id: u32,
 }
 
 impl World {
@@ -110,11 +128,42 @@ impl World {
                 Animal { name: "Strawberry".into(), owner: "The Sunters".into(), health: 68, gest: 4, value: 45 },
                 Animal { name: "Captain".into(), owner: "Mr Rupert Crale".into(), health: 80, gest: -1, value: 30 },
             ],
+            news: Vec::new(),
+            next_news_id: 0,
         }
     }
 
     fn agent_mut(&mut self, name: &str) -> Option<&mut Agent> {
         self.agents.iter_mut().find(|a| a.name == name)
+    }
+
+    fn idx(&self, name: &str) -> Option<usize> {
+        self.agents.iter().position(|a| a.name == name)
+    }
+
+    /// Set a piece of news loose. `seeds` are the first knowers besides the subject.
+    fn spawn_news(&mut self, subject: &str, topic: &str, valence: i32, day: i64, seeds: &[&str]) {
+        let subject = match self.idx(subject) {
+            Some(i) => i,
+            None => return,
+        };
+        let mut knowers: Vec<usize> = seeds.iter().filter_map(|s| self.idx(s)).collect();
+        if !knowers.contains(&subject) {
+            knowers.push(subject);
+        }
+        let id = self.next_news_id;
+        self.next_news_id += 1;
+        self.news.push(News {
+            id,
+            subject,
+            topic: topic.into(),
+            valence,
+            born: day,
+            knowers,
+            distortion: 0,
+            applied: 0,
+            broadcast: false,
+        });
     }
 }
 
@@ -156,6 +205,8 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         out.push(mk("household", "Mrs Cynthia Pelham", "Cook has given notice — the fifth time this year.".into()));
         out.push(mk("scheme", "Mr Rupert Crale", "A new tractor arrived at the Home Farm, which Rupert cannot drive.".into()));
         out.push(mk("bureaucracy", "Revd Mr Soames", "A tithe demand for High Foldside sits in the Vicar's out-tray.".into()));
+        world.spawn_news("Mr Rupert Crale", "Rupert's grand tractor he cannot drive", -2, day, &["Tot Wragg"]);
+        world.spawn_news("The Sunters", "the tithe demand fallen on High Foldside", -1, day, &["Revd Mr Soames"]);
     }
 
     // --- gestation / calving (depends on world state) ---
@@ -171,12 +222,14 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
                     world.animals[i].gest = -1;
                     if let Some(o) = world.agent_mut(&owner) { clamp_standing(o, 3); }
                     out.push(mk("calving", &owner, format!("{name} calved well — a fine heifer calf. Mr Farran was barely needed.")));
+                    world.spawn_news(&owner, &format!("{name}'s fine new heifer calf"), 2, day, &["Mr Farran MRCVS"]);
                 } else {
                     world.animals[i].value -= 5;
                     world.animals[i].health = (world.animals[i].health - 10).clamp(0, 100);
                     world.animals[i].gest = -1;
                     if let Some(v) = world.agent_mut("Mr Farran MRCVS") { clamp_standing(v, 2); }
                     out.push(mk("calving", &owner, format!("{name}'s calving went hard; Mr Farran worked till dawn, but the calf stands.")));
+                    world.spawn_news("Mr Farran MRCVS", &format!("Mr Farran's long night saving {name}"), 1, day, &[&owner]);
                 }
             }
         }
@@ -191,6 +244,8 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         }
         out.push(mk("party", "Lady Aldermaston",
             "Lady Aldermaston's garden party at Crale Court. Mrs Pelham attended in a made-over frock and a brave face.".into()));
+        world.spawn_news("Lady Aldermaston", "Lady Aldermaston's splendid garden party", 1, day, &[]);
+        world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's made-over frock at the party", -1, day, &["Lady Aldermaston"]);
     }
 
     // --- the daily incident: drawn from the season's register ---
@@ -199,56 +254,66 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         // alternate the lens between household comedy and farm friction
         let farm = rng.gen_bool(0.5);
         if farm {
-            farm_incident(world, season, &mut rng, &mk, &mut out);
+            farm_incident(world, season, day, &mut rng, &mk, &mut out);
         } else {
-            household_incident(world, &mut rng, &mk, &mut out);
+            household_incident(world, day, &mut rng, &mk, &mut out);
         }
     }
+
+    // --- the news spreads, with delay and distortion ---
+    out.extend(diffuse(world, day, date, seed));
 
     out
 }
 
 type Mk<'a> = dyn Fn(&str, &str, String) -> Event + 'a;
 
-fn household_incident(world: &mut World, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
+fn household_incident(world: &mut World, day: i64, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
     match rng.gen_range(0..6) {
         0 => out.push(mk("household", "Mrs Cynthia Pelham", "Cook gave notice once more, and was talked round before luncheon.".into())),
         1 => {
             if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, -1); }
             out.push(mk("household", "Mrs Cynthia Pelham", "The soufflé collapsed before the Hendersons. Conversation was found for it.".into()));
+            world.spawn_news("Mrs Cynthia Pelham", "the soufflé that collapsed before the Hendersons", -1, day, &[]);
         }
         2 => {
             if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { c.purse -= 3; clamp_standing(c, -1); }
             out.push(mk("status", "Mrs Cynthia Pelham", "The account at the draper's was mentioned, very gently, across the counter.".into()));
+            world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's unpaid account at the draper's", -2, day, &[]);
         }
         3 => {
             if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, 2); }
             out.push(mk("status", "Mrs Cynthia Pelham", "Mrs Pelham paid a successful call at the Vicarage; the seed-cake was praised.".into()));
+            world.spawn_news("Mrs Cynthia Pelham", "Mrs Pelham's much-praised seed-cake", 1, day, &["Revd Mr Soames"]);
         }
         4 => {
             if let Some(l) = world.agent_mut("Lady Aldermaston") { clamp_standing(l, 2); }
             if let Some(c) = world.agent_mut("Mrs Cynthia Pelham") { clamp_standing(c, -1); }
             out.push(mk("status", "Lady Aldermaston", "Lady Aldermaston's new motorcar was much admired in the square.".into()));
+            world.spawn_news("Lady Aldermaston", "Lady Aldermaston's splendid new motorcar", 1, day, &["Mrs Cynthia Pelham"]);
         }
         _ => out.push(mk("household", "Tot Wragg", "Gladys broke the second-best teapot and blamed the cat.".into())),
     }
 }
 
-fn farm_incident(world: &mut World, season: Season, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
+fn farm_incident(world: &mut World, season: Season, day: i64, rng: &mut ChaCha8Rng, mk: &Mk, out: &mut Vec<Event>) {
     if matches!(season, Season::Hay) {
         match rng.gen_range(0..6) {
             0 => out.push(mk("weather", "The Sunters", "Rain threatened the cut hay; every hand in the dale turned out to cock it.".into())),
             1 => {
                 if let Some(r) = world.agent_mut("Mr Rupert Crale") { r.purse -= 5; clamp_standing(r, -1); }
                 out.push(mk("scheme", "Mr Rupert Crale", "The elevator jammed at the Home Farm. Tot had said it would.".into()));
+                world.spawn_news("Mr Rupert Crale", "Rupert's elevator come to grief", -2, day, &["Tot Wragg"]);
             }
             2 => {
                 if let Some(s) = world.agent_mut("The Sunters") { s.purse += 6; clamp_standing(s, 2); }
                 out.push(mk("windfall", "The Sunters", "A clear day — the hay came in dry and sweet, and was got under cover.".into()));
+                world.spawn_news("The Sunters", "the Sunters getting their hay in dry", 2, day, &[]);
             }
             3 => {
                 if let Some(r) = world.agent_mut("Mr Rupert Crale") { clamp_standing(r, -2); }
                 out.push(mk("scheme", "Mr Rupert Crale", "The new tractor stuck fast in the gateway. Tot fetched the horses, saying nothing.".into()));
+                world.spawn_news("Mr Rupert Crale", "Rupert's tractor stuck fast in the gateway", -2, day, &["Tot Wragg"]);
             }
             4 => out.push(mk("practice", "Mr Farran MRCVS", "Mr Farran was called to a lame carthorse, and stayed for his tea.".into())),
             _ => out.push(mk("market", "The Sunters", "The milk lorry was late again, and the churns stood warming in the sun.".into())),
@@ -261,6 +326,126 @@ fn farm_incident(world: &mut World, season: Season, rng: &mut ChaCha8Rng, mk: &M
             _ => out.push(mk("household", "Tot Wragg", "Tot got the day's work done despite the master's improvements.".into())),
         }
     }
+}
+
+// ----------------------------------------------------------------------------- gossip
+
+use time::Weekday;
+
+fn farmside(arch: &str) -> bool {
+    matches!(arch, "hill_farmer" | "scheming_improver" | "blunt_hand")
+}
+fn pubgoer(arch: &str) -> bool {
+    farmside(arch) || arch == "practitioner"
+}
+
+/// Daily probability that, if one of {a,b} knows a thing, the other comes to hear it.
+/// The best-connecting channel wins; Sunday church gathers everyone.
+fn meet_rate(a: &Agent, b: &Agent, date: Date) -> f64 {
+    let wd = date.weekday();
+    let has = |x: &str| a.archetype == x || b.archetype == x;
+    let mut r: f64 = 0.08; // a small town: some path always exists
+
+    // the vet, traversing every farm on his rounds — the fast connector
+    if has("practitioner") {
+        r = r.max(if farmside(&a.archetype) || farmside(&b.archetype) { 0.6 } else { 0.34 });
+    }
+    // the parson's parish visits — slower, reaches every home
+    if has("official") {
+        r = r.max(0.25);
+    }
+    // the servants' grapevine between drawing-rooms, ×market day
+    if a.archetype == "genteel_status_seeker" && b.archetype == "genteel_status_seeker" {
+        r = r.max(if wd == Weekday::Wednesday { 0.50 } else { 0.20 });
+    }
+    // gentry ↔ farm, laundered through servants at the market
+    if has("genteel_status_seeker") && (farmside(&a.archetype) || farmside(&b.archetype)) {
+        r = r.max(if wd == Weekday::Wednesday { 0.24 } else { 0.12 });
+    }
+    // The Pelican of an evening — the men, louder at week's end
+    if pubgoer(&a.archetype) && pubgoer(&b.archetype) {
+        r = r.max(if matches!(wd, Weekday::Friday | Weekday::Saturday) { 0.49 } else { 0.35 });
+    }
+    if wd == Weekday::Sunday {
+        r += 0.20; // everyone at church
+    }
+    r.clamp(0.0, 0.95)
+}
+
+/// News spreads one hop a day from the start-of-day knowers; each fresh pair of ears
+/// nudges the subject's standing (capped) and may garble the tale.
+fn diffuse(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mut news = std::mem::take(&mut world.news);
+    let mut rng = rng_for(seed ^ 0xD1FF_0000_0000, day);
+    let n = world.agents.len();
+    let mk = |kind: &str, actor: &str, text: String| Event {
+        day,
+        date: date.to_string(),
+        kind: kind.into(),
+        actor: actor.into(),
+        text,
+    };
+
+    for item in news.iter_mut() {
+        let age = day - item.born;
+        if age < 1 || age > 21 || item.knowers.len() >= n {
+            continue; // not yet (delay), stale, or everyone already knows
+        }
+        let decay = (1.0 - age as f64 / 30.0).max(0.0);
+        let juice = 1.0 + 0.15 * item.valence.unsigned_abs() as f64;
+
+        // who knew at the start of today — delay is one hop per day
+        let known: Vec<bool> = (0..n).map(|i| item.knowers.contains(&i)).collect();
+        let mut learners = Vec::new();
+        for b in 0..n {
+            if known[b] {
+                continue;
+            }
+            for a in 0..n {
+                if !known[a] {
+                    continue;
+                }
+                let p = (meet_rate(&world.agents[a], &world.agents[b], date) * decay * juice).clamp(0.0, 0.95);
+                if rng.gen_bool(p) {
+                    learners.push(b);
+                    break; // b heard it from someone; move on
+                }
+            }
+        }
+
+        let subject = item.subject;
+        for b in learners {
+            item.knowers.push(b);
+            if item.applied < 6 {
+                clamp_standing(&mut world.agents[subject], item.valence.signum());
+                item.applied += 1;
+            }
+            // the story grows in the telling
+            if rng.gen_bool(0.15) {
+                item.distortion += 1;
+                if item.distortion == 2 {
+                    item.valence += item.valence.signum(); // amplified
+                    let topic = item.topic.clone();
+                    out.push(mk("gossip", &world.agents[subject].name,
+                        format!("By the telling and re-telling, {topic} had grown somewhat in the carriage.")));
+                }
+            }
+        }
+
+        // milestone: most of the town now knows — but only worth a beat if it's juicy
+        if !item.broadcast && item.knowers.len() * 5 >= n * 3 {
+            item.broadcast = true;
+            if item.valence.abs() >= 2 {
+                let topic = item.topic.clone();
+                out.push(mk("gossip", &world.agents[subject].name,
+                    format!("By now there was scarcely a soul in Thrushcombe who had not heard of {topic}.")));
+            }
+        }
+    }
+
+    world.news = news;
+    out
 }
 
 // ----------------------------------------------------------------------------- store + sim
@@ -280,13 +465,14 @@ pub struct Report {
     pub agents: Vec<Agent>,
     pub animals: Vec<Animal>,
     pub pending: Vec<String>,
+    pub news: Vec<String>,
     pub chronicle: Vec<String>,
 }
 
 /// Event kinds worth rendering in voice. Pure flavour (market, vet rounds) keeps its
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
-    "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household",
+    "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
 ];
 
 fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
@@ -422,6 +608,23 @@ impl Sim {
 
         let pending = self.pending(today, &world);
 
+        // news in flight: live rumours, freshest first
+        let n = world.agents.len();
+        let mut live: Vec<&News> = world
+            .news
+            .iter()
+            .filter(|it| target - it.born <= 21 && it.knowers.len() < n)
+            .collect();
+        live.sort_by_key(|it| std::cmp::Reverse(it.born));
+        let news: Vec<String> = live
+            .iter()
+            .take(6)
+            .map(|it| {
+                let grown = if it.distortion >= 2 { " · grown in the telling" } else { "" };
+                format!("{}  {}/{} know{}", it.topic, it.knowers.len(), n, grown)
+            })
+            .collect();
+
         Ok(Report {
             date: today.to_string(),
             day: target,
@@ -431,6 +634,7 @@ impl Sim {
             agents: world.agents.clone(),
             animals: world.animals.clone(),
             pending,
+            news,
             chronicle,
         })
     }
