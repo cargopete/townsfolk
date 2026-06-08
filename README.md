@@ -41,6 +41,11 @@ It runs end to end:
   rival is present (company to keep, or a standing to defend), the debtor economises,
   the riser spends on face. The flat scalar ABI just gains a few derived fields, so
   native/wasm parity still holds bit-for-bit.
+- **Planning — courtship** — a soul forms a *multi-day intention* and pursues it over
+  weeks: a courtship begun is walked out and called on, affection slowly warming (and
+  warming the slower for a suit pressed above one's station), until it builds to a
+  wedding after a proper courtship — or comes to nothing when another gets there first
+  or the feeling is never returned. Marriages are no longer sudden; they have a throughline.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

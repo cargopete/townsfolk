@@ -85,6 +85,9 @@ pub struct Agent {
     pub goal: u8,                 // 0 Thrive · 1 ClearDebt · 2 Rise · 3 MarryOff · 4 Outdo · 5 Prosper
     pub goal_target: i32,         // a child/rival index for MarryOff/Outdo, else -1
     pub mood: i16,               // [-100,100] transient spirits; <0 low/grieving, >0 high/triumphant
+    // --- planning: a multi-day intention with a throughline ---
+    pub courting: i32,            // index of the soul they are courting, else -1
+    pub courtship: i16,           // how far the courtship has come along
 }
 
 impl Agent {
@@ -186,6 +189,8 @@ impl World {
             goal: 0,
             goal_target: -1,
             mood: 0,
+            courting: -1,
+            courtship: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1153,6 +1158,8 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         goal: 0,
         goal_target: -1,
         mood: temperament(arch).1,
+        courting: -1,
+        courtship: 0,
     }
 }
 
@@ -1352,6 +1359,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         let arch = world.agents[i].archetype.clone();
         let estate = world.agents[i].purse.max(0); // the capital that passes on (not the debts)
         world.agents[i].death_day = Some(day);
+        world.agents[i].courting = -1; // the dead court no one
         out.push(mk("death", &name, format!("{name}, of {seat}, is dead.")));
         world.spawn_news_idx(i, &format!("the death of {name}"), 0, day, &[]);
         // grief falls on the kin
@@ -1424,7 +1432,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         }
     }
 
-    // --- marriage (at most one a day, to keep it gentle) ---
+    // --- courtship & marriage: a suit pursued over weeks, not a sudden match ---
     let elig: Vec<usize> = (0..n)
         .filter(|&i| {
             let a = &world.agents[i];
@@ -1433,53 +1441,116 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             a.active() && a.archetype != "child" && a.spouse.is_none() && (18..=50).contains(&a.age(day))
         })
         .collect();
+
+    // 1. carry on the courtships already begun — toward a wedding, or to nothing
     for &i in &elig {
-        if world.agents[i].spouse.is_some() {
+        let t = world.agents[i].courting;
+        if t < 0 {
             continue;
         }
-        if !rng.gen_bool((0.22 / 365.0_f64).clamp(0.0, 1.0)) {
+        let tj = t as usize;
+        let lost = tj >= world.agents.len()
+            || !world.agents[tj].active()
+            || world.agents[tj].spouse.is_some()
+            || (world.agents[tj].courting >= 0 && world.agents[tj].courting != i as i32);
+        if lost {
+            let (ni, nj) = (world.agents[i].name.clone(), world.agents.get(tj).map(|a| a.name.clone()).unwrap_or_default());
+            world.agents[i].courting = -1;
+            world.agents[i].courtship = 0;
+            nudge_mood(&mut world.agents[i], -12);
+            out.push(mk("courtship", &ni, format!("{ni}'s hopes of {nj} came to nothing — another got there first.")));
             continue;
         }
-        let partner = elig.iter().copied().find(|&j| {
+        // a step in the courtship; the suit warms slower when courting above one's station
+        let up = world.agents[tj].standing > world.agents[i].standing + 15;
+        world.nudge_aff(i, tj, 5);
+        world.nudge_aff(tj, i, if up { 2 } else { 4 });
+        world.agents[i].courtship += 1;
+        if rng.gen_bool(0.28) {
+            let (ni, nj) = (world.agents[i].name.clone(), world.agents[tj].name.clone());
+            let line = match rng.gen_range(0..3) {
+                0 => format!("{ni} walked out with {nj} again, the long way round."),
+                1 => format!("{ni} called on {nj}, and was asked to stay to tea."),
+                _ => format!("{ni} and {nj} were seen with their heads together after church."),
+            };
+            out.push(mk("courtship", &ni, line));
+        }
+        let mutual = world.aff(i, tj) >= 30 && world.aff(tj, i) >= 28;
+        if world.agents[i].courtship >= 30 && mutual {
+            world.agents[i].spouse = Some(tj);
+            world.agents[tj].spouse = Some(i);
+            world.agents[i].courting = -1;
+            world.agents[i].courtship = 0;
+            world.agents[tj].courting = -1;
+            world.agents[tj].courtship = 0;
+            nudge_mood(&mut world.agents[i], 22);
+            nudge_mood(&mut world.agents[tj], 22);
+            let (ni, nj) = (world.agents[i].name.clone(), world.agents[tj].name.clone());
+            let cross = stratum_archetype(&world.agents[i].archetype) != stratum_archetype(&world.agents[tj].archetype);
+            let note = if cross { " — a match that set tongues wagging across the class line" } else { "" };
+            out.push(mk("marriage", &ni, format!("{ni} and {nj} are to be married{note}, after a long and proper courtship.")));
+            world.spawn_news(&ni, &format!("the engagement of {ni} and {nj}"), if cross { -2 } else { 1 }, day, &[]);
+        } else if world.agents[i].courtship >= 75 && !mutual {
+            world.agents[i].courting = -1;
+            world.agents[i].courtship = 0;
+            nudge_mood(&mut world.agents[i], -10);
+            let (ni, nj) = (world.agents[i].name.clone(), world.agents[tj].name.clone());
+            out.push(mk("courtship", &ni, format!("{ni} gave up the pursuit of {nj} at last; the feeling was never returned.")));
+        }
+    }
+
+    // 2. a new courtship or two begun — a deliberate intention, not an accident
+    let mut started = 0;
+    for &i in &elig {
+        if started >= 2 {
+            break;
+        }
+        if world.agents[i].courting >= 0 || world.agents[i].spouse.is_some() {
+            continue;
+        }
+        if !rng.gen_bool((1.6 / 365.0_f64).clamp(0.0, 1.0)) {
+            continue;
+        }
+        let target = elig.iter().copied().find(|&j| {
             j != i
                 && world.agents[j].spouse.is_none()
                 && world.agents[j].sex != world.agents[i].sex
                 && (world.agents[j].age(day) - world.agents[i].age(day)).abs() <= 16
+                && !world.agents.iter().any(|a| a.active() && a.courting == j as i32) // not already spoken for
         });
-        match partner {
-            Some(j) => {
-                world.agents[i].spouse = Some(j);
-                world.agents[j].spouse = Some(i);
-                let (ni, nj) = (world.agents[i].name.clone(), world.agents[j].name.clone());
-                let cross = stratum_archetype(&world.agents[i].archetype) != stratum_archetype(&world.agents[j].archetype);
-                let note = if cross { " — a match that set tongues wagging across the class line" } else { "" };
-                out.push(mk("marriage", &ni, format!("{ni} and {nj} are to be married{note}.")));
-                world.spawn_news(&ni, &format!("the engagement of {ni} and {nj}"), if cross { -2 } else { 1 }, day, &[]);
-            }
-            None => {
-                let osex = 1 - world.agents[i].sex;
-                let (first, title) = if osex == 1 {
-                    (pick(&mut rng, FIRST_M), "Mr")
-                } else {
-                    (pick(&mut rng, FIRST_F), "Miss")
-                };
-                let sname = format!("{title} {first} {}", pick(&mut rng, SURNAMES));
-                let idx_new = n + newcomers.len();
-                let age = world.agents[i].age(day);
-                let sp_arch = world.agents[i].archetype.clone();
-                let sp_purse = starting_purse(&sp_arch, &mut rng);
-                let mut sp = make_agent(&sname, &sp_arch, &world.agents[i].seat.clone(),
-                    (world.agents[i].standing - 5).max(20), sp_purse, osex, age, day);
-                sp.spouse = Some(i);
-                sp.origin = Some(pick(&mut rng, ORIGINS).to_string());
-                let from = sp.origin.clone().unwrap();
-                world.agents[i].spouse = Some(idx_new);
-                let ni = world.agents[i].name.clone();
-                out.push(mk("marriage", &ni, format!("{ni} is to wed {sname}, lately of {from}.")));
-                newcomers.push(sp);
-                world.spawn_news(&ni, &format!("{ni}'s engagement to {sname}"), 1, day, &[]);
-            }
+        if let Some(j) = target {
+            world.agents[i].courting = j as i32;
+            world.agents[i].courtship = 0;
+            let (ni, nj) = (world.agents[i].name.clone(), world.agents[j].name.clone());
+            out.push(mk("courtship", &ni, format!("{ni} has begun to pay attentions to {nj}.")));
+            started += 1;
         }
+    }
+
+    // 3. now and then a soul weds someone lately come to the town (no resident match made)
+    for &i in &elig {
+        if world.agents[i].spouse.is_some() || world.agents[i].courting >= 0 {
+            continue;
+        }
+        if !rng.gen_bool((0.06 / 365.0_f64).clamp(0.0, 1.0)) {
+            continue;
+        }
+        let osex = 1 - world.agents[i].sex;
+        let (first, title) = if osex == 1 { (pick(&mut rng, FIRST_M), "Mr") } else { (pick(&mut rng, FIRST_F), "Miss") };
+        let sname = format!("{title} {first} {}", pick(&mut rng, SURNAMES));
+        let idx_new = n + newcomers.len();
+        let age = world.agents[i].age(day);
+        let sp_arch = world.agents[i].archetype.clone();
+        let sp_purse = starting_purse(&sp_arch, &mut rng);
+        let mut sp = make_agent(&sname, &sp_arch, &world.agents[i].seat.clone(), (world.agents[i].standing - 5).max(20), sp_purse, osex, age, day);
+        sp.spouse = Some(i);
+        sp.origin = Some(pick(&mut rng, ORIGINS).to_string());
+        let from = sp.origin.clone().unwrap();
+        world.agents[i].spouse = Some(idx_new);
+        let ni = world.agents[i].name.clone();
+        out.push(mk("marriage", &ni, format!("{ni} is to wed {sname}, lately of {from}.")));
+        newcomers.push(sp);
+        world.spawn_news(&ni, &format!("{ni}'s engagement to {sname}"), 1, day, &[]);
         break;
     }
 
@@ -2088,12 +2159,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 12;
+const SNAPSHOT_VERSION: i64 = 13;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2557,7 +2628,13 @@ impl Sim {
                 parent: a.parent.map(|p| world.agents[p].name.clone()),
                 children,
                 origin: a.origin.clone(),
-                wants: if a.archetype == "child" { "to grow up".into() } else { goal_label(&world, a.goal, a.goal_target) },
+                wants: if a.courting >= 0 {
+                    format!("to win {}'s hand", world.agents.get(a.courting as usize).map(|x| x.name.as_str()).unwrap_or("—"))
+                } else if a.archetype == "child" {
+                    "to grow up".into()
+                } else {
+                    goal_label(&world, a.goal, a.goal_target)
+                },
                 mood: mood_word(a.mood).to_string(),
                 friends: world.ties(i, true, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 rivals: world.ties(i, false, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
