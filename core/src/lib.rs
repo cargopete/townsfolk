@@ -740,7 +740,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
             }
             "stranger" => {
                 let name = if iv.note.is_empty() { "A stranger".to_string() } else { iv.note.clone() };
-                let mut agent = make_agent(&name, "blunt_hand", "the empty cottage", 25, 1, 33, day);
+                let mut agent = make_agent(&name, "blunt_hand", "the empty cottage", 25, 12, 1, 33, day);
                 agent.origin = Some("parts unknown".into());
                 out.push(mk("providence", &name, format!("{name} arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.")));
                 world.agents.push(agent);
@@ -825,13 +825,13 @@ fn hazard(age: i64) -> f64 {
     }
 }
 
-fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, sex: u8, age: i64, day: i64) -> Agent {
+fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex: u8, age: i64, day: i64) -> Agent {
     Agent {
         name: name.into(),
         archetype: arch.into(),
         seat: seat.into(),
         standing: standing.clamp(0, 100),
-        purse: 0,
+        purse,
         birth_day: day - age * 365,
         sex,
         death_day: None,
@@ -839,6 +839,18 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, sex: u8, age: i
         spouse: None,
         parent: None,
         origin: None,
+    }
+}
+
+/// What an adult of a given station arrives with — nobody starts on nothing.
+fn starting_purse(arch: &str, rng: &mut ChaCha8Rng) -> i32 {
+    match arch {
+        "genteel_status_seeker" => rng.gen_range(60..220),
+        "practitioner" => rng.gen_range(40..110),
+        "official" => rng.gen_range(25..70),
+        "hill_farmer" => rng.gen_range(12..45),
+        "scheming_improver" => rng.gen_range(-15..40),
+        _ => rng.gen_range(4..20), // working folk
     }
 }
 
@@ -855,7 +867,8 @@ fn new_incomer(rng: &mut ChaCha8Rng, day: i64) -> Agent {
     let first = if sex == 1 { pick(rng, FIRST_M) } else { pick(rng, FIRST_F) };
     let title = if sex == 1 { "Mr" } else { "Miss" };
     let name = format!("{title} {first} {}", pick(rng, SURNAMES));
-    let mut a = make_agent(&name, arch, "a cottage in the town", rng.gen_range(20..45), sex, rng.gen_range(22..50), day);
+    let purse = starting_purse(arch, rng);
+    let mut a = make_agent(&name, arch, "a cottage in the town", rng.gen_range(20..45), purse, sex, rng.gen_range(22..50), day);
     a.origin = Some(pick(rng, ORIGINS).to_string());
     a
 }
@@ -910,6 +923,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         let seat = world.agents[i].seat.clone();
         let standing = world.agents[i].standing;
         let arch = world.agents[i].archetype.clone();
+        let estate = world.agents[i].purse.max(0); // the capital that passes on (not the debts)
         world.agents[i].death_day = Some(day);
         out.push(mk("death", &name, format!("{name}, of {seat}, is dead.")));
         world.spawn_news_idx(i, &format!("the death of {name}"), 0, day, &[]);
@@ -922,6 +936,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             Some(h) => {
                 world.agents[h].seat = seat.clone();
                 world.agents[h].standing = (standing - 8).max(world.agents[h].standing).clamp(0, 100);
+                world.agents[h].purse += estate; // inherit the estate's capital
                 if world.agents[h].archetype == "child" {
                     world.agents[h].archetype = stratum_archetype(&arch);
                 }
@@ -938,7 +953,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             }
             None => {
                 let hname = format!("Mr {} {}", pick(&mut rng, FIRST_M), pick(&mut rng, SURNAMES));
-                let mut heir = make_agent(&hname, &stratum_archetype(&arch), &seat, (standing - 12).max(20), 1, 34, day);
+                let st = stratum_archetype(&arch);
+                let purse = estate + starting_purse(&st, &mut rng); // the estate, plus their own means
+                let mut heir = make_agent(&hname, &st, &seat, (standing - 12).max(20), purse, 1, 34, day);
                 let from = pick(&mut rng, ORIGINS).to_string();
                 heir.origin = Some(from.clone());
                 out.push(mk("succession", &hname, format!("{seat} passes to {hname}, a relation lately come from {from}.")));
@@ -962,7 +979,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             let parent_arch = parent
                 .map(|p| world.agents[p].archetype.clone())
                 .unwrap_or_else(|| "genteel_status_seeker".into());
-            world.agents[i].archetype = stratum_archetype(&parent_arch);
+            let arch = stratum_archetype(&parent_arch);
+            world.agents[i].purse += starting_purse(&arch, &mut rng); // a settlement on coming of age
+            world.agents[i].archetype = arch;
             out.push(mk("comingofage", &nm, format!("{nm} is grown now, and takes a place in the town.")));
         } else {
             world.agents[i].departed = true;
@@ -1012,8 +1031,10 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
                 let sname = format!("{title} {first} {}", pick(&mut rng, SURNAMES));
                 let idx_new = n + newcomers.len();
                 let age = world.agents[i].age(day);
-                let mut sp = make_agent(&sname, &world.agents[i].archetype.clone(), &world.agents[i].seat.clone(),
-                    (world.agents[i].standing - 5).max(20), osex, age, day);
+                let sp_arch = world.agents[i].archetype.clone();
+                let sp_purse = starting_purse(&sp_arch, &mut rng);
+                let mut sp = make_agent(&sname, &sp_arch, &world.agents[i].seat.clone(),
+                    (world.agents[i].standing - 5).max(20), sp_purse, osex, age, day);
                 sp.spouse = Some(i);
                 sp.origin = Some(pick(&mut rng, ORIGINS).to_string());
                 let from = sp.origin.clone().unwrap();
@@ -1043,7 +1064,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
                 let bsex = if rng.gen_bool(0.5) { 1 } else { 0 };
                 let first = if bsex == 1 { pick(&mut rng, FIRST_M) } else { pick(&mut rng, FIRST_F) };
                 let surname = mother_name.rsplit(' ').next().unwrap_or("Pelham");
-                let mut child = make_agent(&format!("{first} {surname}"), "child", &seat, (standing / 3).clamp(0, 100), bsex, 0, day);
+                let mut child = make_agent(&format!("{first} {surname}"), "child", &seat, (standing / 3).clamp(0, 100), 0, bsex, 0, day);
                 child.parent = Some(i);
                 out.push(mk("birth", &mother_name, format!("A child, {first}, was born at {seat}.")));
                 newcomers.push(child);
@@ -1051,8 +1072,37 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         }
     }
 
-    // --- outsiders drift in: a steady trickle of new blood, beyond the floor ---
-    if rng.gen_bool((2.5 / 365.0_f64).clamp(0.0, 1.0)) {
+    // --- adults drift out: single, unsettled cottage-folk take work elsewhere ---
+    // (gated above the floor, and never seat-holders or those with family, so lineages
+    // and households are left intact)
+    let active_ct = world.agents.iter().filter(|a| a.active()).count();
+    if active_ct > MIN_TOWNSFOLK + 3 {
+        let leavers: Vec<usize> = (0..n)
+            .filter(|&i| {
+                let a = &world.agents[i];
+                a.active()
+                    && a.archetype != "child"
+                    && a.spouse.is_none()
+                    && (a.seat.starts_with("a cottage") || a.seat == "the empty cottage")
+                    && (18..=60).contains(&a.age(day))
+            })
+            .collect();
+        for i in leavers {
+            let has_kin = (0..world.agents.len()).any(|j| world.agents[j].active() && world.agents[j].parent == Some(i));
+            if has_kin {
+                continue;
+            }
+            if rng.gen_bool((0.4 / 365.0_f64).clamp(0.0, 1.0)) {
+                world.agents[i].departed = true;
+                let nm = world.agents[i].name.clone();
+                let to = pick(&mut rng, ORIGINS);
+                out.push(mk("departure", &nm, format!("{nm} left Thrushcombe for {to}, and the cottage stood empty again.")));
+            }
+        }
+    }
+
+    // --- outsiders drift in: a steady trickle of new blood, up to a comfortable size ---
+    if active_ct < SOFT_CAP && rng.gen_bool((2.5 / 365.0_f64).clamp(0.0, 1.0)) {
         let a = new_incomer(&mut rng, day);
         let from = a.origin.clone().unwrap_or_else(|| "away".into());
         out.push(mk("newcomer", &a.name, format!("{}, lately of {from}, came to Thrushcombe and took a situation.", a.name)));
@@ -1074,6 +1124,8 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
 /// Thrushcombe holds at least this many souls — the floor tops up with incomers.
 const MIN_TOWNSFOLK: usize = 30;
+/// …and immigration eases off above this, so the town settles at a browsable size.
+const SOFT_CAP: usize = 48;
 
 // ----------------------------------------------------------------------------- gossip
 
@@ -1299,7 +1351,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 4;
+const SNAPSHOT_VERSION: i64 = 5;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365;
 
