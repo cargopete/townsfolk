@@ -2192,7 +2192,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 14;
+const SNAPSHOT_VERSION: i64 = 15;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2215,7 +2215,11 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- LLM verdicts at a soul's turning point, recorded and folded with a bounded effect.
          CREATE TABLE IF NOT EXISTS decrees(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, kind TEXT NOT NULL,
-            target TEXT NOT NULL, choice TEXT NOT NULL, text TEXT NOT NULL);",
+            target TEXT NOT NULL, choice TEXT NOT NULL, text TEXT NOT NULL);
+         -- Conversations a soul has had: the transcript, and what they took away (their memory).
+         CREATE TABLE IF NOT EXISTS dialogues(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, source TEXT NOT NULL, target TEXT NOT NULL,
+            transcript TEXT NOT NULL, memory TEXT NOT NULL);",
     )
 }
 
@@ -2239,7 +2243,10 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
     for d in list {
         let Some(si) = world.idx(&d.subject) else { continue };
         let ti = world.idx(&d.target);
-        out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
+        // a turning-point verdict is a public beat; a private conversation is not
+        if d.kind != "dialogue" {
+            out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
+        }
         match (d.kind.as_str(), d.choice.as_str()) {
             ("feud", "forgive") => {
                 if let Some(t) = ti {
@@ -2295,6 +2302,22 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     world.affinity.insert((si as u32, t as u32), -10);
                 }
             }
+            // the felt residue of a conversation (subject = the soul spoken to, target = who spoke)
+            ("dialogue", "warmer") => {
+                if let Some(t) = ti {
+                    world.nudge_aff(si, t, 14);
+                    world.nudge_aff(t, si, 8);
+                }
+                nudge_mood(&mut world.agents[si], 7);
+            }
+            ("dialogue", "colder") => {
+                if let Some(t) = ti {
+                    world.nudge_aff(si, t, -14);
+                    world.nudge_aff(t, si, -6);
+                }
+                nudge_mood(&mut world.agents[si], -7);
+            }
+            ("dialogue", _) => {} // an exchange that left things as they were
             _ => {}
         }
     }
@@ -2547,6 +2570,34 @@ impl Sim {
         self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
         self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
         Ok(())
+    }
+
+    /// Record a conversation: store its transcript and the memory the target keeps, and fold
+    /// its felt residue (a warming or cooling, a lift or sinking of spirits) into the world.
+    pub fn record_dialogue(&mut self, date: Date, source: &str, target: &str, transcript: &str, memory: &str, warmth: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO dialogues(day,source,target,transcript,memory) VALUES(?1,?2,?3,?4,?5)",
+            params![day, source, target, transcript, memory],
+        )?;
+        // the world-effect rides the decree mechanism: subject = the soul spoken to, target = who spoke
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'dialogue',?3,?4,?5)",
+            params![day, target, source, warmth, memory],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
+        Ok(())
+    }
+
+    /// What a soul has come to remember of others, from the conversations they've had.
+    pub fn memories_of(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source, memory FROM dialogues WHERE target = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![name, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
     }
 
     /// Find a soul at a genuine turning point — a long feud that might be forgiven, ruin to be

@@ -11,3 +11,5 @@ path = "src/main.rs"
 thrush-core = { path = "../core" }
 tiny_http = "0.12"
 time = { version = "0.3", features = ["local-offset"] }
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"

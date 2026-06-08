@@ -69,7 +69,7 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
          <title>{}</title><style>{}</style></head><body><div class=wrap>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a></div>{}</div></body></html>",
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/talk>A word…</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
 }
@@ -203,9 +203,14 @@ fn person(sim: &Sim, idx: usize) -> String {
 
     let status = status_label(sim, a).map(|s| format!(" <span class=tag>{}</span>", esc(&s))).unwrap_or_default();
     let origin = a.origin.as_ref().map(|o| format!(" &middot; came from {}", esc(o))).unwrap_or_default();
+    let speak = if a.active() {
+        format!(" <a href='/talk?to={}' class=tag>speak to me directly →</a>", idx)
+    } else {
+        String::new()
+    };
     let mut body = format!(
-        "<h1>{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
-        esc(&a.name), status, esc(&station(a)), esc(&a.seat), a.age(day), origin
+        "<h1>{}{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
+        esc(&a.name), status, speak, esc(&station(a)), esc(&a.seat), a.age(day), origin
     );
 
     body.push_str(&format!(
@@ -270,6 +275,16 @@ fn person(sim: &Sim, idx: usize) -> String {
         body.push_str(&format!("<h2>Family</h2><p>{}</p>", kin.trim_end_matches("&middot; ")));
     }
 
+    // what they've come to remember of others, from conversations had
+    if let Ok(mems) = sim.memories_of(&a.name, 12) {
+        if !mems.is_empty() {
+            body.push_str("<h2>What they remember</h2>");
+            for (who, m) in mems {
+                body.push_str(&format!("<div class=entry><span class=date>of {}</span><br><span class=doing>{}</span></div>", esc(&who), esc(&m)));
+            }
+        }
+    }
+
     body.push_str("<h2>Their record</h2>");
     match sim.person_events(&a.name, 300) {
         Ok(entries) if !entries.is_empty() => {
@@ -316,7 +331,7 @@ fn graph(sim: &Sim) -> String {
          body{{margin:0}}#net{{height:88vh;border:1px solid var(--rule)}}.legend{{color:var(--faint);font-size:.85rem}}</style>\
          <script src='https://unpkg.com/vis-network/standalone/umd/vis-network.min.js'></script></head>\
          <body><div class=wrap style='max-width:1100px'>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a></div>\
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/talk>A word…</a></div>\
          <h1>Kinship</h1><div class=legend>marriages dashed &middot; descent arrowed &middot; drag to explore, click a soul to open them</div>\
          <div id=net></div>\
          <script>\
@@ -366,6 +381,132 @@ fn day(sim: &Sim, url: &str) -> String {
     page(&format!("Thrushcombe — {ds}"), &body)
 }
 
+// ------------------------------------------------------------------------------- dialogue
+//
+// Speak to a soul. You adopt a *source* soul's voice; Qwen answers as the *target* soul, in
+// character, mindful of who's addressing them and what they remember. The transcript is live
+// and non-deterministic; only its recorded residue (a warming or cooling, a memory kept)
+// enters the fold, so the world stays exact.
+
+fn ollama() -> (String, String) {
+    (
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into()),
+        std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into()),
+    )
+}
+
+/// Build the in-character system prompt for `target` speaking with `source`.
+fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
+    let w = sim.world_snapshot(today());
+    let t = w.agents.get(target)?;
+    let s = w.agents.get(source)?;
+    let day = sim.target_day(today()).max(0);
+    let role = t.trade.clone().unwrap_or_else(|| pretty_arch(&t.archetype).to_string());
+    let srole = s.trade.clone().unwrap_or_else(|| pretty_arch(&s.archetype).to_string());
+    let mut p = format!(
+        "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary in the year 1934. \
+         Your standing in the town is {standing} of a hundred, and you are presently {mood}. \
+         You are speaking with {sname}, {srole}. \
+         Stay completely and always in character: reply only as {name} would, in the warm, wry, class-conscious voice of interwar provincial England. \
+         Never mention being an AI or a model; never break character; never narrate stage directions. Keep your replies to one to three sentences.",
+        name = t.name, role = role, seat = t.seat, age = t.age(day), standing = t.standing,
+        mood = thrush_core::mood_word(t.mood), sname = s.name, srole = srole,
+    );
+    if let Ok(mems) = sim.memories_of(&t.name, 8) {
+        let about: Vec<String> = mems.into_iter().filter(|(who, _)| who == &s.name).map(|(_, m)| m).collect();
+        if !about.is_empty() {
+            p.push_str(&format!(" What you remember of {}: {}", s.name, about.join("; ")));
+        }
+    }
+    Some(p)
+}
+
+/// One turn of conversation via Ollama's chat API. `history` is prior (role, content) turns.
+fn chat_reply(system: &str, history: &[(String, String)], message: &str) -> Option<String> {
+    let (host, model) = ollama();
+    let mut messages = vec![serde_json::json!({"role": "system", "content": system})];
+    for (role, content) in history {
+        messages.push(serde_json::json!({"role": role, "content": content}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": message}));
+    let body = serde_json::json!({
+        "model": model, "messages": messages, "think": false, "stream": false,
+        "options": { "num_ctx": 8192, "temperature": 0.85 },
+    });
+    let agent = ureq::AgentBuilder::new().timeout_read(std::time::Duration::from_secs(240)).build();
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/chat")).send_json(body).ok()?.into_json().ok()?;
+    let s = resp.get("message")?.get("content")?.as_str()?.trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// At the end of a conversation, have the oracle judge its residue: did the target warm or
+/// cool toward the source, and what one line do they keep of it?
+fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Option<(String, String)> {
+    let (host, model) = ollama();
+    let sys = format!(
+        "You judge how a conversation has left {target}, a soul of a 1934 West-Country town, feeling about {source}. \
+         Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence, in {target}'s own voice, of what they now think or remember of {source}}}.",
+        target = target_name, source = source_name,
+    );
+    let prompt = format!("The conversation:\n{transcript}\n\nHow has it left {target_name} toward {source_name}?");
+    let body = serde_json::json!({
+        "model": model, "system": sys, "prompt": prompt, "think": false, "stream": false, "format": "json",
+        "options": { "num_ctx": 8192, "temperature": 0.5 },
+    });
+    let agent = ureq::AgentBuilder::new().timeout_read(std::time::Duration::from_secs(180)).build();
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let warmth = parsed.get("warmth")?.as_str()?.trim().to_lowercase();
+    let warmth = ["warmer", "colder", "unchanged"].into_iter().find(|w| warmth.contains(w)).unwrap_or("unchanged").to_string();
+    let memory = parsed.get("memory")?.as_str()?.trim().to_string();
+    (!memory.is_empty()).then_some((warmth, memory))
+}
+
+/// The conversation page: pick a source and a target, then talk.
+fn talk_page(sim: &Sim, url: &str) -> String {
+    let w = sim.world_snapshot(today());
+    let live: Vec<usize> = (0..w.agents.len()).filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+    let preset_to: i64 = qparam(url, "to").and_then(|s| s.parse().ok()).unwrap_or(-1);
+    let opts = |sel: i64| -> String {
+        live.iter()
+            .map(|&i| format!("<option value={}{}>{}</option>", i, if i as i64 == sel { " selected" } else { "" }, esc(&w.agents[i].name)))
+            .collect()
+    };
+    let body = format!(
+        "<h1>A word with…</h1>\
+         <div class=sub>Adopt one soul's voice, and speak to another. They answer in character — and remember.</div>\
+         <div class=card>\
+           <label>You speak as <select id=src><option value=-1>— pick a soul —</option>{src}</select></label> &nbsp; \
+           <label>to <select id=tgt><option value=-1>— pick a soul —</option>{tgt}</select></label>\
+         </div>\
+         <div id=log></div>\
+         <div class=card><input id=msg placeholder='Say something…' style='width:78%' autocomplete=off> \
+           <button onclick=say()>Say</button> <button onclick=conclude() style='float:right'>End &amp; record</button></div>\
+         <div id=out class=sub></div>\
+         <script>\
+         var hist=[];\
+         function add(who,txt,cls){{var d=document.getElementById('log');d.innerHTML+='<div class=entry><span class=date>'+who+'</span><br><span class='+cls+'>'+txt+'</span></div>';window.scrollTo(0,document.body.scrollHeight);}}\
+         function nm(s){{return s.options[s.selectedIndex].text;}}\
+         async function say(){{\
+           var src=document.getElementById('src'),tgt=document.getElementById('tgt'),m=document.getElementById('msg');\
+           if(src.value<0||tgt.value<0||!m.value.trim())return;\
+           add(nm(src),m.value,'doing');var msg=m.value;m.value='';\
+           var r=await fetch('/talk/say',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{source:+src.value,target:+tgt.value,history:hist,message:msg}})}});\
+           var j=await r.json();hist.push(['user',msg]);hist.push(['assistant',j.reply||'(no answer)']);add(nm(tgt),j.reply||'(silence)','where');\
+         }}\
+         async function conclude(){{\
+           var src=document.getElementById('src'),tgt=document.getElementById('tgt');if(src.value<0||tgt.value<0||!hist.length)return;\
+           document.getElementById('out').textContent='recording…';\
+           var r=await fetch('/talk/end',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{source:+src.value,target:+tgt.value,history:hist}})}});\
+           var j=await r.json();document.getElementById('out').textContent=nm(tgt)+' came away '+(j.warmth||'unchanged')+'. They will remember: \"'+(j.memory||'')+'\"';hist=[];\
+         }}\
+         document.getElementById('msg').addEventListener('keydown',function(e){{if(e.key==='Enter')say();}});\
+         </script>",
+        src = opts(-1), tgt = opts(preset_to)
+    );
+    page("Thrushcombe — A word with…", &body)
+}
+
 fn route(sim: &Sim, url: &str) -> String {
     let path = url.split('?').next().unwrap_or("/");
     if path == "/" {
@@ -376,6 +517,8 @@ fn route(sim: &Sim, url: &str) -> String {
         graph(sim)
     } else if path == "/day" {
         day(sim, url)
+    } else if path == "/talk" {
+        talk_page(sim, url)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),
@@ -383,6 +526,67 @@ fn route(sim: &Sim, url: &str) -> String {
         }
     } else {
         page("Not found", "<h1>Not found</h1><p><a href=/>Home</a></p>")
+    }
+}
+
+/// Render the history list [["user",msg],["assistant",reply],…] into a labelled transcript.
+fn transcript_of(sim: &Sim, source: usize, target: usize, hist: &serde_json::Value) -> String {
+    let w = sim.world_snapshot(today());
+    let sn = w.agents.get(source).map(|a| a.name.clone()).unwrap_or_default();
+    let tn = w.agents.get(target).map(|a| a.name.clone()).unwrap_or_default();
+    hist.as_array()
+        .map(|turns| {
+            turns
+                .iter()
+                .filter_map(|t| {
+                    let pair = t.as_array()?;
+                    let who = if pair.first()?.as_str()? == "user" { &sn } else { &tn };
+                    Some(format!("{who}: {}", pair.get(1)?.as_str()?))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// POST /talk/say — one in-character reply from the target. Returns {"reply": "..."}.
+fn handle_say(sim: &Sim, body: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let source = v.get("source").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let target = v.get("target").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let message = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+    let history: Vec<(String, String)> = v
+        .get("history")
+        .and_then(|h| h.as_array())
+        .map(|a| a.iter().filter_map(|t| {
+            let p = t.as_array()?;
+            Some((p.first()?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))
+        }).collect())
+        .unwrap_or_default();
+    let reply = persona(sim, source, target)
+        .and_then(|sys| chat_reply(&sys, &history, message))
+        .unwrap_or_else(|| "…".into());
+    serde_json::json!({ "reply": reply }).to_string()
+}
+
+/// POST /talk/end — judge and record the conversation's residue. Returns {warmth, memory}.
+fn handle_end(sim: &mut Sim, body: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let source = v.get("source").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let target = v.get("target").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let transcript = transcript_of(sim, source, target, v.get("history").unwrap_or(&serde_json::Value::Null));
+    let w = sim.world_snapshot(today());
+    let (sn, tn) = match (w.agents.get(source), w.agents.get(target)) {
+        (Some(s), Some(t)) => (s.name.clone(), t.name.clone()),
+        _ => return serde_json::json!({"warmth": "unchanged", "memory": ""}).to_string(),
+    };
+    match assess_dialogue(&tn, &sn, &transcript) {
+        Some((warmth, memory)) => {
+            let _ = sim.record_dialogue(today(), &sn, &tn, &transcript, &memory, &warmth);
+            let _ = sim.catch_up(today(), phase_now());
+            serde_json::json!({ "warmth": warmth, "memory": memory }).to_string()
+        }
+        None => serde_json::json!({ "warmth": "unchanged", "memory": "" }).to_string(),
     }
 }
 
@@ -401,9 +605,19 @@ fn main() {
         std::process::exit(1);
     });
     println!("Thrushcombe reader on http://{addr}  (db: {db})");
-    for req in server.incoming_requests() {
-        let html = route(&sim, req.url());
-        let header = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
-        let _ = req.respond(Response::from_string(html).with_header(header));
+    for mut req in server.incoming_requests() {
+        let url = req.url().to_string();
+        let is_post = matches!(req.method(), tiny_http::Method::Post);
+        let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+        let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
+        if is_post && (url == "/talk/say" || url == "/talk/end") {
+            let mut body = String::new();
+            let _ = req.as_reader().read_to_string(&mut body);
+            let json = if url == "/talk/say" { handle_say(&sim, &body) } else { handle_end(&mut sim, &body) };
+            let _ = req.respond(Response::from_string(json).with_header(json_hdr));
+        } else {
+            let html = route(&sim, &url);
+            let _ = req.respond(Response::from_string(html).with_header(html_hdr));
+        }
     }
 }

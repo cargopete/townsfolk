@@ -1597,9 +1597,11 @@ dependencies = [
 name = "thrush-web"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "thrush-core",
  "time",
  "tiny_http",
+ "ureq",
 ]
 
 [[package]]

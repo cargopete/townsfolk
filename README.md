@@ -52,6 +52,12 @@ It runs end to end:
   recent history. It chooses from a fixed vocabulary and writes the line; the verdict is
   **recorded and folded** with a bounded effect, so the decision is the model's but the
   world stays exact. The genuine intelligence, only where it matters.
+- **Speak to a soul** — on the dashboard's *A word…* page you adopt one soul's voice and
+  converse with another; Qwen answers in character, mindful of who's addressing them and
+  what they remember. Each soul's page has a *speak to me directly* button. When you end
+  the conversation the oracle judges its residue — a **warming or cooling, a memory kept** —
+  and only that recorded effect enters the fold, so souls genuinely learn from talking to
+  you while the world stays exact.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
