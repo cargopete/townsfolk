@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build --manifest-path wasm-genteel/Cargo.toml --target wasm32-unknown-unknown --release
+cargo build --manifest-path wasm-policies/Cargo.toml --target wasm32-unknown-unknown --release
 mkdir -p wasm
-cp wasm-genteel/target/wasm32-unknown-unknown/release/wasm_genteel.wasm wasm/genteel.wasm
-echo "staged wasm/genteel.wasm ($(wc -c < wasm/genteel.wasm) bytes)"
+cp wasm-policies/target/wasm32-unknown-unknown/release/wasm_policies.wasm wasm/policies.wasm
+echo "staged wasm/policies.wasm ($(wc -c < wasm/policies.wasm) bytes)"

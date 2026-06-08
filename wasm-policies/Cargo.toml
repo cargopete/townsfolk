@@ -1,5 +1,5 @@
 [package]
-name = "wasm-genteel"
+name = "wasm-policies"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-policy-genteel = { path = "../policy-genteel" }
+policies = { path = "../policies" }
 
 [profile.release]
 panic = "abort"

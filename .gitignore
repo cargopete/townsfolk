@@ -1,5 +1,5 @@
 /target
-wasm-genteel/target
+wasm-policies/target
 world.db
 world.db-*
 *.db

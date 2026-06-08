@@ -1078,7 +1078,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "policy-genteel"
+name = "policies"
 version = "0.1.0"
 
 [[package]]
@@ -1585,7 +1585,7 @@ name = "thrush-core"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "policy-genteel",
+ "policies",
  "rand",
  "rand_chacha",
  "rusqlite",

@@ -1,0 +1,8 @@
+[package]
+name = "policies"
+version = "0.1.0"
+edition = "2021"
+
+# no_std, dependency-free: the whole behaviour layer as pure integer logic, compiled
+# both into the host (native engine) and into one wasm guest. Determinism by shared source.
+[dependencies]

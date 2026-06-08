@@ -1,8 +1,0 @@
-[package]
-name = "policy-genteel"
-version = "0.1.0"
-edition = "2021"
-
-# no_std, no deps — pure integer logic so it compiles identically for the host (native
-# engine) and for wasm32 (the guest). Determinism by shared source.
-[dependencies]

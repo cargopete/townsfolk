@@ -48,7 +48,7 @@ fn apply_engine(sim: &mut Sim, wasm: bool) {
     if !wasm {
         return;
     }
-    let path = std::env::var("THRUSH_WASM").unwrap_or_else(|_| "wasm/genteel.wasm".into());
+    let path = std::env::var("THRUSH_WASM").unwrap_or_else(|_| "wasm/policies.wasm".into());
     match WasmPolicies::load(&path) {
         Ok(e) => {
             sim.set_engine(Box::new(e));

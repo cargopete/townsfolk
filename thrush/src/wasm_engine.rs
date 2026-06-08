@@ -1,20 +1,18 @@
-//! The wasm-backed behaviour engine. It loads sandboxed guest modules and routes the
-//! relevant archetypes to them across the scalar policy ABI; everything else falls back
-//! to the in-process native engine. This is the substrate swap — same `decide` boundary,
-//! the policy now executing inside wasmtime.
+//! The wasm-backed behaviour engine. It loads one sandboxed guest holding the whole
+//! behaviour layer and routes every archetype's decision through it across the scalar
+//! policy ABI. Same `decide` boundary as native — the policies now executing in wasmtime.
 
 use std::cell::RefCell;
 
-use thrush_core::{season_ord, Action, NativePolicies, Observation, PolicyEngine};
+use thrush_core::{arch_ord, season_ord, Action, Observation, PolicyEngine};
 use wasmtime::{Engine, Instance, Module, Store, TypedFunc};
 
-/// The genteel guest's exported signature (the canonical scalar policy ABI).
-type DecideFn = TypedFunc<(i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>;
+/// The guest's exported signature: (archetype, observation…, rng) -> action ordinal.
+type DecideFn = TypedFunc<(i32, i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>;
 
 pub struct WasmPolicies {
-    native: NativePolicies,
     store: RefCell<Store<()>>,
-    genteel: DecideFn,
+    decide: DecideFn,
 }
 
 impl WasmPolicies {
@@ -24,37 +22,38 @@ impl WasmPolicies {
         let module = Module::from_file(&engine, path).map_err(|e| format!("load {path}: {e}"))?;
         let mut store = Store::new(&engine, ());
         let instance = Instance::new(&mut store, &module, &[]).map_err(|e| e.to_string())?;
-        let genteel = instance
-            .get_typed_func::<(i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>(&mut store, "genteel_decide")
+        let decide = instance
+            .get_typed_func::<(i32, i32, i32, i64, i32, i32, i32, i32, i32, i64), i32>(&mut store, "decide")
             .map_err(|e| e.to_string())?;
-        Ok(Self { native: NativePolicies, store: RefCell::new(store), genteel })
+        Ok(Self { store: RefCell::new(store), decide })
     }
 }
 
 impl PolicyEngine for WasmPolicies {
     fn decide(&self, archetype: &str, o: &Observation) -> Action {
-        if archetype == "genteel_status_seeker" {
-            let mut st = self.store.borrow_mut();
-            let n = self
-                .genteel
-                .call(
-                    &mut *st,
-                    (
-                        o.standing,
-                        o.purse,
-                        o.age,
-                        o.married as i32,
-                        season_ord(o.season),
-                        o.is_market as i32,
-                        o.is_sunday as i32,
-                        o.top_standing,
-                        o.rng as i64,
-                    ),
-                )
-                .expect("wasm genteel_decide trapped");
-            Action::from_i32(n)
-        } else {
-            self.native.decide(archetype, o)
+        let ord = arch_ord(archetype);
+        if ord < 0 {
+            return Action::Idle;
         }
+        let mut st = self.store.borrow_mut();
+        let n = self
+            .decide
+            .call(
+                &mut *st,
+                (
+                    ord,
+                    o.standing,
+                    o.purse,
+                    o.age,
+                    o.married as i32,
+                    season_ord(o.season),
+                    o.is_market as i32,
+                    o.is_sunday as i32,
+                    o.top_standing,
+                    o.rng as i64,
+                ),
+            )
+            .expect("wasm decide trapped");
+        Action::from_i32(n)
     }
 }

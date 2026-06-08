@@ -571,55 +571,38 @@ impl PolicyEngine for NativePolicies {
     }
 }
 
-/// The pooled policy: dispatch by archetype, decide from the observation. A wasm engine
-/// routes to one guest module per archetype instead of this match.
-fn decide(archetype: &str, o: &Observation) -> Action {
-    let mut rng = ChaCha8Rng::seed_from_u64(o.rng);
+/// The behaviour-layer archetypes, by ordinal (shared with the policy crate / wasm guest).
+pub fn arch_ord(archetype: &str) -> i32 {
     match archetype {
-        "genteel_status_seeker" => {
-            // the Provincial-Lady tension, computed by the shared policy crate so the
-            // native and wasm engines agree bit-for-bit.
-            Action::from_i32(policy_genteel::genteel_decide(
-                o.standing,
-                o.purse,
-                o.age,
-                o.married as i32,
-                season_ord(o.season),
-                o.is_market as i32,
-                o.is_sunday as i32,
-                o.top_standing,
-                o.rng,
-            ))
-        }
-        "hill_farmer" => {
-            if o.is_market && rng.gen_bool(0.25) {
-                Action::Haggle
-            } else if rng.gen_bool(0.08) {
-                Action::TendStock
-            } else {
-                Action::Idle
-            }
-        }
-        "scheming_improver" => {
-            if rng.gen_bool(0.14) { Action::Scheme } else { Action::Idle }
-        }
-        "blunt_hand" => {
-            if rng.gen_bool(0.07) { Action::Graft } else { Action::Idle }
-        }
-        "practitioner" => {
-            if rng.gen_bool(0.18) { Action::Round } else { Action::Idle }
-        }
-        "official" => {
-            if o.is_sunday && rng.gen_bool(0.5) {
-                Action::Minister
-            } else if matches!(o.season, Season::Winter | Season::Mart) && rng.gen_bool(0.06) {
-                Action::Press
-            } else {
-                Action::Idle
-            }
-        }
-        _ => Action::Idle,
+        "genteel_status_seeker" => 0,
+        "hill_farmer" => 1,
+        "practitioner" => 2,
+        "scheming_improver" => 3,
+        "blunt_hand" => 4,
+        "official" => 5,
+        _ => -1,
     }
+}
+
+/// The pooled native policy — every archetype computed by the shared `policies` crate (the
+/// very code the wasm guest also runs), so native and wasm decisions agree bit-for-bit.
+fn decide(archetype: &str, o: &Observation) -> Action {
+    let ord = arch_ord(archetype);
+    if ord < 0 {
+        return Action::Idle;
+    }
+    Action::from_i32(policies::decide(
+        ord,
+        o.standing,
+        o.purse,
+        o.age,
+        o.married as i32,
+        season_ord(o.season),
+        o.is_market as i32,
+        o.is_sunday as i32,
+        o.top_standing,
+        o.rng,
+    ))
 }
 
 /// Apply an action: mutate the world, emit a chronicle beat, and (for the juicy ones)
@@ -1222,7 +1205,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 2;
+const SNAPSHOT_VERSION: i64 = 3;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365;
 

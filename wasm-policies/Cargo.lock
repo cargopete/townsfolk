@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "policy-genteel"
+name = "policies"
 version = "0.1.0"
 
 [[package]]
-name = "wasm-genteel"
+name = "wasm-policies"
 version = "0.1.0"
 dependencies = [
- "policy-genteel",
+ "policies",
 ]
