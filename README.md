@@ -30,14 +30,24 @@ It runs end to end:
   **native** and **wasm** (see below).
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
-  servants' grapevine between drawing-rooms ×market-day, the Pelican among the men,
-  church gathering everyone on Sunday), with delay and distortion. Each fresh pair of
-  ears nudges the subject's standing — reputation moves *because* talk spreads.
+  servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
+  **post office** that hears everything, the **station & carrier** bringing word from
+  away, church gathering everyone on Sunday), with delay and distortion.
+- **Relationship ledger** — directed pairwise affinities that gossip moves *personally*
+  (hearing ill of someone lowers *your* opinion of them, and it persists). Feuds flare
+  and deepen at the market and church door, friendships show; grudges and warmth fade
+  unless fed, while families stay warm. Reputation is no longer a single global score.
 - **Life cycle & migration** — ageing, marriage, births, death and succession turn the
-  cast over by seat; bloodlines inherit, non-heir children leave town. Outsiders drift
-  *in* too — a steady trickle of incomers (and marriage/succession from away), each with
-  a tracked origin, plus a floor that keeps the population ≥30. A 50-year run is
-  *history*, not a loop, and regenerates in ~0.5s.
+  cast over by seat; bloodlines inherit (and inherit the estate's capital — nobody
+  starts on nothing), non-heir children leave town, adults emigrate for work elsewhere.
+  Outsiders drift *in* too — a steady trickle of incomers with tracked origins — and the
+  population settles ~50. A 50-year run is *history*, not a loop, and regenerates in ~0.5s.
+- **Real weather** — `thrush weather` records Sofia's actual sky (open-meteo); a hard
+  rain rots the hay, heat burns the grass, a frost takes lambs. Your wet week becomes
+  the town's. Recorded, so replay stays deterministic.
+- **Animals** — a herd across the farms (cows, sheep, horses, dogs) with health,
+  gestation and value; calving and lambing in season, the vet's ailments, the knacker
+  for fallen stock.
 - **Providence** — you play the novelist: inject circumstance (a letter, a called
   loan, a legacy, a scandal, a stranger at the cottage) and the autonomous agents
   react in character.
@@ -54,6 +64,7 @@ cargo build --release
 thrush init                              # found a town, epoch = today (companion mode)
 thrush init --start 1976-06-08 --seed 7  # or backdate for instant decades of history
 thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wasm sandbox
+thrush weather                           # record Sofia's real sky for the days ahead
 thrush tick                              # advance the chronicle to today (the daily cron)
 thrush narrate                           # render new salient beats in voice (local Qwen)
 thrush status                            # the town at a glance
