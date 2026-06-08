@@ -1,70 +1,122 @@
 # Townsfolk — Thrushcombe St Mary
 
 A small society for simulation. A West-Country market town, **bound to the real
-calendar** — its season is your season, its day is your day. *Provincial Lady*
-status comedy, *All Creatures* animal layer, *Clarkson's Farm* friction, run over
-one social graph.
+calendar** — its season is your season, its day is your day. *Provincial Lady* status
+comedy, *All Creatures* animal layer, *Clarkson's Farm* friction, run over one social
+graph and aged across decades.
 
 > Full design: [`docs/thrushcombe.md`](docs/thrushcombe.md)
 
-## What runs today (v0.1 — the spine)
+## What it is
 
-A deterministic, event-sourced core whose whole state is a pure function of
-`(seed, epoch, today)`. The clock is **derived, not incremented**:
+A deterministic, event-sourced town whose entire state is a pure function of
+`(seed, epoch, today)` plus any interventions you make. The clock is **derived, not
+incremented** — `t = today.julian − epoch.julian` — so the driver just "catches up to
+today": exact phase-lock to the real calendar, and missed days self-heal. Same inputs
+always reproduce the same town, bit-for-bit.
 
-```
-t = today.julian − epoch.julian
-```
+It runs end to end:
 
-so the cron driver just "catches up to today" — exact phase-lock, and missed days
-self-heal. v0.1 has the clock, the season state machine, a seeded cast, and a daily
-incident generator drawn from each season's armed risks/windfalls, logged to SQLite.
-The full WASM behaviour layer, gossip diffusion, and LLM narration come next.
+- **Calendar & seasons** — one day per tick, five phases; a season state machine
+  (lambing → sowing → hay → harvest → mart → winter) that arms different risks and
+  windfalls and gates the external-shock layer (the storm on the cut hay, the Board's
+  price cut, the tithe falling due).
+- **Behaviour layer** — every present adult decides a day's intention from a flat
+  `Observation` and returns an `Action` the host arbitrates, encoding the genre
+  tensions (the genteel weigh solvency vs face; the improver schemes and comes to
+  grief). It's generative for *any* holder of a role, so a great-grandchild who
+  inherits a seat keeps the comedy going with no new code. Runs behind a
+  `decide(observation) -> action` boundary with two interchangeable engines —
+  **native** and **wasm** (see below).
+- **Gossip diffusion** — salient events become news that spreads one hop a day across
+  a channelled social graph (the vet fast across farms, the parson across homes, the
+  servants' grapevine between drawing-rooms ×market-day, the Pelican among the men,
+  church gathering everyone on Sunday), with delay and distortion. Each fresh pair of
+  ears nudges the subject's standing — reputation moves *because* talk spreads.
+- **Life cycle & migration** — ageing, marriage, births, death and succession turn the
+  cast over by seat; bloodlines inherit, non-heir children leave town. Outsiders drift
+  *in* too — a steady trickle of incomers (and marriage/succession from away), each with
+  a tracked origin, plus a floor that keeps the population ≥30. A 50-year run is
+  *history*, not a loop, and regenerates in ~0.5s.
+- **Providence** — you play the novelist: inject circumstance (a letter, a called
+  loan, a legacy, a scandal, a stranger at the cottage) and the autonomous agents
+  react in character.
+- **Narration oracle** — a capped local Qwen renders the salient beats in voice,
+  async and recorded, so replay stays deterministic.
+- **Snapshots** — the folded world is checkpointed yearly, so reads load the nearest
+  checkpoint and fold only the remainder (`status` on a 50-year world ≈ 2 ms).
 
 ## Use
 
 ```bash
-cargo build
-./target/debug/thrush init            # found a town, epoch = today
-./target/debug/thrush init --start 2026-04-01 --seed 7   # or backdate for instant history
-./target/debug/thrush tick            # advance the chronicle to today (cron runs this daily)
-./target/debug/thrush narrate         # render new salient beats in voice (local Qwen)
-./target/debug/thrush status          # the town at a glance
-./target/debug/thrush watch           # live TUI monitor (q to quit)
-./target/debug/thrush --wasm init …   # run the behaviour layer through the wasm policy guests
-./target/debug/thrush-web world.db    # browse the chronicle & legends at http://127.0.0.1:8717
+cargo build --release
+
+thrush init                              # found a town, epoch = today (companion mode)
+thrush init --start 1976-06-08 --seed 7  # or backdate for instant decades of history
+thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wasm sandbox
+thrush tick                              # advance the chronicle to today (the daily cron)
+thrush narrate                           # render new salient beats in voice (local Qwen)
+thrush status                            # the town at a glance
+thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit
+
+# play the novelist:
+thrush providence loan    --target "Mr Rupert Crale" --amount 50
+thrush providence legacy  --target "Mrs Cynthia Pelham" --amount 80
+thrush providence scandal --target "Major Pringle" --note "a matter at the bank in town"
+thrush providence stranger --note "Mr Silas Vane"
+
+thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717
 ```
 
-The behaviour layer runs behind a `decide(observation) -> action` boundary with two
-interchangeable engines: native (in-process) and **wasm** (sandboxed guests via
-wasmtime). They run the same shared policy code, so `--wasm` is bit-for-bit identical
-to native — proof the substrate is transparent. Rebuild guests with `ops/build-wasm.sh`.
+The town can run itself on a daily systemd **user timer** — see [`ops/`](ops/);
+each beat advances to today and narrates the new events, idempotent and self-healing.
 
-The town runs itself on a daily systemd user timer — see [`ops/`](ops/). Each beat
-advances to today and narrates the new salient events; both steps are idempotent and
-self-heal across missed days.
+## The two engines (native ↔ wasm)
+
+The behaviour layer is one `decide(observation) -> action` boundary with two
+implementations: the **native** in-process engine, and a **wasm** engine that runs the
+policies inside wasmtime. Both call the *same* shared `policies` crate (a `no_std`,
+dependency-free crate compiled into the host and into a 625-byte wasm guest over a pure
+scalar ABI), so `thrush --wasm` produces a **byte-identical event log** to native —
+proof the substrate swap is transparent. Rebuild the guest with `ops/build-wasm.sh`
+(needs `rustup target add wasm32-unknown-unknown`).
+
+## The reader (`thrush-web`)
+
+A read-only, period-styled web view over the SQLite log and the folded world:
+
+- **`/`** — a detailed dashboard: where every soul is *this phase*, what they're doing
+  now and next, standing/purse, plus the day's global events, the gossip in flight,
+  the calendar, and the chronicle.
+- **`/folk`** — every soul, living and gone (dead & departed).
+- **`/folk/N`** — a person: standing/purse, live placement, family (linked), and their
+  whole record.
+- **`/graph`** — the kinship network (marriages dashed, descent arrowed; click through).
 
 ## Layout
 
 ```
-core/           deterministic event-sourced kernel (calendar · seasons · behaviour ·
-                gossip · life cycle · snapshots · the PolicyEngine boundary)
-policy-genteel/ shared no_std policy crate — compiled native AND to wasm
-wasm-genteel/   the genteel policy as a wasm guest (built by ops/build-wasm.sh)
-thrush/         CLI + ratatui monitor + the wasmtime-backed engine
-thrush-web →web/ read-only chronicle & legends browser
+core/           deterministic event-sourced kernel — calendar · seasons · behaviour ·
+                gossip · life cycle · providence · snapshots · the PolicyEngine boundary
+policies/       shared no_std crate: every archetype's policy, compiled native AND to wasm
+wasm-policies/  the behaviour layer as one wasm guest (built by ops/build-wasm.sh)
+thrush/         CLI + detailed ratatui monitor + the wasmtime-backed engine
+web/            thrush-web — dashboard, legends & kinship browser
 llm/            capped, sandboxed local Qwen for narration (the recorded oracle)
+ops/            the daily timer and the wasm build script
+docs/           the design
 ```
 
-## The narration oracle
+## Time model
 
-`llm/` runs `qwen3:8b` in Docker, GPU-capped, on `:11435`. Mechanics decide *what*
-happens; the LLM only renders *how it reads*, and every response is logged verbatim
-so replay stays bit-for-bit deterministic. See [`llm/README.md`](llm/README.md).
+**Companion mode, 1 sim-day : 1 real-day, full phase-lock.** Not a saga to binge — an
+ambient diary you live beside for years. The town ages at human pace; resonance with
+real life comes from seeding the shock layer with real weather, gated by the season
+machine. (Backdate the epoch when you want to generate decades at once.)
 
-## Time model (locked)
+## Determinism
 
-**Companion mode, 1 sim-day : 1 real-day, full phase-lock.** Not a saga to binge —
-an ambient diary you live beside for years. The town ages at human pace; resonance
-with real life comes from seeding the shock layer with real weather, gated by the
-season machine.
+Same `(seed, epoch, today)` + the same interventions → the same town, verified by
+event-log checksum. The wasm engine matches native exactly; the LLM is a *recorded*
+oracle (its prose is logged once and replayed); snapshots are a cache that never
+affects generation. Change the behaviour or world layout and bump `SNAPSHOT_VERSION`.

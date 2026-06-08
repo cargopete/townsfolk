@@ -155,9 +155,10 @@ fn folk(sim: &Sim) -> String {
         let rows: String = ids.iter().map(|&i| {
             let a = &world.agents[i];
             let label = status_label(sim, a).map(|s| format!("<span class=tag>{}</span>", esc(&s))).unwrap_or_default();
+            let from = a.origin.as_ref().map(|o| format!("<span class=tag>of {}</span>", esc(o))).unwrap_or_default();
             format!(
-                "<tr class='{}'><td><a href=/folk/{}>{}</a>{}</td><td class=hidesm>{}</td><td>{}y</td><td><span class=bars>{}</span></td></tr>",
-                if dim { "gone" } else { "" }, i, esc(&a.name), label, esc(pretty_arch(&a.archetype)), a.age(day), bar(a.standing)
+                "<tr class='{}'><td><a href=/folk/{}>{}</a>{}{}</td><td class=hidesm>{}</td><td>{}y</td><td><span class=bars>{}</span></td></tr>",
+                if dim { "gone" } else { "" }, i, esc(&a.name), label, from, esc(pretty_arch(&a.archetype)), a.age(day), bar(a.standing)
             )
         }).collect();
         format!("<h2>{}</h2><table><tr><th>Name</th><th class=hidesm>Station</th><th>Age</th><th>Standing</th></tr>{}</table>", esc(title), rows)
@@ -179,9 +180,10 @@ fn person(sim: &Sim, idx: usize) -> String {
     let link = |i: usize| format!("<a href=/folk/{}>{}</a>", i, name(i));
 
     let status = status_label(sim, a).map(|s| format!(" <span class=tag>{}</span>", esc(&s))).unwrap_or_default();
+    let origin = a.origin.as_ref().map(|o| format!(" &middot; came from {}", esc(o))).unwrap_or_default();
     let mut body = format!(
-        "<h1>{}{}</h1><div class=sub>{} of {} &middot; {} years</div>",
-        esc(&a.name), status, esc(pretty_arch(&a.archetype)), esc(&a.seat), a.age(day)
+        "<h1>{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
+        esc(&a.name), status, esc(pretty_arch(&a.archetype)), esc(&a.seat), a.age(day), origin
     );
 
     body.push_str(&format!(

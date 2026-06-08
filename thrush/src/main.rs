@@ -389,6 +389,9 @@ fn draw(f: &mut Frame, d: &TownDetail, state: &mut ListState) {
     if let Some(p) = d.people.get(sel) {
         mid.push(Line::from(Span::styled(p.name.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
         mid.push(Line::from(format!("{}, {}y · of {}", arch_tag(&p.archetype), p.age, p.seat)));
+        if let Some(o) = &p.origin {
+            mid.push(Line::from(Span::styled(format!("came from {o}"), Style::default().fg(Color::DarkGray))));
+        }
         mid.push(Line::from(format!("standing {} {}", bar(p.standing), p.standing)));
         mid.push(Line::from(format!("purse    £{}", p.purse)));
         mid.push(Line::from(vec![Span::raw("now:  "), Span::styled(format!("{} · {}", p.location, p.doing), Style::default().fg(Color::Green))]));
