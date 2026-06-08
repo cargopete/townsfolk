@@ -1,0 +1,15 @@
+[package]
+name = "thrush"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "thrush"
+path = "src/main.rs"
+
+[dependencies]
+thrush-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.28"
+crossterm = "0.28"
+time = { version = "0.3", features = ["local-offset"] }

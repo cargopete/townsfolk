@@ -1,0 +1,10 @@
+[package]
+name = "thrush-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+time = { version = "0.3", features = ["local-offset", "macros"] }
+rand = "0.8"
+rand_chacha = "0.3"
