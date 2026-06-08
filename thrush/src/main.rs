@@ -27,13 +27,35 @@ use time::{Date, Month, OffsetDateTime};
 
 use thrush_core::{Report, Sim};
 
+mod wasm_engine;
+use wasm_engine::WasmPolicies;
+
 #[derive(Parser)]
 #[command(name = "thrush", about = "Thrushcombe — a small society, on the real calendar")]
 struct Cli {
     #[arg(long, default_value = "world.db")]
     db: String,
+    /// Run the behaviour layer through the sandboxed wasm policy guests.
+    #[arg(long)]
+    wasm: bool,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// If `--wasm`, swap the sim's engine to the wasmtime-backed one (falling back to native
+/// if the guest can't be loaded). Path overridable via THRUSH_WASM.
+fn apply_engine(sim: &mut Sim, wasm: bool) {
+    if !wasm {
+        return;
+    }
+    let path = std::env::var("THRUSH_WASM").unwrap_or_else(|_| "wasm/genteel.wasm".into());
+    match WasmPolicies::load(&path) {
+        Ok(e) => {
+            sim.set_engine(Box::new(e));
+            eprintln!("behaviour engine: wasm ({path})");
+        }
+        Err(e) => eprintln!("wasm engine unavailable ({e}); using native"),
+    }
 }
 
 #[derive(Subcommand)]
@@ -131,6 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Cmd::Init { start, seed } => {
             let epoch = start.as_deref().map(parse_date).unwrap_or_else(today);
             let mut sim = Sim::init(&cli.db, epoch, seed)?;
+            apply_engine(&mut sim, cli.wasm);
             let added = sim.catch_up(today())?;
             println!(
                 "Thrushcombe founded. epoch={epoch}  seed={seed}  logged {added} event(s) catching up to {}.",
@@ -140,6 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Cmd::Tick => {
             let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
             let added = sim.catch_up(today())?;
             println!("Advanced to {}. {added} new event(s) logged.", today());
         }
@@ -171,11 +195,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
             sim.catch_up(today())?;
             print_status(&sim.report(today())?);
         }
         Cmd::Watch => {
             let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
             run_watch(&mut sim)?;
         }
     }

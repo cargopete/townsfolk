@@ -283,7 +283,7 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 
 /// Advance the world by exactly one day, mutating it and returning that day's
 /// events. Deterministic in (seed, day, world-state-from-prior-days).
-fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+fn step_day(world: &mut World, day: i64, date: Date, seed: u64, engine: &dyn PolicyEngine) -> Vec<Event> {
     let mut out = Vec::new();
     let mut rng = rng_for(seed, day);
     let mk = |kind: &str, actor: &str, text: String| Event {
@@ -352,7 +352,7 @@ fn step_day(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         .collect();
     for i in actors {
         let obs = observe(world, i, day, date, top, seed);
-        let action = decide(&world.agents[i].archetype, &obs);
+        let action = engine.decide(&world.agents[i].archetype, &obs);
         if !matches!(action, Action::Idle) {
             arbitrate(world, i, action, day, date, &mut out, seed);
         }
@@ -424,25 +424,73 @@ fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64) -
     }
 }
 
-/// The pooled policy: dispatch by archetype, decide from the observation. A wasm host
-/// would route to one component per archetype instead of this match.
+impl Action {
+    /// The stable action ordinal shared with the policy crates / wasm guests.
+    pub fn from_i32(n: i32) -> Action {
+        match n {
+            1 => Action::PayCall,
+            2 => Action::GiveDinner,
+            3 => Action::Economise,
+            4 => Action::KeepUp,
+            5 => Action::TendStock,
+            6 => Action::Haggle,
+            7 => Action::Graft,
+            8 => Action::Scheme,
+            9 => Action::Press,
+            10 => Action::Minister,
+            11 => Action::Round,
+            _ => Action::Idle,
+        }
+    }
+}
+
+pub fn season_ord(s: Season) -> i32 {
+    match s {
+        Season::Winter => 0,
+        Season::Lambing => 1,
+        Season::Sowing => 2,
+        Season::Hay => 3,
+        Season::Harvest => 4,
+        Season::Mart => 5,
+    }
+}
+
+/// How an agent's behaviour is computed. The native engine runs the policies in-process;
+/// a wasm engine (in the host binary) routes archetypes to sandboxed guest modules behind
+/// this exact boundary. `decide(observation) -> action`, nothing else crosses.
+pub trait PolicyEngine {
+    fn decide(&self, archetype: &str, o: &Observation) -> Action;
+}
+
+/// The in-process engine. Genteel runs the shared `policy-genteel` crate — the very code
+/// the wasm guest also compiles — so native and wasm decisions are identical.
+pub struct NativePolicies;
+
+impl PolicyEngine for NativePolicies {
+    fn decide(&self, archetype: &str, o: &Observation) -> Action {
+        decide(archetype, o)
+    }
+}
+
+/// The pooled policy: dispatch by archetype, decide from the observation. A wasm engine
+/// routes to one guest module per archetype instead of this match.
 fn decide(archetype: &str, o: &Observation) -> Action {
     let mut rng = ChaCha8Rng::seed_from_u64(o.rng);
     match archetype {
         "genteel_status_seeker" => {
-            // the Provincial-Lady tension: solvency vs face.
-            if !rng.gen_bool(0.16) {
-                return Action::Idle;
-            }
-            let behind = o.standing < o.top_standing - 8;
-            if o.purse < -12 {
-                // broke — but face sometimes wins anyway (the comedy of the overdraft)
-                if behind && rng.gen_bool(0.4) { Action::KeepUp } else { Action::Economise }
-            } else if behind && o.purse > 0 {
-                if rng.gen_bool(0.5) { Action::GiveDinner } else { Action::PayCall }
-            } else {
-                Action::PayCall
-            }
+            // the Provincial-Lady tension, computed by the shared policy crate so the
+            // native and wasm engines agree bit-for-bit.
+            Action::from_i32(policy_genteel::genteel_decide(
+                o.standing,
+                o.purse,
+                o.age,
+                o.married as i32,
+                season_ord(o.season),
+                o.is_market as i32,
+                o.is_sunday as i32,
+                o.top_standing,
+                o.rng,
+            ))
         }
         "hill_farmer" => {
             if o.is_market && rng.gen_bool(0.25) {
@@ -986,6 +1034,7 @@ pub struct Sim {
     conn: Connection,
     seed: u64,
     epoch: Date,
+    engine: Box<dyn PolicyEngine>,
 }
 
 pub struct Report {
@@ -1010,7 +1059,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 1;
+const SNAPSHOT_VERSION: i64 = 2;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365;
 
@@ -1031,7 +1080,7 @@ impl Sim {
         ensure_aux(&conn)?;
         let seed: i64 = conn.query_row("SELECT val FROM meta WHERE key='seed'", [], |r| r.get(0))?;
         let ej: i64 = conn.query_row("SELECT val FROM meta WHERE key='epoch_julian'", [], |r| r.get(0))?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap() })
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies) })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -1048,7 +1097,13 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch })
+        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies) })
+    }
+
+    /// Swap the behaviour engine (e.g. a wasm-backed one). Must be set before any
+    /// `catch_up`/`report` so generation is consistent.
+    pub fn set_engine(&mut self, engine: Box<dyn PolicyEngine>) {
+        self.engine = engine;
     }
 
     /// Salient events not yet rendered in voice, as (event_id, date, template_text).
@@ -1117,7 +1172,7 @@ impl Sim {
     fn world_at(&self, day: i64) -> World {
         let (mut world, from) = self.load_checkpoint(day);
         for d in from..=day {
-            let _ = step_day(&mut world, d, self.date_of(d), self.seed);
+            let _ = step_day(&mut world, d, self.date_of(d), self.seed, &*self.engine);
         }
         world
     }
@@ -1137,7 +1192,7 @@ impl Sim {
         let mut added = 0;
         for d in from..=target {
             let date = Date::from_julian_day((epoch_jd + d) as i32).unwrap();
-            for e in step_day(&mut world, d, date, seed) {
+            for e in step_day(&mut world, d, date, seed, &*self.engine) {
                 tx.execute(
                     "INSERT INTO events(day,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5)",
                     params![e.day, e.date, e.kind, e.actor, e.text],

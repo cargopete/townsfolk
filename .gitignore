@@ -1,4 +1,5 @@
 /target
+wasm-genteel/target
 world.db
 world.db-*
 *.db
