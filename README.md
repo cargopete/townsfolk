@@ -79,6 +79,15 @@ It runs end to end:
   the conversation the oracle judges its residue — a **warming or cooling, a memory kept,
   and sometimes a change of heart about what they want** — and only that recorded effect
   enters the fold, so souls genuinely learn from talking while the world stays exact.
+- **Set two souls talking** — or stand back entirely: pick *two* souls on the *A word…*
+  page and watch them fall into conversation of their own accord, Qwen playing both in
+  their own voices, mindful of what each remembers of the other. A short exchange unfolds
+  a line at a time; when it winds up, the oracle judges the residue for **each** of them —
+  a memory kept, a warming or cooling, now and then a change of heart — and **the town
+  hears of it**: a notable talk throws off a beat and a rumour ("seen with their heads
+  together", or "had words, by all accounts") that spreads on the gossip graph. So a
+  conversation you set going drives the narrative onward for everyone, all of it recorded
+  once and folded deterministically.
 - **Souls talk among themselves** — and not only to you: each day two souls fall into
   conversation of their own accord (a courting pair, friends, rivals, or two who simply
   met), Qwen plays both, and the same residue is recorded for each — a memory kept, a

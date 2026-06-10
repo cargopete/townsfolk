@@ -2663,12 +2663,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 21;
+const SNAPSHOT_VERSION: i64 = 22;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2787,6 +2787,13 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         if let Some(t) = ti {
                             world.nudge_aff(si, t, 14);
                             world.nudge_aff(t, si, 8);
+                            // the town notices when two souls grow close — but only once a pair
+                            // (a conversation records a decree each way; emit from the lower index)
+                            if si < t {
+                                let (a, b) = (world.agents[si].name.clone(), world.agents[t].name.clone());
+                                out.push(Event { day, date: date.to_string(), kind: "talk".into(), actor: a.clone(), text: format!("{a} and {b} were seen with their heads together, and parted the warmer for it.") });
+                                world.spawn_news(&a, &format!("how thick {a} and {b} have grown"), 1, day, &[b.as_str()]);
+                            }
                         }
                         nudge_mood(&mut world.agents[si], 7);
                     }
@@ -2794,6 +2801,11 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         if let Some(t) = ti {
                             world.nudge_aff(si, t, -14);
                             world.nudge_aff(t, si, -6);
+                            if si < t {
+                                let (a, b) = (world.agents[si].name.clone(), world.agents[t].name.clone());
+                                out.push(Event { day, date: date.to_string(), kind: "talk".into(), actor: a.clone(), text: format!("{a} and {b} had words, by all accounts, and parted stiffly.") });
+                                world.spawn_news(&a, &format!("the words between {a} and {b}"), -1, day, &[b.as_str()]);
+                            }
                         }
                         nudge_mood(&mut world.agents[si], -7);
                     }

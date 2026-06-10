@@ -486,8 +486,36 @@ fn talk_page(sim: &Sim, url: &str) -> String {
          <div class=card><input id=msg placeholder='Say something…' style='width:78%' autocomplete=off> \
            <button onclick=say()>Say</button> <button onclick=conclude() style='float:right'>End &amp; record</button></div>\
          <div id=out class=sub></div>\
+         <h1 style='margin-top:1.4em'>…or set two souls talking</h1>\
+         <div class=sub>Pick two, and watch them fall into conversation of their own accord. What passes between them stays with them — and the town hears of it.</div>\
+         <div class=card>\
+           <label><select id=pa><option value=-1>— a soul —</option>{pa}</select></label> &nbsp;and&nbsp; \
+           <label><select id=pb><option value=-1>— a soul —</option>{pb}</select></label> &nbsp; \
+           <button id=bbtn onclick=between()>Let them talk →</button>\
+         </div>\
+         <div id=blog></div>\
+         <div id=bout class=sub></div>\
          <script>\
          var hist=[];\
+         var busy=false;\
+         function blin(who,txt){{var d=document.getElementById('blog');d.innerHTML+='<div class=entry><span class=date>'+who+'</span><br><span class=where>'+txt+'</span></div>';window.scrollTo(0,document.body.scrollHeight);}}\
+         async function between(){{\
+           if(busy)return;var pa=document.getElementById('pa'),pb=document.getElementById('pb');\
+           if(pa.value<0||pb.value<0||pa.value===pb.value){{document.getElementById('bout').textContent='Pick two different souls.';return;}}\
+           busy=true;var btn=document.getElementById('bbtn');btn.disabled=true;\
+           var a=+pa.value,b=+pb.value,h=[],blog=document.getElementById('blog');blog.innerHTML='';document.getElementById('bout').textContent='…';\
+           for(var k=0;k<8;k++){{\
+             var r=await fetch('/talk/between',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{a:a,b:b,history:h}})}});\
+             var j=await r.json();if(!j.line){{break;}}\
+             h.push([j.speaker,j.line]);blin(j.name,j.line);\
+             if(j.done)break;await new Promise(function(res){{setTimeout(res,1000);}});\
+           }}\
+           document.getElementById('bout').textContent='recording…';\
+           var e=await fetch('/talk/between/end',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{a:a,b:b,history:h}})}});\
+           var ej=await e.json();\
+           document.getElementById('bout').innerHTML=((ej.notes||[]).join('<br>'))+'<br><i>The town will hear of it.</i>';\
+           busy=false;btn.disabled=false;\
+         }}\
          function add(who,txt,cls){{var d=document.getElementById('log');d.innerHTML+='<div class=entry><span class=date>'+who+'</span><br><span class='+cls+'>'+txt+'</span></div>';window.scrollTo(0,document.body.scrollHeight);}}\
          function nm(s){{return s.options[s.selectedIndex].text;}}\
          async function say(){{\
@@ -505,7 +533,7 @@ fn talk_page(sim: &Sim, url: &str) -> String {
          }}\
          document.getElementById('msg').addEventListener('keydown',function(e){{if(e.key==='Enter')say();}});\
          </script>",
-        src = opts(-1), tgt = opts(preset_to)
+        src = opts(-1), tgt = opts(preset_to), pa = opts(-1), pb = opts(-1)
     );
     page("Thrushcombe — A word with…", &body)
 }
@@ -593,6 +621,98 @@ fn handle_end(sim: &mut Sim, body: &str) -> String {
     }
 }
 
+/// Generate one in-character line from `speaker` (addressing `other`), given the conversation
+/// so far as a list of (speaker_idx, line) turns. The opener gets a gentle seed.
+fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, String)]) -> Option<String> {
+    let system = persona(sim, other, speaker)?; // the speaker's own voice, aware of who they address
+    if transcript.is_empty() {
+        let w = sim.world_snapshot(today());
+        let oname = w.agents.get(other)?.name.clone();
+        let seed = format!("(You come upon {oname} about the parish. Open the conversation — a greeting and a remark, whatever you would naturally say.)");
+        return chat_reply(&system, &[], &seed);
+    }
+    let mut history: Vec<(String, String)> = Vec::new();
+    for (who, line) in &transcript[..transcript.len() - 1] {
+        let role = if *who == speaker { "assistant" } else { "user" };
+        history.push((role.to_string(), line.clone()));
+    }
+    // the last turn is the other's line — feed it as the message this speaker now answers
+    chat_reply(&system, &history, &transcript[transcript.len() - 1].1)
+}
+
+/// Parse {a, b, history:[[idx,line],…]} into (a, b, transcript).
+fn parse_between(body: &str) -> (usize, usize, Vec<(usize, String)>) {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let a = v.get("a").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let b = v.get("b").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let transcript = v
+        .get("history")
+        .and_then(|h| h.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let p = t.as_array()?;
+                    Some((p.first()?.as_u64()? as usize, p.get(1)?.as_str()?.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (a, b, transcript)
+}
+
+/// How many lines a watched conversation runs to before it is wound up.
+const BETWEEN_CAP: usize = 6;
+
+/// POST /talk/between — produce the next single line of a two-soul conversation.
+fn handle_between(sim: &Sim, body: &str) -> String {
+    let (a, b, transcript) = parse_between(body);
+    if a == b || transcript.len() >= BETWEEN_CAP {
+        return serde_json::json!({ "done": true }).to_string();
+    }
+    let speaker = if transcript.is_empty() {
+        a
+    } else if transcript.last().map(|t| t.0) == Some(a) {
+        b
+    } else {
+        a
+    };
+    let other = if speaker == a { b } else { a };
+    let line = converse_line(sim, speaker, other, &transcript).unwrap_or_else(|| "…".into());
+    let w = sim.world_snapshot(today());
+    let name = w.agents.get(speaker).map(|x| x.name.clone()).unwrap_or_default();
+    serde_json::json!({ "speaker": speaker, "name": name, "line": line, "done": transcript.len() + 1 >= BETWEEN_CAP }).to_string()
+}
+
+/// POST /talk/between/end — judge the conversation's residue for *both* souls, record each
+/// (so it folds deterministically), and let the town hear of it.
+fn handle_between_end(sim: &mut Sim, body: &str) -> String {
+    let (a, b, transcript) = parse_between(body);
+    let w = sim.world_snapshot(today());
+    let (an, bn) = match (w.agents.get(a), w.agents.get(b)) {
+        (Some(x), Some(y)) => (x.name.clone(), y.name.clone()),
+        _ => return serde_json::json!({ "ok": false, "notes": [] }).to_string(),
+    };
+    let text = transcript
+        .iter()
+        .map(|(who, line)| format!("{}: {line}", if *who == a { &an } else { &bn }))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // judge each direction before recording (assessment reads only the transcript)
+    let toward_a = assess_dialogue(&an, &bn, &text); // how A feels about B
+    let toward_b = assess_dialogue(&bn, &an, &text); // how B feels about A
+    let mut notes = Vec::new();
+    if let Some((warmth, memory, sway)) = toward_b {
+        let _ = sim.record_dialogue(today(), &an, &bn, &text, &memory, &warmth, &sway);
+        notes.push(format!("{bn} came away {warmth}. They will remember: \u{201c}{memory}\u{201d}"));
+    }
+    if let Some((warmth, memory, sway)) = toward_a {
+        let _ = sim.record_dialogue(today(), &bn, &an, &text, &memory, &warmth, &sway);
+        notes.push(format!("{an} came away {warmth}. They will remember: \u{201c}{memory}\u{201d}"));
+    }
+    let _ = sim.catch_up(today(), phase_now());
+    serde_json::json!({ "ok": true, "notes": notes }).to_string()
+}
+
 fn main() {
     let db = std::env::args().nth(1).unwrap_or_else(|| "world.db".into());
     let addr = std::env::var("THRUSH_WEB_ADDR").unwrap_or_else(|_| "127.0.0.1:8717".into());
@@ -613,10 +733,15 @@ fn main() {
         let is_post = matches!(req.method(), tiny_http::Method::Post);
         let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
         let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
-        if is_post && (url == "/talk/say" || url == "/talk/end") {
+        if is_post && matches!(url.as_str(), "/talk/say" | "/talk/end" | "/talk/between" | "/talk/between/end") {
             let mut body = String::new();
             let _ = req.as_reader().read_to_string(&mut body);
-            let json = if url == "/talk/say" { handle_say(&sim, &body) } else { handle_end(&mut sim, &body) };
+            let json = match url.as_str() {
+                "/talk/say" => handle_say(&sim, &body),
+                "/talk/end" => handle_end(&mut sim, &body),
+                "/talk/between" => handle_between(&sim, &body),
+                _ => handle_between_end(&mut sim, &body),
+            };
             let _ = req.respond(Response::from_string(json).with_header(json_hdr));
         } else {
             let html = route(&sim, &url);
