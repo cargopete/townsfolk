@@ -89,6 +89,7 @@ pub struct Agent {
     pub courting: i32,            // index of the soul they are courting, else -1
     pub courtship: i16,           // how far the courtship has come along
     pub acted_day: i64,           // last day this soul made a social set-piece — one per day, no per-phase repeats
+    pub rival: i32,               // a declared nemesis (index) — a durable grudge that outlives the standing of the day, else -1
 }
 
 impl Agent {
@@ -193,6 +194,7 @@ impl World {
             courting: -1,
             courtship: 0,
             acted_day: -1,
+            rival: -1,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1482,6 +1484,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         courting: -1,
         courtship: 0,
         acted_day: -1,
+        rival: -1,
     }
 }
 
@@ -1590,30 +1593,85 @@ pub fn goal_label(world: &World, kind: u8, target: i32) -> String {
     }
 }
 
+/// Declare, sustain, and lay to rest the town's rivalries. A grudge that hardens past a
+/// threshold becomes a *named nemesis* a soul carries until it is resolved — the rival dies
+/// or leaves, the quarrel is made up, or the soul gets the better of them. Unlike a goal
+/// recomputed from the day's standings, a declared rivalry is a durable relationship: once
+/// set it endures, and drives the soul's whole ambition until something settles it.
+fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>) {
+    let mk = |actor: &str, text: String| Event {
+        day,
+        date: date.to_string(),
+        kind: "rivalry".into(),
+        actor: actor.into(),
+        text,
+    };
+    let n = world.agents.len();
+    for i in 0..n {
+        if !world.agents[i].active() || world.agents[i].archetype != "genteel_status_seeker" {
+            continue;
+        }
+        let r = world.agents[i].rival;
+        if r >= 0 {
+            let r = r as usize;
+            if !world.agents[r].active() {
+                // the rival is gone — the old quarrel is buried with them
+                world.agents[i].rival = -1;
+                if world.agents[i].goal == 4 {
+                    let (g, t) = assess_goal(world, i, day);
+                    world.agents[i].goal = g;
+                    world.agents[i].goal_target = t;
+                }
+            } else if world.aff(i, r) > -12 {
+                // the feeling has cooled into civility — they have made up the quarrel
+                let (a, b) = (world.agents[i].name.clone(), world.agents[r].name.clone());
+                world.agents[i].rival = -1;
+                if world.agents[i].goal == 4 {
+                    let (g, t) = assess_goal(world, i, day);
+                    world.agents[i].goal = g;
+                    world.agents[i].goal_target = t;
+                }
+                out.push(mk(&a, format!("{a} and {b} have made up their old quarrel, to the parish's mild disappointment.")));
+            }
+            continue;
+        }
+        // no rival yet: a grudge hardened past bearing against a living peer-or-superior becomes one
+        let target = (0..n)
+            .filter(|&j| {
+                j != i
+                    && Some(j) != world.agents[i].spouse
+                    && world.agents[j].active()
+                    && world.agents[j].parent != Some(i)
+                    && world.agents[i].parent != Some(j)
+                    && world.agents[j].standing >= world.agents[i].standing + 8 // a superior at a real social distance
+                    && world.aff(i, j) <= -40
+            })
+            .min_by_key(|&j| world.aff(i, j));
+        if let Some(t) = target {
+            world.agents[i].rival = t as i32;
+            world.agents[i].goal = 4;
+            world.agents[i].goal_target = t as i32;
+            let (a, b) = (world.agents[i].name.clone(), world.agents[t].name.clone());
+            out.push(mk(&a, format!("{a} has set themselves against {b}, and means to get the better of them.")));
+            world.spawn_news(&a, &format!("the bad blood between {a} and {b}"), -2, day, &[]);
+        }
+    }
+}
+
 /// Derive a soul's ambition from their situation.
 fn assess_goal(world: &World, i: usize, day: i64) -> (u8, i32) {
     let a = &world.agents[i];
     if a.archetype == "child" {
         return (0, -1);
     }
-    // a consuming hatred of a superior overrides even solvency — the one thing they live for
-    if a.archetype == "genteel_status_seeker" {
-        if let Some(rival) = (0..world.agents.len()).find(|&j| {
-            j != i && world.agents[j].active() && world.agents[j].standing > a.standing && world.aff(i, j) <= -40
-        }) {
-            return (4, rival as i32);
-        }
+    // A declared nemesis is a soul's consuming ambition, above solvency and all else. The
+    // rivalry is a *durable relationship* (maintained by `tend_rivalries`), not a fact
+    // recomputed from the standings of the day — so it endures, and the goal endures with it.
+    if a.rival >= 0 && world.agents.get(a.rival as usize).map_or(false, |r| r.active()) {
+        return (4, a.rival);
     }
     if a.purse < -15 {
         return (1, -1); // ClearDebt — solvency comes before all
-    }
-    // a settled rivalry consumes a soul above even seeing a child married off
-    if a.archetype == "genteel_status_seeker" {
-        if let Some(rival) = (0..world.agents.len()).find(|&j| {
-            j != i && world.agents[j].active() && world.agents[j].standing > a.standing && world.aff(i, j) <= -30
-        }) {
-            return (4, rival as i32); // Outdo — the grudge run deep
-        }
     }
     if let Some(child) = (0..world.agents.len()).find(|&c| {
         let x = &world.agents[c];
@@ -1624,11 +1682,7 @@ fn assess_goal(world: &World, i: usize, day: i64) -> (u8, i32) {
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
     match a.archetype.as_str() {
         "genteel_status_seeker" => {
-            if let Some(rival) = (0..world.agents.len()).find(|&j| {
-                j != i && world.agents[j].active() && world.agents[j].standing > a.standing + 4 && world.aff(i, j) <= -22
-            }) {
-                (4, rival as i32) // Outdo a disliked superior
-            } else if a.standing < top - 8 {
+            if a.standing < top - 8 {
                 (2, -1) // Rise
             } else {
                 (0, -1)
@@ -1645,7 +1699,7 @@ fn goal_fulfilled(world: &World, i: usize, top: i32) -> bool {
         1 => a.purse >= 0,
         2 => a.standing >= top - 2,
         3 => a.goal_target < 0 || world.agents.get(a.goal_target as usize).map_or(true, |c| c.spouse.is_some() || !c.active()),
-        4 => a.goal_target >= 0 && world.agents.get(a.goal_target as usize).map_or(true, |r| a.standing > r.standing),
+        4 => a.goal_target >= 0 && world.agents.get(a.goal_target as usize).map_or(true, |r| a.standing > r.standing + 2), // decisively overtaken
         5 => a.purse >= 100,
         _ => false,
     }
@@ -1966,6 +2020,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     world.agents.extend(newcomers);
 
+    // --- rivalries: declare, sustain, and lay to rest the durable grudges ---
+    tend_rivalries(world, day, date, &mut out);
+
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
     for i in 0..world.agents.len() {
@@ -1976,8 +2033,12 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             let nm = world.agents[i].name.clone();
             out.push(mk("triumph", &nm, goal_triumph(world, i)));
             nudge_mood(&mut world.agents[i], 25);
+            let won = world.agents[i].goal;
             world.agents[i].goal = 0; // their ambition met, they rest content (until the next resolve)
             world.agents[i].goal_target = -1;
+            if won == 4 {
+                world.agents[i].rival = -1; // the rivalry is won and laid to rest
+            }
         } else if day % 365 == (i as i64) % 365 {
             let (g, t) = assess_goal(world, i, day);
             world.agents[i].goal = g;
@@ -2602,12 +2663,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 20;
+const SNAPSHOT_VERSION: i64 = 21;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 

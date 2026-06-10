@@ -55,6 +55,13 @@ It runs end to end:
   pointed exclusions and the gossip they throw off ("who Lady Aldermaston left off the
   dinner list"). The ledger genuinely *develops*: 58 independent moods become 58 social
   strategies, and a bitter enough hatred of a superior becomes a soul's whole ambition.
+- **Declared rivalries** — when a grudge against a superior hardens past bearing it becomes
+  a **named nemesis** the soul carries as a durable relationship, not a mood of the moment:
+  they *set themselves against* that person and mean to get the better of them, and pursue it
+  for as long as it takes — a climb of months or a full year. It ends only when something
+  settles it: the rival dies, the quarrel is made up (a rare grace), or the soul *decisively
+  overtakes* them — a triumph the whole town marks. About one such rivalry simmers at a time,
+  so it stays a real event, with its own arc, rather than a label that flickers on and off.
 - **Planning — courtship** — a soul forms a *multi-day intention* and pursues it over
   weeks: a courtship begun is walked out and called on, affection slowly warming (and
   warming the slower for a suit pressed above one's station), until it builds to a
