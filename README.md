@@ -33,14 +33,28 @@ It runs end to end:
 - **Individuation — goals, mood, temperament** — each soul carries a personal
   **ambition** fitting their situation (clear the debt, rise in the world, marry a
   child off, get the better of a rival, make a fortune), which *shapes what they do*;
-  fulfilling it is a **triumph**. A **mood** moves with what befalls them — and not
-  uniformly: **temperament** is by type (the gentry touchy about face, the hill folk
-  stoic and dour, the improver mercurial), so a snub wounds one far more than another.
+  fulfilling it is a **triumph**. A **mood** moves with what befalls them — not only the
+  rare blows of the life cycle but the **day's own fortunes**: a scheme come to grief or a
+  bad morning at the mart dispirits, a triumphant dinner or a hard bargain well struck
+  buoys. And not uniformly: **temperament** is by type (the gentry touchy about face, the
+  hill folk stoic and dour, the improver mercurial), so the same snub wounds one far more
+  than another — so the town's spirits genuinely diverge, soul by soul, day by day.
 - **Situation-aware** — `decide()` reacts to its own goal and mood *and to who's about
   it this phase*: the gentry are far busier at the calling hour when a friend or a
   rival is present (company to keep, or a standing to defend), the debtor economises,
   the riser spends on face. The flat scalar ABI just gains a few derived fields, so
   native/wasm parity still holds bit-for-bit.
+- **Targeted society — calls, dinners, and the pointed snub** — a social act is aimed,
+  not broadcast. A soul calls on a *named* person and asks *named* guests to dine: their
+  warmest friends, the one they're courting, and — for a riser — a grand acquaintance
+  worth cultivating, picked from the top few so the whole town isn't forever courting the
+  one titled lady. And who is *left off* the list matters as much as who is asked: a riser
+  quietly omits the rival just above them, which cools the two and plants a grudge — and
+  because real grudges and true bonds now persist where faint feelings fade, that coolness
+  compounds across the years into a settled rivalry, expressed in a standing pattern of
+  pointed exclusions and the gossip they throw off ("who Lady Aldermaston left off the
+  dinner list"). The ledger genuinely *develops*: 58 independent moods become 58 social
+  strategies, and a bitter enough hatred of a superior becomes a soul's whole ambition.
 - **Planning — courtship** — a soul forms a *multi-day intention* and pursues it over
   weeks: a courtship begun is walked out and called on, affection slowly warming (and
   warming the slower for a suit pressed above one's station), until it builds to a

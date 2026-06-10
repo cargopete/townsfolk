@@ -88,6 +88,7 @@ pub struct Agent {
     // --- planning: a multi-day intention with a throughline ---
     pub courting: i32,            // index of the soul they are courting, else -1
     pub courtship: i16,           // how far the courtship has come along
+    pub acted_day: i64,           // last day this soul made a social set-piece — one per day, no per-phase repeats
 }
 
 impl Agent {
@@ -191,6 +192,7 @@ impl World {
             mood: 0,
             courting: -1,
             courtship: 0,
+            acted_day: -1,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -334,6 +336,11 @@ impl World {
             Some(i) => i,
             None => return,
         };
+        // Don't set the same rumour loose twice: if this subject already has news of this
+        // very topic in flight, the town is talking about it — no second copy to flood the feed.
+        if self.news.iter().any(|n| n.subject == subject && n.topic == topic) {
+            return;
+        }
         let mut knowers: Vec<usize> = seeds.iter().filter_map(|s| self.idx(s)).collect();
         if !knowers.contains(&subject) {
             knowers.push(subject);
@@ -481,9 +488,136 @@ fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: 
         let (friend, rival) = present_ties(world, i, &places);
         let obs = observe(world, i, day, date, top, seed, phase, friend, rival);
         let action = engine.decide(&world.agents[i].archetype, &obs);
-        if !matches!(action, Action::Idle) {
-            arbitrate(world, i, action, day, date, phase, out, seed);
+        if matches!(action, Action::Idle) {
+            continue;
         }
+        // One social set-piece per soul per day: the gentry act in two phases, but a soul
+        // does not give two dinners or pay two rounds of calls on the same day. Routine
+        // practice (the stock, the rounds, the day's work) may recur across phases.
+        let setpiece = is_setpiece(&action);
+        if setpiece && world.agents[i].acted_day == day {
+            continue;
+        }
+        arbitrate(world, i, action, day, date, phase, out, seed);
+        if setpiece {
+            world.agents[i].acted_day = day;
+        }
+    }
+}
+
+/// A "loud" act — a deliberate social move that draws notice (and often gossip), as opposed
+/// to the day's routine practice. Capped to one per soul per day so the chronicle and the
+/// rumour mill don't carry the same dinner or the same round of calls twice.
+fn is_setpiece(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::PayCall | Action::GiveDinner | Action::Economise | Action::KeepUp | Action::Scheme
+    )
+}
+
+/// A living adult who is not `i` nor their spouse — the pool of people a soul might cultivate.
+fn society_member(world: &World, i: usize, j: usize) -> bool {
+    j != i
+        && Some(j) != world.agents[i].spouse
+        && world.agents[j].active()
+        && world.agents[j].archetype != "child"
+}
+
+/// One of the grandest few acquaintances a soul might cultivate — those of equal or higher
+/// standing they don't actively dislike, picked with a little chance so the whole town isn't
+/// forever courting the single titled lady.
+fn cultivate_upward(world: &World, i: usize, rng: &mut ChaCha8Rng) -> Option<usize> {
+    let a = &world.agents[i];
+    let mut up: Vec<usize> = (0..world.agents.len())
+        .filter(|&j| society_member(world, i, j) && world.agents[j].standing >= a.standing && world.aff(i, j) > -25)
+        .collect();
+    if up.is_empty() {
+        return None;
+    }
+    up.sort_by_key(|&j| std::cmp::Reverse(world.agents[j].standing));
+    up.truncate(4); // the top few worth knowing
+    Some(up[rng.gen_range(0..up.len())])
+}
+
+/// Whom a soul calls on this afternoon. A riser or a soul bent on outdoing a superior
+/// cultivates *upward* — one of the grandest acquaintances they don't dislike; everyone
+/// else calls on their warmest friend. A call is a social strategy, not a wander.
+fn call_target(world: &World, i: usize, rng: &mut ChaCha8Rng) -> Option<usize> {
+    if world.agents[i].goal == 2 || world.agents[i].goal == 4 {
+        if let Some(t) = cultivate_upward(world, i, rng) {
+            return Some(t);
+        }
+    }
+    if let Some(&(t, _)) = world.ties(i, true, 1).first() {
+        return Some(t);
+    }
+    (0..world.agents.len())
+        .filter(|&j| society_member(world, i, j))
+        .max_by_key(|&j| world.aff(i, j))
+}
+
+/// Who is asked to dine — and who is pointedly left off the list. Guests are the host's
+/// warmest ties, the soul they are courting, and (for a riser) a grand acquaintance worth
+/// cultivating. The snub is the rival of standing — by name when the host's whole ambition
+/// is to outdo them. This is how an evening's invitations become a campaign.
+fn dinner_guests(world: &World, i: usize, rng: &mut ChaCha8Rng) -> (Vec<usize>, Option<usize>) {
+    let a_goal = world.agents[i].goal;
+    let a_target = world.agents[i].goal_target;
+    let a_courting = world.agents[i].courting;
+    let a_standing = world.agents[i].standing;
+    let mut guests: Vec<usize> = world.ties(i, true, 3).into_iter().map(|(t, _)| t).collect();
+    if a_goal == 2 {
+        if let Some(t) = cultivate_upward(world, i, rng) {
+            if !guests.contains(&t) {
+                guests.push(t);
+            }
+        }
+    }
+    if a_courting >= 0 {
+        let c = a_courting as usize;
+        if world.agents[c].active() && !guests.contains(&c) {
+            guests.push(c);
+        }
+    }
+    guests.truncate(4);
+    let snub = if a_goal == 4 && a_target >= 0 && world.agents[a_target as usize].active() && !guests.contains(&(a_target as usize)) {
+        // a declared rival: the soul's whole ambition is to outdo them
+        Some(a_target as usize)
+    } else if let Some(r) = world
+        .ties(i, false, 3)
+        .into_iter()
+        .map(|(t, _)| t)
+        .find(|&t| world.agents[t].standing >= a_standing - 4 && !guests.contains(&t))
+    {
+        // an established cold tie of standing — pointedly left off
+        Some(r)
+    } else if a_goal == 2 && rng.gen_bool(0.4) {
+        // a riser quietly omits the genteel rival just above them — competition, not yet enmity.
+        // The coolness this breeds is what later hardens into a declared rivalry.
+        (0..world.agents.len())
+            .filter(|&j| {
+                society_member(world, i, j)
+                    && world.agents[j].archetype == "genteel_status_seeker"
+                    && world.agents[j].standing > a_standing
+                    && world.agents[j].standing <= a_standing + 12
+                    && world.aff(i, j) < 10
+                    && !guests.contains(&j)
+            })
+            .min_by_key(|&j| world.agents[j].standing)
+    } else {
+        None
+    };
+    (guests, snub)
+}
+
+/// Format a handful of names as English prose: "A", "A and B", "A, B and C".
+fn name_list(world: &World, idxs: &[usize]) -> String {
+    let names: Vec<&str> = idxs.iter().map(|&j| world.agents[j].name.as_str()).collect();
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].to_string(),
+        2 => format!("{} and {}", names[0], names[1]),
+        n => format!("{}, and {}", names[..n - 1].join(", "), names[n - 1]),
     }
 }
 
@@ -886,18 +1020,76 @@ fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, 
     match action {
         Action::PayCall => {
             clamp_standing(&mut world.agents[i], 2);
-            out.push(mk("status", format!("{name} paid a round of calls, and was thought to look very well.")));
+            nudge_mood(&mut world.agents[i], 3);
+            if let Some(t) = call_target(world, i, &mut rng) {
+                let tname = world.agents[t].name.clone();
+                // a call is a small kindness, warmly received and warmly paid
+                world.nudge_aff(t, i, 2);
+                world.nudge_aff(i, t, 1);
+                let line = pick(&mut rng, &[
+                    "{n} paid an afternoon call on {t}, and was thought to look very well.",
+                    "{n} called on {t}, leaving a card and a good impression.",
+                    "{n} took tea with {t}, and the visit was a success on both sides.",
+                    "{n} called on {t} — cultivating the acquaintance, said the unkind.",
+                ]).replace("{n}", &name).replace("{t}", &tname);
+                out.push(mk("status", line));
+            } else {
+                let line = pick(&mut rng, &[
+                    "{n} paid a round of calls, and was thought to look very well.",
+                    "{n} went visiting, and was everywhere civilly received.",
+                ]).replace("{n}", &name);
+                out.push(mk("status", line));
+            }
         }
         Action::GiveDinner => {
             clamp_standing(&mut world.agents[i], 3);
             world.agents[i].purse -= 6;
-            out.push(mk("status", format!("{name} gave a little dinner — rather beyond the means of {seat}, but handsomely done.")));
-            world.spawn_news(&name, &format!("{name}'s handsome little dinner"), 2, day, &[]);
+            nudge_mood(&mut world.agents[i], 7);
+            let (guests, snub) = dinner_guests(world, i, &mut rng);
+            for &g in &guests {
+                world.nudge_aff(g, i, 3); // a good evening warms the guest to the host
+                world.nudge_aff(i, g, 2);
+            }
+            let mut line = if guests.is_empty() {
+                match rng.gen_range(0..2) {
+                    0 => format!("{name} gave a little dinner — rather beyond the means of {seat}, but handsomely done."),
+                    _ => format!("{name} held a small evening party, the candles lit and the good silver out."),
+                }
+            } else {
+                let who = name_list(world, &guests);
+                match rng.gen_range(0..3) {
+                    0 => format!("{name} had {who} to dine at {seat}; the table did not disgrace them."),
+                    1 => format!("{name} gave a little dinner for {who} — beyond the means of {seat}, but handsomely done."),
+                    _ => format!("{name} held an evening party, {who} among the company, the good silver out."),
+                }
+            };
+            if let Some(s) = snub {
+                let sname = world.agents[s].name.clone();
+                if world.agents[s].standing > world.agents[i].standing {
+                    // cutting someone *above* you is envy: it hardens the host's own heart toward
+                    // the blocker far more than theirs — this is the seed of a declared rivalry.
+                    world.nudge_aff(i, s, -8);
+                    world.nudge_aff(s, i, -3);
+                } else {
+                    world.nudge_aff(s, i, -4); // an established rival, cut: they cool toward the host
+                    world.nudge_aff(i, s, -2);
+                }
+                line.push_str(&format!(" {sname}, it was noted, was not asked."));
+                world.spawn_news(&name, &format!("who {name} left off the dinner list"), -2, day, &[]);
+            }
+            out.push(mk("status", line));
+            world.spawn_news(&name, &format!("the dinner-party at {seat}"), 2, day, &[]);
         }
         Action::Economise => {
             world.agents[i].purse += 4;
             clamp_standing(&mut world.agents[i], -1);
-            out.push(mk("household", format!("{name} made do and mended, and hoped no one would notice the turned collar.")));
+            nudge_mood(&mut world.agents[i], -5);
+            let line = pick(&mut rng, &[
+                "{n} made do and mended, and hoped no one would notice the turned collar.",
+                "{n} let the fire go cold by four, and called it economy.",
+                "{n} gave the cook the evening off, and dined plainly.",
+            ]).replace("{n}", &name);
+            out.push(mk("household", line));
             if rng.gen_bool(0.4) {
                 world.spawn_news(&name, &format!("the straitened economies at {seat}"), -2, day, &[]);
             }
@@ -905,35 +1097,91 @@ fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, 
         Action::KeepUp => {
             world.agents[i].purse -= 4;
             clamp_standing(&mut world.agents[i], 1);
-            out.push(mk("status", format!("{name} kept up appearances, whatever the bank might think of it.")));
+            nudge_mood(&mut world.agents[i], -2);
+            let line = pick(&mut rng, &[
+                "{n} kept up appearances, whatever the bank might think of it.",
+                "{n} ordered the new gloves all the same, and said nothing of the cost.",
+                "{n} would not be seen to feel the pinch, and did not.",
+            ]).replace("{n}", &name);
+            out.push(mk("status", line));
         }
         Action::TendStock => {
-            out.push(mk("practice", format!("{name} was out among the stock before light.")));
+            let line = pick(&mut rng, &[
+                "{n} was out among the stock before light.",
+                "{n} was up the top field with the beasts at first light.",
+                "{n} saw to the byre before the rest of the house was stirring.",
+            ]).replace("{n}", &name);
+            out.push(mk("practice", line));
         }
         Action::Haggle => {
             let good = rng.gen_bool(0.55);
             world.agents[i].purse += if good { 6 } else { -2 };
-            out.push(mk("market", if good {
-                format!("{name} drove a hard bargain at the mart and came home pleased.")
+            nudge_mood(&mut world.agents[i], if good { 6 } else { -7 });
+            let line = if good {
+                pick(&mut rng, &[
+                    "{n} drove a hard bargain at the mart and came home pleased.",
+                    "{n} sold well at the mart, and stood a round on the strength of it.",
+                    "{n} got their price at the mart, the buyers grumbling.",
+                ])
             } else {
-                format!("{name} found the mart slow, and the buyers slower.")
-            }));
+                pick(&mut rng, &[
+                    "{n} found the mart slow, and the buyers slower.",
+                    "{n} brought half the stock home again, the trade being dead.",
+                    "{n} took what was offered at the mart, and was sour about it.",
+                ])
+            }.replace("{n}", &name);
+            out.push(mk("market", line));
         }
         Action::Graft => {
-            out.push(mk("household", format!("{name} got the work done, and said little about how.")));
+            let line = pick(&mut rng, &[
+                "{n} got the work done, and said little about how.",
+                "{n} put in a long day, and was not thanked for it.",
+                "{n} saw the job through, the master taking the credit.",
+            ]).replace("{n}", &name);
+            out.push(mk("household", line));
         }
         Action::Scheme => {
             let win = rng.gen_bool(0.45);
             if win {
                 world.agents[i].purse += 8;
                 clamp_standing(&mut world.agents[i], 2);
-                out.push(mk("scheme", format!("{name}'s latest improvement actually answered, to general astonishment.")));
-                world.spawn_news(&name, &format!("{name}'s scheme that, against all odds, worked"), 2, day, &[]);
+                nudge_mood(&mut world.agents[i], 14);
+                let (line, topic) = match rng.gen_range(0..3) {
+                    0 => (
+                        format!("{name}'s latest improvement actually answered, to general astonishment."),
+                        format!("{name}'s scheme that, against all odds, worked"),
+                    ),
+                    1 => (
+                        format!("{name}'s new contrivance paid for itself by harvest, the doubters silent."),
+                        format!("{name}'s contrivance that paid"),
+                    ),
+                    _ => (
+                        format!("{name} backed a notion the parish had laughed at, and was proved right."),
+                        format!("{name} being proved right after all"),
+                    ),
+                };
+                out.push(mk("scheme", line));
+                world.spawn_news(&name, &topic, 2, day, &[]);
             } else {
                 world.agents[i].purse -= 7;
                 clamp_standing(&mut world.agents[i], -2);
-                out.push(mk("scheme", format!("{name}'s latest improvement came to grief in the mud. Tot, or his like, had said it would.")));
-                world.spawn_news(&name, &format!("{name}'s improvement come to grief"), -2, day, &[]);
+                nudge_mood(&mut world.agents[i], -20);
+                let (line, topic) = match rng.gen_range(0..3) {
+                    0 => (
+                        format!("{name}'s latest improvement came to grief in the mud. Tot, or his like, had said it would."),
+                        format!("{name}'s improvement come to grief"),
+                    ),
+                    1 => (
+                        format!("{name}'s grand scheme stuck fast in the wet, and the parish enjoyed it."),
+                        format!("{name}'s scheme stuck in the mud"),
+                    ),
+                    _ => (
+                        format!("{name} sank good money in a notion that failed, and heard about it at the Pelican."),
+                        format!("the money {name} sank in a failed notion"),
+                    ),
+                };
+                out.push(mk("scheme", line));
+                world.spawn_news(&name, &topic, -2, day, &[]);
             }
         }
         Action::Press => {
@@ -945,7 +1193,12 @@ fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, 
             out.push(mk("household", format!("{name} kept the parish in good order, and the sermon to a decent length.")));
         }
         Action::Round => {
-            out.push(mk("practice", format!("{name} drove the rounds from farm to farm, carrying the news from door to door.")));
+            let line = pick(&mut rng, &[
+                "{n} drove the rounds from farm to farm, carrying the news from door to door.",
+                "{n} was called out to a beast at one of the farms, and stopped for tea at two more.",
+                "{n} went the rounds, and heard the half of the parish's business doing it.",
+            ]).replace("{n}", &name);
+            out.push(mk("practice", line));
         }
         Action::Idle => {}
     }
@@ -1228,6 +1481,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         mood: temperament(arch).1,
         courting: -1,
         courtship: 0,
+        acted_day: -1,
     }
 }
 
@@ -1313,10 +1567,12 @@ fn nudge_mood(a: &mut Agent, d: i16) {
 /// A word for a soul's present spirits.
 pub fn mood_word(m: i16) -> &'static str {
     match m {
-        x if x <= -50 => "grieving",
-        x if x <= -20 => "low",
-        x if x < 20 => "content",
-        x if x < 50 => "in good spirits",
+        x if x <= -55 => "grieving",
+        x if x <= -28 => "low",
+        x if x <= -9 => "out of sorts",
+        x if x < 9 => "content",
+        x if x < 28 => "in good humour",
+        x if x < 55 => "in good spirits",
         _ => "triumphant",
     }
 }
@@ -1340,8 +1596,24 @@ fn assess_goal(world: &World, i: usize, day: i64) -> (u8, i32) {
     if a.archetype == "child" {
         return (0, -1);
     }
+    // a consuming hatred of a superior overrides even solvency — the one thing they live for
+    if a.archetype == "genteel_status_seeker" {
+        if let Some(rival) = (0..world.agents.len()).find(|&j| {
+            j != i && world.agents[j].active() && world.agents[j].standing > a.standing && world.aff(i, j) <= -40
+        }) {
+            return (4, rival as i32);
+        }
+    }
     if a.purse < -15 {
-        return (1, -1); // ClearDebt
+        return (1, -1); // ClearDebt — solvency comes before all
+    }
+    // a settled rivalry consumes a soul above even seeing a child married off
+    if a.archetype == "genteel_status_seeker" {
+        if let Some(rival) = (0..world.agents.len()).find(|&j| {
+            j != i && world.agents[j].active() && world.agents[j].standing > a.standing && world.aff(i, j) <= -30
+        }) {
+            return (4, rival as i32); // Outdo — the grudge run deep
+        }
     }
     if let Some(child) = (0..world.agents.len()).find(|&c| {
         let x = &world.agents[c];
@@ -1353,7 +1625,7 @@ fn assess_goal(world: &World, i: usize, day: i64) -> (u8, i32) {
     match a.archetype.as_str() {
         "genteel_status_seeker" => {
             if let Some(rival) = (0..world.agents.len()).find(|&j| {
-                j != i && world.agents[j].active() && world.agents[j].standing > a.standing + 6 && world.aff(i, j) <= -25
+                j != i && world.agents[j].active() && world.agents[j].standing > a.standing + 4 && world.aff(i, j) <= -22
             }) {
                 (4, rival as i32) // Outdo a disliked superior
             } else if a.standing < top - 8 {
@@ -1787,8 +2059,12 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
     // Sunday upkeep: grudges and warmth both fade unless fed (relationships need tending);
     // living families are reinforced, so blood stays thicker than water.
     if wd == Weekday::Sunday {
+        // Only faint feelings fade with neglect; a real grudge or a true bond is remembered,
+        // so a rivalry can accumulate across the years instead of dissolving every week.
         for v in world.affinity.values_mut() {
-            *v -= v.signum();
+            if v.abs() < 10 {
+                *v -= v.signum();
+            }
         }
         for i in 0..world.agents.len() {
             if !world.agents[i].active() {
@@ -2331,7 +2607,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 18;
+const SNAPSHOT_VERSION: i64 = 20;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
