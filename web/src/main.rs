@@ -396,6 +396,19 @@ fn ollama() -> (String, String) {
 }
 
 /// Build the in-character system prompt for `target` speaking with `source`.
+/// A short hint at how an archetype speaks, so a vet does not sound like a vicar.
+fn voice_of(arch: &str) -> &'static str {
+    match arch {
+        "genteel" | "genteel_status_seeker" => "genteel and keenly class-conscious, given to delicate courtesies and barbs wrapped in politeness",
+        "parson" => "measured and a touch moralising, never far from scripture or the parish's good order",
+        "vet" | "practitioner" => "practical, dry and plain-spoken, apt to reach for a remark about beasts or weather",
+        "farmer" | "hill_farmer" => "blunt, weather-wise and sparing with words, suspicious of fine talk",
+        "improver" | "scheming_improver" => "restless and full of schemes and modern notions, impatient with old ways",
+        "hand" | "blunt_hand" => "rough and plain, deferential to your betters but shrewd underneath",
+        _ => "plain-spoken and of the country",
+    }
+}
+
 fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     let w = sim.world_snapshot(today());
     let t = w.agents.get(target)?;
@@ -403,19 +416,49 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     let day = sim.target_day(today()).max(0);
     let role = t.trade.clone().unwrap_or_else(|| pretty_arch(&t.archetype).to_string());
     let srole = s.trade.clone().unwrap_or_else(|| pretty_arch(&s.archetype).to_string());
+
+    // where the other stands relative to you — the engine of provincial manners
+    let gap = s.standing - t.standing;
+    let station = if gap >= 12 {
+        format!("{} is your social superior, and you mind your manners accordingly", s.name)
+    } else if gap <= -12 {
+        format!("{} ranks below you, and you are quietly aware of it", s.name)
+    } else {
+        format!("{} is roughly your equal in the town", s.name)
+    };
+    // how you feel about them, from the affinity ledger
+    let feeling = match w.aff(target, source) {
+        f if f >= 35 => format!("You are genuinely fond of {}.", s.name),
+        f if f >= 12 => format!("You think well enough of {}.", s.name),
+        f if f <= -35 => format!("You bear {} a real grudge, and it colours every word.", s.name),
+        f if f <= -12 => format!("You have little love for {}, and are guarded with them.", s.name),
+        _ => format!("You have no strong feeling about {} either way.", s.name),
+    };
+    let want = thrush_core::goal_label(&w, t.goal as u8, t.goal_target);
+
     let mut p = format!(
         "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary in the year 1934. \
-         Your standing in the town is {standing} of a hundred, and you are presently {mood}. \
-         You are speaking with {sname}, {srole}. \
-         Stay completely and always in character: reply only as {name} would, in the warm, wry, class-conscious voice of interwar provincial England. \
-         Never mention being an AI or a model; never break character; never narrate stage directions. Keep your replies to one to three sentences.",
-        name = t.name, role = role, seat = t.seat, age = t.age(day), standing = t.standing,
-        mood = thrush_core::mood_word(t.mood), sname = s.name, srole = srole,
+         You are {voice}. Your standing is {standing} of a hundred and you are presently {mood}. What you want of life: {want}. \
+         You are speaking with {sname}, {srole}. {station}. {feeling} \
+         Speak only as {name} would, to your station and your feeling — never blandly agreeable. \
+         Vary your phrasing; do not lean on stock fillers — avoid beginning successive lines with 'I daresay', 'I warrant' or the like. \
+         Never mention being an AI or a model; never break character; never narrate stage directions or describe your own tone.",
+        name = t.name, role = role, seat = t.seat, age = t.age(day),
+        voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_word(t.mood),
+        want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
     if let Ok(mems) = sim.memories_of(&t.name, 8) {
         let about: Vec<String> = mems.into_iter().filter(|(who, _)| who == &s.name).map(|(_, m)| m).collect();
         if !about.is_empty() {
-            p.push_str(&format!(" What you remember of {}: {}", s.name, about.join("; ")));
+            p.push_str(&format!(" What you already remember of {}: {}.", s.name, about.join("; ")));
+        }
+    }
+    // the town as it actually stands, so the talk can touch real goings-on
+    p.push_str(&format!(" The season is {}.", thrush_core::Season::of(today()).name()));
+    if let Ok(recent) = sim.chronicle(5) {
+        let happenings: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
+        if !happenings.is_empty() {
+            p.push_str(&format!(" Lately about the parish: {}", happenings.join(" ")));
         }
     }
     Some(p)
@@ -624,13 +667,24 @@ fn handle_end(sim: &mut Sim, body: &str) -> String {
 /// Generate one in-character line from `speaker` (addressing `other`), given the conversation
 /// so far as a list of (speaker_idx, line) turns. The opener gets a gentle seed.
 fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, String)]) -> Option<String> {
-    let system = persona(sim, other, speaker)?; // the speaker's own voice, aware of who they address
+    let mut system = persona(sim, other, speaker)?; // the speaker's own voice, aware of who they address
+    let w = sim.world_snapshot(today());
+    let oname = w.agents.get(other)?.name.clone();
     if transcript.is_empty() {
-        let w = sim.world_snapshot(today());
-        let oname = w.agents.get(other)?.name.clone();
-        let seed = format!("(You come upon {oname} about the parish. Open the conversation — a greeting and a remark, whatever you would naturally say.)");
+        system.push_str(" Reply in one or two sentences only.");
+        let seed = format!(
+            "(You come upon {oname} about the parish. Open with a brief greeting, then say what is actually on your mind — \
+             a remark on the goings-on, a question for them, a piece of news, a complaint. Do not be bland.)"
+        );
         return chat_reply(&system, &[], &seed);
     }
+    // mid-conversation: the hard rules that keep it from re-greeting and parroting
+    system.push_str(&format!(
+        " You are now mid-conversation with {oname} — pleasantries are done. \
+         Do NOT greet again, do NOT say their name unless it lands, and NEVER echo, repeat or paraphrase back what they just said. \
+         Answer it instead: react, press them, agree and add, disagree, tease, confide, gossip, or turn to a new matter. \
+         Move the conversation somewhere it was not. Reply in one or two sentences, sharp and in your own voice."
+    ));
     let mut history: Vec<(String, String)> = Vec::new();
     for (who, line) in &transcript[..transcript.len() - 1] {
         let role = if *who == speaker { "assistant" } else { "user" };

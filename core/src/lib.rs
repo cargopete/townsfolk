@@ -144,7 +144,7 @@ pub struct World {
 }
 
 impl World {
-    fn aff(&self, from: usize, to: usize) -> i16 {
+    pub fn aff(&self, from: usize, to: usize) -> i16 {
         *self.affinity.get(&(from as u32, to as u32)).unwrap_or(&0)
     }
     fn nudge_aff(&mut self, from: usize, to: usize, d: i16) {
@@ -3165,7 +3165,7 @@ impl Sim {
             format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}.",
                 ag.name, role, ag.seat, ag.age(day), ag.standing, mood_word(ag.mood), goal_label(&w, ag.goal, ag.goal_target))
         };
-        let relation = if w.agents[a].spouse == Some(b) {
+        let mut relation = if w.agents[a].spouse == Some(b) {
             "They are man and wife.".to_string()
         } else if w.agents[a].courting == b as i32 || w.agents[b].courting == a as i32 {
             format!("{} is courting {}.", w.agents[a].name, w.agents[b].name)
@@ -3176,6 +3176,23 @@ impl Sim {
             else if af > 0 { "They are on friendly enough terms.".into() }
             else { "They are barely acquainted.".into() }
         };
+        // what each already carries of the other, so the talk has a history behind it
+        let recall = |from: &str, of: &str| -> String {
+            self.memories_of(from, 6).ok().into_iter().flatten()
+                .find(|(who, _)| who == of)
+                .map(|(_, m)| format!(" {from} recalls of {of}: {m}"))
+                .unwrap_or_default()
+        };
+        relation.push_str(&recall(&w.agents[a].name, &w.agents[b].name));
+        relation.push_str(&recall(&w.agents[b].name, &w.agents[a].name));
+        // the parish as it actually stands, so they have real matter to talk of
+        relation.push_str(&format!(" The season is {}.", Season::of(today).name()));
+        if let Ok(recent) = self.chronicle(4) {
+            let lines: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
+            if !lines.is_empty() {
+                relation.push_str(&format!(" Lately about the parish: {}", lines.join(" ")));
+            }
+        }
         Some(ConversePair {
             a, a_name: w.agents[a].name.clone(), a_brief: brief(a),
             b, b_name: w.agents[b].name.clone(), b_brief: brief(b),
