@@ -676,7 +676,7 @@ fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, 
             "(You come upon {oname} about the parish. Open with a brief greeting, then say what is actually on your mind — \
              a remark on the goings-on, a question for them, a piece of news, a complaint. Do not be bland.)"
         );
-        return chat_reply(&system, &[], &seed);
+        return chat_reply(&system, &[], &seed).map(|l| thrush_core::strip_filler(&l));
     }
     // mid-conversation: the hard rules that keep it from re-greeting and parroting
     system.push_str(&format!(
@@ -691,7 +691,7 @@ fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, 
         history.push((role.to_string(), line.clone()));
     }
     // the last turn is the other's line — feed it as the message this speaker now answers
-    chat_reply(&system, &history, &transcript[transcript.len() - 1].1)
+    chat_reply(&system, &history, &transcript[transcript.len() - 1].1).map(|l| thrush_core::strip_filler(&l))
 }
 
 /// Parse {a, b, history:[[idx,line],…]} into (a, b, transcript).

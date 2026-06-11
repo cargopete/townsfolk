@@ -181,6 +181,15 @@ fn converse_scene(agent: &ureq::Agent, host: &str, model: &str, a_brief: &str, b
     });
     let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
     let s = resp.get("response")?.as_str()?.trim().to_string();
+    // strip the filler tic per line, keeping each "Name:" prefix intact
+    let s = s
+        .lines()
+        .map(|ln| match ln.split_once(':') {
+            Some((name, said)) => format!("{name}: {}", thrush_core::strip_filler(said.trim())),
+            None => thrush_core::strip_filler(ln),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     (!s.is_empty()).then_some(s)
 }
 

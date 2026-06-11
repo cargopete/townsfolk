@@ -1588,6 +1588,61 @@ pub fn mood_word(m: i16) -> &'static str {
 }
 
 /// Their ambition, in words.
+/// Strip the small oracle's stock filler tics ("I daresay", "I warrant" …) wherever they
+/// fall, then tidy the spacing and sentence-capitalisation left behind. qwen leans on these
+/// regardless of how the prompt scolds it, so excising them deterministically is far more
+/// reliable than asking. Unicode-safe; only the ASCII filler words are touched.
+pub fn strip_filler(line: &str) -> String {
+    const FILLERS: [&str; 6] = ["i daresay", "i dare say", "i warrant", "i'll warrant", "i wager", "i'd wager"];
+    let chars: Vec<char> = line.chars().collect();
+    let low: Vec<char> = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let n = chars.len();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '\'';
+    let mut out: Vec<char> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        let boundary = i == 0 || !is_word(chars[i - 1]);
+        let mut hit = 0usize;
+        if boundary {
+            for f in FILLERS {
+                let fc: Vec<char> = f.chars().collect();
+                if i + fc.len() <= n
+                    && (0..fc.len()).all(|k| low[i + k] == fc[k])
+                    && (i + fc.len() == n || !is_word(chars[i + fc.len()]))
+                {
+                    hit = fc.len();
+                    break;
+                }
+            }
+        }
+        if hit > 0 {
+            i += hit;
+            while i < n && (chars[i] == ' ' || chars[i] == ',') { i += 1; } // swallow trailing comma/space
+            while matches!(out.last(), Some(' ')) { out.pop(); }            // and any space we left behind
+            // restore one separating space, unless at line start or the next char is punctuation
+            if !out.is_empty() && i < n && chars[i] != ' ' && !matches!(chars[i], ',' | '.' | ';' | ':' | '!' | '?') {
+                out.push(' ');
+            }
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    let mut s: String = out.into_iter().collect();
+    s = s.trim().to_string();
+    while s.contains("  ") { s = s.replace("  ", " "); }
+    s = s.replace(" ,", ",").replace(" .", ".").replace(" —,", " —");
+    // recapitalise the opening letter and the first letter of each new sentence
+    let mut cap = true;
+    s.chars()
+        .map(|c| {
+            if cap && c.is_alphabetic() { cap = false; return c.to_ascii_uppercase(); }
+            if matches!(c, '.' | '!' | '?') { cap = true; }
+            c
+        })
+        .collect()
+}
+
 pub fn goal_label(world: &World, kind: u8, target: i32) -> String {
     let who = |t: i32| world.agents.get(t as usize).map(|a| a.name.clone()).unwrap_or_else(|| "—".into());
     match kind {
@@ -3680,5 +3735,24 @@ impl Sim {
             }
         }
         p
+    }
+}
+
+#[cfg(test)]
+mod filler_tests {
+    use super::strip_filler;
+    #[test]
+    fn strips_the_tic() {
+        assert_eq!(strip_filler("I daresay you've seen more of the parish than I."),
+                   "You've seen more of the parish than I.");
+        assert_eq!(strip_filler("Aye, and I daresay they'll be chaffing the grass."),
+                   "Aye, and they'll be chaffing the grass.");
+        assert_eq!(strip_filler("The sheep's wool will be fine, I daresay, come what may."),
+                   "The sheep's wool will be fine, come what may.");
+        assert_eq!(strip_filler("I warrant the moon has more sense than a man."),
+                   "The moon has more sense than a man.");
+        // a clean line is untouched
+        assert_eq!(strip_filler("You'd think the air was thick with smoke."),
+                   "You'd think the air was thick with smoke.");
     }
 }
