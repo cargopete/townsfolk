@@ -2989,6 +2989,21 @@ impl Sim {
         self.engine = engine;
     }
 
+    /// Drop folded artefacts at or after `day` so a re-fold regenerates them cleanly.
+    /// Narration is keyed by event_id, and event ids are unstable across a re-fold (the
+    /// rows are deleted and re-inserted), so stale narration must go too — otherwise an
+    /// old voiced line mis-attaches to a freshly inserted event and that event is taken
+    /// for already-narrated, silently swallowing it (e.g. an injected stranger).
+    fn invalidate_from(&self, day: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM narration WHERE event_id IN (SELECT id FROM events WHERE day >= ?1)",
+            params![day],
+        )?;
+        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
+        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?; // snapshots keyed by slot
+        Ok(())
+    }
+
     /// Inject a providence verb at today: a letter, a called loan, a legacy, a scandal, a
     /// stranger at the cottage. It's logged, then folded into the world from today forward
     /// (the frontier is regenerated so it takes effect at once). Caller should `catch_up`.
@@ -3000,8 +3015,7 @@ impl Sim {
         )?;
         self.interventions = load_interventions(&self.conn)?;
         // invalidate the frontier so regeneration picks up the intervention
-        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
-        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?; // snapshots keyed by slot
+        self.invalidate_from(day)?;
         Ok(())
     }
 
@@ -3045,8 +3059,7 @@ impl Sim {
             params![day, kind, target, text],
         )?;
         self.wildcards = load_wildcards(&self.conn)?;
-        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
-        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
+        self.invalidate_from(day)?;
         Ok(())
     }
 
@@ -3074,8 +3087,7 @@ impl Sim {
             params![day, subject, kind, target, choice, text],
         )?;
         self.decrees = load_decrees(&self.conn)?;
-        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
-        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
+        self.invalidate_from(day)?;
         Ok(())
     }
 
@@ -3094,8 +3106,7 @@ impl Sim {
             params![day, target, source, format!("{warmth}:{sway}"), memory],
         )?;
         self.decrees = load_decrees(&self.conn)?;
-        self.conn.execute("DELETE FROM events WHERE day >= ?1", params![day])?;
-        self.conn.execute("DELETE FROM snapshots WHERE day >= ?1", params![day * PHASES])?;
+        self.invalidate_from(day)?;
         Ok(())
     }
 
