@@ -1305,10 +1305,17 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 world.spawn_news(t, &what, -3, day, &[]);
             }
             "stranger" => {
-                let name = if iv.note.is_empty() { "A stranger".to_string() } else { iv.note.clone() };
+                // --target is the newcomer's name; --note is flavour (their trade, their air).
+                let name = if t.is_empty() { "A stranger".to_string() } else { t.clone() };
                 let mut agent = make_agent(&name, "blunt_hand", "the empty cottage", 25, 12, 1, 33, day);
                 agent.origin = Some("parts unknown".into());
-                out.push(mk("providence", &name, format!("{name} arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.")));
+                let blurb = if iv.note.is_empty() {
+                    format!("{name} arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.")
+                } else {
+                    format!("{name} — {} — arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.", iv.note)
+                };
+                out.push(mk("providence", &name, blurb));
+                world.spawn_news(&name, "the stranger lately come to the empty cottage", 1, day, &[]);
                 world.agents.push(agent);
             }
             other => {
