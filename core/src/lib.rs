@@ -90,6 +90,7 @@ pub struct Agent {
     pub courtship: i16,           // how far the courtship has come along
     pub acted_day: i64,           // last day this soul made a social set-piece — one per day, no per-phase repeats
     pub rival: i32,               // a declared nemesis (index) — a durable grudge that outlives the standing of the day, else -1
+    pub feud: i16,                // how far the campaign against the rival has been pressed — a throughline toward a reckoning
 }
 
 impl Agent {
@@ -195,6 +196,7 @@ impl World {
             courtship: 0,
             acted_day: -1,
             rival: -1,
+            feud: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1492,6 +1494,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         courtship: 0,
         acted_day: -1,
         rival: -1,
+        feud: 0,
     }
 }
 
@@ -1670,7 +1673,7 @@ fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>)
     };
     let n = world.agents.len();
     for i in 0..n {
-        if !world.agents[i].active() || world.agents[i].archetype != "genteel_status_seeker" {
+        if !world.agents[i].active() || world.agents[i].archetype == "child" {
             continue;
         }
         let r = world.agents[i].rival;
@@ -1705,7 +1708,7 @@ fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>)
                     && world.agents[j].active()
                     && world.agents[j].parent != Some(i)
                     && world.agents[i].parent != Some(j)
-                    && world.agents[j].standing >= world.agents[i].standing + 8 // a superior at a real social distance
+                    && world.agents[j].standing >= world.agents[i].standing - 4 // a peer or a superior — you don't war on a clear inferior
                     && world.aff(i, j) <= -40
             })
             .min_by_key(|&j| world.aff(i, j));
@@ -1761,7 +1764,7 @@ fn goal_fulfilled(world: &World, i: usize, top: i32) -> bool {
         1 => a.purse >= 0,
         2 => a.standing >= top - 2,
         3 => a.goal_target < 0 || world.agents.get(a.goal_target as usize).map_or(true, |c| c.spouse.is_some() || !c.active()),
-        4 => a.goal_target >= 0 && world.agents.get(a.goal_target as usize).map_or(true, |r| a.standing > r.standing + 2), // decisively overtaken
+        4 => false, // a rivalry is resolved by the feud campaign (tend_feuds), not a silent overtake
         5 => a.purse >= 100,
         _ => false,
     }
@@ -2084,6 +2087,72 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     // --- rivalries: declare, sustain, and lay to rest the durable grudges ---
     tend_rivalries(world, day, date, &mut out);
+
+    // --- the feud, pressed: a declared rivalry is not a standing fact but a campaign, waged
+    // over weeks with whispers and snubs that chip at the rival's face, toward a public reckoning ---
+    for i in 0..world.agents.len() {
+        let r = world.agents[i].rival;
+        if r < 0 || !world.agents[i].active() {
+            world.agents[i].feud = 0; // no standing quarrel — nothing to press
+            continue;
+        }
+        let r = r as usize;
+        if r >= world.agents.len() || !world.agents[r].active() {
+            continue; // a dead or departed rival is tend_rivalries' to lay to rest
+        }
+        // press the campaign: the grudge deepens by the day, and now and then lands in the open
+        world.agents[i].feud += 1;
+        world.nudge_aff(i, r, -2);
+        if rng.gen_bool(0.12) {
+            world.agents[r].standing = (world.agents[r].standing - 1).max(0); // a whisper that tells
+            let (a, b) = (world.agents[i].name.clone(), world.agents[r].name.clone());
+            let line = match rng.gen_range(0..4) {
+                0 => format!("{a} was heard running down {b} at the Crown, and not for the first time."),
+                1 => format!("{a} cut {b} dead in the high street, plain for all to see."),
+                2 => format!("{a} let it be known, in the right ears, just what {a} thought of {b}."),
+                _ => format!("{a} and {b} traded cold words after church, and the parish marked it."),
+            };
+            out.push(mk("rivalry", &a, line));
+        }
+        // the reckoning: once the campaign has been pressed home, it comes to a head
+        if world.agents[i].feud >= 30 {
+            let (sa, sb) = (world.agents[i].standing, world.agents[r].standing);
+            let (a, b) = (world.agents[i].name.clone(), world.agents[r].name.clone());
+            // whatever the outcome, a reckoned grudge is a *spent* one: the bad blood lifts
+            // toward wary civility, so the quarrel settles instead of re-igniting every month
+            let settle = |w: &mut World, i: usize, r: usize| {
+                w.nudge_aff(i, r, 70);
+                w.agents[i].rival = -1;
+                w.agents[i].feud = 0;
+                if w.agents[i].goal == 4 {
+                    let (g, t) = assess_goal(w, i, day);
+                    w.agents[i].goal = g;
+                    w.agents[i].goal_target = t;
+                }
+            };
+            if sa >= sb {
+                // the schemer has the upper hand — they get the better of their rival in the open
+                world.agents[r].standing = (world.agents[r].standing - 6).max(0);
+                world.agents[i].standing = (world.agents[i].standing + 3).min(100);
+                nudge_mood(&mut world.agents[i], 20);
+                nudge_mood(&mut world.agents[r], -16);
+                settle(world, i, r);
+                out.push(mk("feud", &a, format!("{a} got the better of {b} at last, in front of the whole parish — and {b} felt the fall of it.")));
+                world.spawn_news(&a, &format!("how {a} bested {b}"), 2, day, &[]);
+            } else if sb >= sa + 12 {
+                // the campaign broke on the rival's standing — the schemer is the one diminished
+                world.agents[i].standing = (world.agents[i].standing - 4).max(0);
+                nudge_mood(&mut world.agents[i], -18);
+                settle(world, i, r);
+                out.push(mk("feud", &a, format!("{a}'s long campaign against {b} came to nothing but {a}'s own embarrassment, and the parish tittered.")));
+            } else if world.agents[i].feud >= 60 {
+                // neither could land the blow — the quarrel guttered out, worn down to civility
+                settle(world, i, r);
+                out.push(mk("feud", &a, format!("the quarrel between {a} and {b} guttered out at last, both parties wearied of it.")));
+            }
+            // else: still simmering, the blow not yet landed — it goes on another day
+        }
+    }
 
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
@@ -2730,7 +2799,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 22;
+const SNAPSHOT_VERSION: i64 = 23;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3754,5 +3823,58 @@ mod filler_tests {
         // a clean line is untouched
         assert_eq!(strip_filler("You'd think the air was thick with smoke."),
                    "You'd think the air was thick with smoke.");
+    }
+}
+
+#[cfg(test)]
+mod feud_tests {
+    use super::*;
+
+    // A declared grudge is now a campaign waged over weeks, not a standing fact: it climbs
+    // toward a public reckoning, and the upper-handed schemer carries it home.
+    #[test]
+    fn a_pressed_grudge_comes_to_a_reckoning() {
+        let mut w = World::seed();
+        let genteel: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype == "genteel_status_seeker")
+            .collect();
+        assert!(genteel.len() >= 2, "the seed town should hold at least two genteel souls");
+        let (i, j) = (genteel[0], genteel[1]);
+
+        // both squarely middle-aged, to keep death's hazard out of a determinism test
+        w.agents[i].birth_day = -40 * 365;
+        w.agents[j].birth_day = -42 * 365;
+        // the schemer stands above their rival, so the campaign can be carried home
+        w.agents[i].standing = 70;
+        w.agents[j].standing = 50;
+        w.agents[i].rival = j as i32;
+        w.agents[i].goal = 4;
+        w.agents[i].goal_target = j as i32;
+        // a grudge hardened well past the made-up threshold, so tend_rivalries won't dissolve it
+        w.nudge_aff(i, j, -90);
+
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let rival_standing_before = w.agents[j].standing;
+        let mut reckoned: Option<(i64, String)> = None;
+        for day in 0..70i64 {
+            let feud_before = w.agents[i].feud;
+            let evs = life_tick(&mut w, day, date, 42);
+            // while the grudge stands unresolved, the campaign must only ever press harder
+            if w.agents[i].rival >= 0 {
+                assert!(w.agents[i].feud >= feud_before, "the feud regressed on day {day}");
+            }
+            if let Some(e) = evs.iter().find(|e| e.kind == "feud") {
+                reckoned = Some((day, e.text.clone()));
+                break;
+            }
+        }
+
+        let (day, text) = reckoned.expect("the feud should reach a reckoning within ten weeks");
+        assert!(day >= 29, "a reckoning is a campaign, not an overnight thing (came on day {day})");
+        assert!(text.contains("got the better of"), "the upper-handed schemer should win, got: {text}");
+        assert_eq!(w.agents[i].rival, -1, "the rivalry is laid to rest once reckoned");
+        assert_eq!(w.agents[i].feud, 0, "the campaign counter resets once reckoned");
+        assert_ne!(w.agents[i].goal, 4, "with the rival bested, the goal moves on");
+        assert!(w.agents[j].standing < rival_standing_before, "the bested rival's standing should fall");
     }
 }
