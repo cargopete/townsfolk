@@ -527,6 +527,8 @@ fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Op
     let sys = format!(
         "You judge how a conversation has left {target}, a soul of a 1934 West-Country town, feeling about {source}. \
          Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence in {target}'s own voice of what they now think of {source}, \"sway\": one of [none, debt, rise, prosper, content, reconcile]}}. \
+         Default to 'unchanged' — most talk leaves regard where it was. Reserve 'warmer' for a genuinely warming exchange and 'colder' for real friction or a slight; mere courtesy, or plain civility across a difference of station, is 'unchanged', not warmer. \
+         Let the memory keep {target}'s own station and regard — a plain soul speaks of a social better with deference, a better of a lesser from a height, not as easy equals. \
          sway is whether the talk changed what {target} wants: debt=resolved to clear their debts, rise=spurred to rise, prosper=to make a fortune, content=to rest content, reconcile=to mend a quarrel, none=unchanged.",
         target = target_name, source = source_name,
     );
