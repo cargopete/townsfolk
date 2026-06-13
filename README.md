@@ -55,13 +55,17 @@ It runs end to end:
   pointed exclusions and the gossip they throw off ("who Lady Aldermaston left off the
   dinner list"). The ledger genuinely *develops*: 58 independent moods become 58 social
   strategies, and a bitter enough hatred of a superior becomes a soul's whole ambition.
-- **Declared rivalries** — when a grudge against a superior hardens past bearing it becomes
-  a **named nemesis** the soul carries as a durable relationship, not a mood of the moment:
-  they *set themselves against* that person and mean to get the better of them, and pursue it
-  for as long as it takes — a climb of months or a full year. It ends only when something
-  settles it: the rival dies, the quarrel is made up (a rare grace), or the soul *decisively
-  overtakes* them — a triumph the whole town marks. About one such rivalry simmers at a time,
-  so it stays a real event, with its own arc, rather than a label that flickers on and off.
+- **Feuds with a throughline** — when a grudge against a peer or superior hardens past bearing
+  it becomes a **named nemesis** the soul carries as a durable relationship, not a mood of the
+  moment: they *set themselves against* that person — and then *press* it. A feud is a campaign
+  waged over weeks, not a label: a soul run down at the Pelican, a cut in the high street, a
+  cold word after church, each chipping at the rival's standing, until it comes to a **public
+  reckoning**. How it lands turns on who holds the upper hand — the schemer gets the better of
+  their rival (standing changes hands, the whole town marks it), the campaign *backfires* into
+  their own embarrassment, or it *gutters out*, both wearied. A reckoned grudge is then **spent**:
+  the bad blood lifts toward wary civility, so a settled feud stays settled rather than
+  re-igniting every month. Anyone may come to it, not only the gentry, and each soul presses
+  one at a time — so it stays a real arc with a beginning and an end, not a label that flickers.
 - **Planning — courtship** — a soul forms a *multi-day intention* and pursues it over
   weeks: a courtship begun is walked out and called on, affection slowly warming (and
   warming the slower for a suit pressed above one's station), until it builds to a
@@ -75,10 +79,16 @@ It runs end to end:
   world stays exact. The genuine intelligence, only where it matters.
 - **Speak to a soul** — on the dashboard's *A word…* page you adopt one soul's voice and
   converse with another; Qwen answers in character, mindful of who's addressing them and
-  what they remember. Each soul's page has a *speak to me directly* button. When you end
-  the conversation the oracle judges its residue — a **warming or cooling, a memory kept,
-  and sometimes a change of heart about what they want** — and only that recorded effect
-  enters the fold, so souls genuinely learn from talking while the world stays exact.
+  what they remember. They are **grounded in 1934 and in their station** — a soul knows
+  only what their time and schooling allow (ask a farm lad of a "computer" and he takes it
+  for some contraption he's not seen), and their warmth follows their regard and their rank:
+  cordial where there's fondness, dry where there's a grudge, deferential up and gracious
+  down, never a manufactured quarrel. Each soul's page has a *speak to me directly* button.
+  When you end the conversation the oracle judges its residue — a **warming or cooling, a
+  memory kept, and sometimes a change of heart about what they want** — proportioned so
+  regard is *earned over several meetings*, not vaulted by one civil chat, and only that
+  recorded effect enters the fold, so souls genuinely learn from talking while the world
+  stays exact.
 - **Set two souls talking** — or stand back entirely: pick *two* souls on the *A word…*
   page and watch them fall into conversation of their own accord, Qwen playing both in
   their own voices, mindful of what each remembers of the other. A short exchange unfolds
@@ -186,6 +196,14 @@ A read-only, period-styled web view over the SQLite log and the folded world:
 - **`/folk/N`** — a person: standing/purse, live placement, family (linked), and their
   whole record.
 - **`/graph`** — the kinship network (marriages dashed, descent arrowed; click through).
+- **`/talk`** — *A word…*: adopt one soul's voice and speak to another, each soul's
+  *speak to me* button, or set two souls talking and stand back. (Writes the recorded
+  residue, then back to read-only.)
+
+Binds `127.0.0.1:8717` by default; `THRUSH_WEB_ADDR` changes the address and
+`THRUSH_WEB_KEY` gates every request behind HTTP Basic auth (any username, password =
+the key) — leave it unset for private/tailnet use, set it to serve the dashboard
+publicly, e.g. behind a Tailscale Funnel.
 
 ## Layout
 

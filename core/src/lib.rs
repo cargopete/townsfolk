@@ -2113,7 +2113,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             world.agents[r].standing = (world.agents[r].standing - 1).max(0); // a whisper that tells
             let (a, b) = (world.agents[i].name.clone(), world.agents[r].name.clone());
             let line = match rng.gen_range(0..4) {
-                0 => format!("{a} was heard running down {b} at the Crown, and not for the first time."),
+                0 => format!("{a} was heard running down {b} at the Pelican, and not for the first time."),
                 1 => format!("{a} cut {b} dead in the high street, plain for all to see."),
                 2 => format!("{a} let it be known, in the right ears, just what {a} thought of {b}."),
                 _ => format!("{a} and {b} traded cold words after church, and the parish marked it."),
