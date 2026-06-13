@@ -596,7 +596,8 @@ fn talk_page(sim: &Sim, url: &str) -> String {
            document.getElementById('bout').textContent='recording…';\
            var e=await fetch('/talk/between/end',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{a:a,b:b,history:h}})}});\
            var ej=await e.json();\
-           document.getElementById('bout').innerHTML=((ej.notes||[]).join('<br>'))+'<br><i>The town will hear of it.</i>';\
+           var notes=(ej.notes||[]).join('<br>');var stir=notes.indexOf('away warmer')>=0||notes.indexOf('away colder')>=0;\
+           document.getElementById('bout').innerHTML=notes+(stir?'<br><i>The town will hear of it.</i>':'<br><i>It passed without remark.</i>');\
            busy=false;btn.disabled=false;\
          }}\
          function add(who,txt,cls){{var d=document.getElementById('log');d.innerHTML+='<div class=entry><span class=date>'+who+'</span><br><span class='+cls+'>'+txt+'</span></div>';window.scrollTo(0,document.body.scrollHeight);}}\
@@ -679,6 +680,7 @@ fn handle_say(sim: &Sim, body: &str) -> String {
         .unwrap_or_default();
     let reply = persona(sim, source, target)
         .and_then(|sys| chat_reply(&sys, &history, message))
+        .map(|l| thrush_core::strip_filler(&l))
         .unwrap_or_else(|| "…".into());
     serde_json::json!({ "reply": reply }).to_string()
 }
@@ -721,7 +723,7 @@ fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, 
     // mid-conversation: the hard rules that keep it from re-greeting and parroting
     system.push_str(&format!(
         " You are now mid-conversation with {oname} — pleasantries are done. \
-         Do NOT greet again, do NOT say their name unless it lands, and NEVER echo, repeat or paraphrase back what they just said. \
+         Do NOT greet again, do NOT say their name unless it lands, and NEVER echo, repeat or paraphrase what either of you has already said — do not reuse a phrase that has already been spoken in this talk. \
          Answer it for real: ask after something, share a piece of news, agree and build on it, reminisce, confide, tease gently, or — only if you have real cause — press or disagree. \
          Let the talk breathe; do not strain to top their last line or sharpen with every turn. Reply in one or two sentences, in your own true voice."
     ));

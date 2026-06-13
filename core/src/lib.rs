@@ -1598,9 +1598,11 @@ pub fn mood_word(m: i16) -> &'static str {
 pub fn strip_filler(line: &str) -> String {
     const FILLERS: [&str; 6] = ["i daresay", "i dare say", "i warrant", "i'll warrant", "i wager", "i'd wager"];
     let chars: Vec<char> = line.chars().collect();
-    let low: Vec<char> = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    // normalise curly apostrophes to ASCII for matching — the model emits ’ as often as '
+    let norm = |c: char| if c == '\u{2019}' || c == '\u{2018}' { '\'' } else { c };
+    let low: Vec<char> = chars.iter().map(|c| norm(c.to_ascii_lowercase())).collect();
     let n = chars.len();
-    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '\'';
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '\'' || c == '\u{2019}' || c == '\u{2018}';
     let mut out: Vec<char> = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
@@ -1622,6 +1624,10 @@ pub fn strip_filler(line: &str) -> String {
             i += hit;
             while i < n && (chars[i] == ' ' || chars[i] == ',') { i += 1; } // swallow trailing comma/space
             while matches!(out.last(), Some(' ')) { out.pop(); }            // and any space we left behind
+            // if the filler sat between a comma and a sentence end, drop the now-dangling comma
+            if i < n && matches!(chars[i], '.' | '!' | '?' | ';' | ':') && matches!(out.last(), Some(',')) {
+                out.pop();
+            }
             // restore one separating space, unless at line start or the next char is punctuation
             if !out.is_empty() && i < n && chars[i] != ' ' && !matches!(chars[i], ',' | '.' | ';' | ':' | '!' | '?') {
                 out.push(' ');
@@ -3825,6 +3831,10 @@ mod filler_tests {
         // a clean line is untouched
         assert_eq!(strip_filler("You'd think the air was thick with smoke."),
                    "You'd think the air was thick with smoke.");
+        // curly apostrophe (U+2019) — the model emits these as often as ASCII; still stripped,
+        // and a comma left dangling before the sentence end is cleaned up
+        assert_eq!(strip_filler("They\u{2019}ll have their way, I\u{2019}ll warrant."),
+                   "They\u{2019}ll have their way.");
     }
 }
 
