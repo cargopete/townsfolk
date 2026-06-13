@@ -409,6 +409,29 @@ fn voice_of(arch: &str) -> &'static str {
     }
 }
 
+/// How wide a soul's grasp of the wider world runs — soft, by station and trade. The lettered
+/// read the papers and hold provincial opinions on national affairs; the rest keep to the parish.
+fn learning_of(arch: &str, standing: i32) -> &'static str {
+    match arch {
+        "genteel" | "genteel_status_seeker" | "parson" | "improver" | "scheming_improver"
+        | "vet" | "practitioner" => {
+            "You are lettered and read the newspapers: you hold your own provincial opinions on the \
+             wider world — the slump and the dole, the government, the troubles in Europe, the King \
+             and his doings — though you weigh them from a comfortable distance."
+        }
+        _ if standing >= 45 => {
+            "You read a little and follow the bigger news as it reaches the market, though you set \
+             more store by what you can see with your own eyes than by what the papers say."
+        }
+        _ => {
+            "You are not much for letters: your world is the parish — the beasts, the weather, the \
+             market price, the chapel and the talk of the lane. Of national affairs you know only \
+             what you overhear or what the vicar and the gentry let fall, and on such matters you \
+             defer to your betters or turn the talk back to something nearer home."
+        }
+    }
+}
+
 fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     let w = sim.world_snapshot(today());
     let t = w.agents.get(target)?;
@@ -442,10 +465,22 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
          You are speaking with {sname}, {srole}. {station}. {feeling} \
          Speak only as {name} would, to your station and your feeling — never blandly agreeable. \
          Vary your phrasing; do not lean on stock fillers — avoid beginning successive lines with 'I daresay', 'I warrant' or the like. \
+         You know only what a soul of your station and schooling could know in the year 1934: you have never heard of machines that think, of computers or simulations, of flight to the moon, nor of any matter after this year. \
+         Should a stranger speak of such things the words carry no meaning for you — you mishear them for something from your own world, or say plainly you do not take their meaning, and you never explain a notion you could not have had. About your own world, though, you are nobody's fool. \
          Never mention being an AI or a model; never break character; never narrate stage directions or describe your own tone.",
         name = t.name, role = role, seat = t.seat, age = t.age(day),
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_word(t.mood),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
+    );
+    // how wide their knowledge of the world runs, by station and trade
+    p.push(' ');
+    p.push_str(learning_of(&t.archetype, t.standing));
+    // a single illustration of the move — deflect the anachronism, don't lecture in its terms
+    p.push_str(
+        " By way of example only, never to be repeated word for word: were someone to ask after a \
+         'computer', or whether the world is but a 'simulation', you would frown at the strange word, \
+         take it perhaps for some contraption or play-acting you have not seen, and turn the talk back \
+         to what is real to you — never philosophising in their terms.",
     );
     if let Ok(mems) = sim.memories_of(&t.name, 8) {
         let about: Vec<String> = mems.into_iter().filter(|(who, _)| who == &s.name).map(|(_, m)| m).collect();
