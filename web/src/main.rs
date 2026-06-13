@@ -4,6 +4,7 @@
 //!
 //!   thrush-web [world.db]        # serves http://127.0.0.1:8717
 
+use base64::Engine as _;
 use thrush_core::{Agent, Phase, Sim};
 use tiny_http::{Header, Response, Server};
 use time::{Date, OffsetDateTime};
@@ -816,9 +817,46 @@ fn main() {
         eprintln!("could not bind {addr}: {e}");
         std::process::exit(1);
     });
-    println!("Thrushcombe reader on http://{addr}  (db: {db})");
+    // When THRUSH_WEB_KEY is set (e.g. behind a public Funnel), gate every request behind
+    // HTTP Basic auth — any username, password == the key. Unset (tailnet use) = wide open.
+    let web_key = std::env::var("THRUSH_WEB_KEY").ok().filter(|k| !k.is_empty());
+    println!(
+        "Thrushcombe reader on http://{addr}  (db: {db}){}",
+        if web_key.is_some() { "  [auth on]" } else { "" }
+    );
     for mut req in server.incoming_requests() {
         let url = req.url().to_string();
+        if let Some(key) = &web_key {
+            let ok = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .and_then(|h| {
+                    let v = h.value.as_str();
+                    let b64 = v
+                        .strip_prefix("Basic ")
+                        .or_else(|| v.strip_prefix("basic "))?;
+                    let raw = base64::engine::general_purpose::STANDARD
+                        .decode(b64.trim())
+                        .ok()?;
+                    let s = String::from_utf8(raw).ok()?;
+                    Some(s.splitn(2, ':').nth(1).unwrap_or("") == key)
+                })
+                .unwrap_or(false);
+            if !ok {
+                let chal = Header::from_bytes(
+                    &b"WWW-Authenticate"[..],
+                    &b"Basic realm=\"Thrushcombe\""[..],
+                )
+                .unwrap();
+                let _ = req.respond(
+                    Response::from_string("Thrushcombe — authentication required")
+                        .with_status_code(401)
+                        .with_header(chal),
+                );
+                continue;
+            }
+        }
         let is_post = matches!(req.method(), tiny_http::Method::Post);
         let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
         let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
