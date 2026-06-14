@@ -104,7 +104,10 @@ fn fear_banner(sim: &Sim) -> String {
         };
         format!("<b>murder &middot; killer unknown</b> &nbsp; {vn} was found dead — murder, by one of the town's own. Fear walks the lanes; every soul weighs every other.{tail}")
     };
-    format!("<div class=fear>{body}</div>")
+    let bench = (!inq.closed && inq.investigator >= 0)
+        .then(|| w.agents.get(inq.investigator as usize).map(|a| format!(" <span class=suspect>{} sits as magistrate</span> — and his questions fall on the working folk and the strangers, never on his own kind.", esc(&a.name))))
+        .flatten().unwrap_or_default();
+    format!("<div class=fear>{body}{bench}</div>")
 }
 
 fn bar(v: i32) -> String {
@@ -224,34 +227,79 @@ fn folk(sim: &Sim) -> String {
     page("Thrushcombe — The Town", &format!("{}{}", fear_banner(sim), body))
 }
 
-/// The town's inner life — every soul's reflections, newest first. The quiet hours laid bare.
-fn thoughts(sim: &Sim) -> String {
+/// The town's inner life — the 20 most recent reflections town-wide, or, when a soul is chosen
+/// from the dropdown, that one soul's last 50 thoughts. The quiet hours laid bare.
+fn thoughts(sim: &Sim, url: &str) -> String {
     let world = sim.world_snapshot(today());
     let idx_of = |name: &str| world.agents.iter().position(|a| a.name == name);
+    let sel: Option<usize> = qparam(url, "soul").and_then(|v| v.parse().ok()).filter(|&i| world.agents.get(i).is_some());
+
     let mut body = String::from(
         "<h1>The town, thinking</h1>\
          <div class=sub>each hour the soul most overdue takes a quiet turn of thought — on their work, \
-         their place, those about them, life as they find it. What passes through their mind, newest first.</div>",
+         their place, those about them, life as they find it. Newest first.</div>",
     );
-    match sim.recent_reflections(150) {
-        Ok(rs) if !rs.is_empty() => {
-            for (day, who, thought) in rs {
-                let when = sim.day_to_date(day);
-                let nm = match idx_of(&who) {
-                    Some(i) => format!("<a href=/folk/{i} class=who>{}</a>", esc(&who)),
-                    None => format!("<span class=who>{}</span>", esc(&who)),
-                };
-                body.push_str(&format!(
-                    "<div class=entry style='margin:.9rem 0'>{} <span class=date>&middot; {}</span>\
-                     <br><span class=think>{}</span></div>",
-                    nm, esc(&when), esc(&thought)
-                ));
+
+    // a dropdown to read one soul's running stream, else the whole town's latest
+    let mut opts = format!("<option value=''{}>— the whole town —</option>", if sel.is_none() { " selected" } else { "" });
+    let mut souls: Vec<usize> = (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child")
+        .collect();
+    souls.sort_by(|&a, &b| world.agents[a].name.cmp(&world.agents[b].name));
+    for i in souls {
+        opts.push_str(&format!(
+            "<option value={}{}>{}</option>",
+            i, if sel == Some(i) { " selected" } else { "" }, esc(&world.agents[i].name)
+        ));
+    }
+    body.push_str(&format!(
+        "<form method=get action=/thoughts style='margin:1rem 0 1.6rem'>\
+         <select name=soul onchange='this.form.submit()' style='font:inherit;padding:.3rem .4rem'>{}</select> \
+         <noscript><button type=submit>Read</button></noscript></form>",
+        opts
+    ));
+
+    match sel {
+        Some(i) => {
+            let who = world.agents[i].name.clone();
+            body.push_str(&format!(
+                "<div class=sub>The running stream of <a href=/folk/{i} class=who>{}</a> — up to fifty thoughts back, newest first.</div>",
+                esc(&who)
+            ));
+            match sim.reflections_of(&who, 50) {
+                Ok(rs) if !rs.is_empty() => {
+                    for (day, thought) in rs {
+                        body.push_str(&format!(
+                            "<div class=entry style='margin:.9rem 0'><span class=date>{}</span>\
+                             <br><span class=think>{}</span></div>",
+                            esc(&sim.day_to_date(day)), esc(&thought)
+                        ));
+                    }
+                }
+                Ok(_) => body.push_str("<p class=sub>They have not had a quiet hour to themselves yet.</p>"),
+                Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
             }
         }
-        Ok(_) => body.push_str(
-            "<p class=sub>No one has had a quiet hour to themselves just yet — give the town an hour or two.</p>",
-        ),
-        Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+        None => match sim.recent_reflections(20) {
+            Ok(rs) if !rs.is_empty() => {
+                for (day, who, thought) in rs {
+                    let when = sim.day_to_date(day);
+                    let nm = match idx_of(&who) {
+                        Some(i) => format!("<a href=/folk/{i} class=who>{}</a>", esc(&who)),
+                        None => format!("<span class=who>{}</span>", esc(&who)),
+                    };
+                    body.push_str(&format!(
+                        "<div class=entry style='margin:.9rem 0'>{} <span class=date>&middot; {}</span>\
+                         <br><span class=think>{}</span></div>",
+                        nm, esc(&when), esc(&thought)
+                    ));
+                }
+            }
+            Ok(_) => body.push_str(
+                "<p class=sub>No one has had a quiet hour to themselves just yet — give the town an hour or two.</p>",
+            ),
+            Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+        },
     }
     body.push_str("<p style='margin-top:2rem'><a href=/>&larr; Dashboard</a></p>");
     page("Thrushcombe — the town, thinking", &format!("{}{}", fear_banner(sim), body))
@@ -741,7 +789,7 @@ fn route(sim: &Sim, url: &str) -> String {
     } else if path == "/talk" {
         talk_page(sim, url)
     } else if path == "/thoughts" {
-        thoughts(sim)
+        thoughts(sim, url)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),

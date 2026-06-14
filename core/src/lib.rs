@@ -154,6 +154,7 @@ pub struct Inquest {
     pub accused_since: i64,   // the day it fixed on them
     pub hanged: bool,         // the town has had its blood
     pub closed: bool,         // the inquest is over — by a hanging, or given up
+    pub investigator: i32,    // -1, or the soul who leads the official inquiry, bending it their way
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1395,6 +1396,19 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "investigate" => {
+                // Name the soul who will lead the official inquiry into an open killing. They bend it
+                // their way: a genteel magistrate shields the respectable and presses the working folk
+                // and the incomers (see tend_inquest). Resolve the index first to dodge the borrow.
+                let who = world.idx(t);
+                if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) {
+                    q.investigator = who.map(|i| i as i32).unwrap_or(-1);
+                }
+                if let Some(idx) = who { clamp_standing(&mut world.agents[idx], 2); }
+                out.push(mk("inquest", t, format!("{t} has taken the inquiry into {}'s murder in hand, sitting in judgement over the parish.",
+                    world.inquest.as_ref().map(|q| q.victim_name.clone()).unwrap_or_default())));
+                world.spawn_news(t, &format!("how {t} sits in judgement over the murder"), 1, day, &[]);
+            }
             "murder" => {
                 // A killing in the parish, by one of its own. The victim falls inert; the town is
                 // thrown into dread; an inquest opens that the manhunt (tend_inquest) will press.
@@ -1429,6 +1443,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             accused_since: 0,
                             hanged: false,
                             closed: false,
+                            investigator: -1,
                         });
                     }
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
@@ -1876,6 +1891,14 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
         .map(|i| world.news.iter().any(|nw| nw.subject == i && nw.valence < 0 && day - nw.born <= 40))
         .collect();
     let top_standing = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+    // the official inquiry, if one has been taken in hand, bends the suspicion its leader's way.
+    // A genteel magistrate (Major Pringle) shields his own kind and turns the questions on the
+    // working folk and the incomers — class justice, baked into the accrual, not just narrated.
+    let investigator = inq.investigator;
+    let inv_genteel = (investigator >= 0)
+        .then(|| world.agents.get(investigator as usize))
+        .flatten()
+        .is_some_and(|a| matches!(a.archetype.as_str(), "genteel_status_seeker" | "official"));
     for i in 0..n {
         if i == v || !world.agents[i].active() || world.agents[i].archetype == "child" {
             world.agents[i].suspicion = (world.agents[i].suspicion - 1).max(0);
@@ -1891,6 +1914,14 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
         if world.agents[i].mood <= -40 { d += 1; }
         if world.agents[i].standing < top_standing - 30 { d += 1; } // ill repute
         if rng.gen_bool(0.18) { d += rng.gen_range(1..=3); }     // the rumour lights where it will
+        // the magistrate's thumb on the scale
+        if i as i32 == investigator {
+            d -= 10;                                             // the man who sits in judgement is never the suspect
+        } else if inv_genteel {
+            let respectable = matches!(world.agents[i].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner")
+                || world.agents[i].standing >= top_standing - 12;
+            if respectable { d -= 3; } else { d += 3; }          // shields his own; presses the labourer and the stranger
+        }
         if d == 0 { d = -2; }                                    // suspicion is fickle; unfed, it cools
         world.agents[i].suspicion = (world.agents[i].suspicion + d).clamp(0, 200);
     }
@@ -1998,6 +2029,19 @@ fn inquest_brief(w: &World, idx: usize) -> Option<String> {
     } else if let Some(m) = most {
         if w.agents[m].suspicion >= 40 && m != idx {
             s.push_str(&format!(" The town's suspicion is settling on {} — though whether justly, who can say.", w.agents[m].name));
+        }
+    }
+    // the official inquiry, and whose side of the class line the soul sits on
+    if inq.investigator >= 0 && inq.investigator != idx as i32 {
+        if let Some(inv) = w.agents.get(inq.investigator as usize) {
+            let inv_genteel = matches!(inv.archetype.as_str(), "genteel_status_seeker" | "official");
+            let respectable = matches!(w.agents[idx].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner");
+            s.push_str(&format!(" {} sits as magistrate over the inquiry.", inv.name));
+            if inv_genteel && !respectable {
+                s.push_str(" And it is plain his questions fall on the working folk and the strangers, on people like them — never on his own kind. There is no justice in it for the likes of them, only the need of a name to hang.");
+            } else if inv_genteel && respectable {
+                s.push_str(" And being of his own rank, they know the inquiry will not trouble people like them, whatever the truth of it.");
+            }
         }
     }
     Some(s)
@@ -3135,7 +3179,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 26;
+const SNAPSHOT_VERSION: i64 = 27;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3913,6 +3957,15 @@ impl Sim {
         rows.collect()
     }
 
+    /// One soul's reflections, newest first, dated — for their own thought history.
+    pub fn reflections_of(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, thought FROM reflections WHERE subject = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![name, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
     /// The town's inner life, newest first — every soul's reflections, for the public feed.
     /// Returns (day, subject, thought).
     pub fn recent_reflections(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String)>> {
@@ -4434,7 +4487,9 @@ impl Sim {
 
         let fear = world.inquest.as_ref().map(|inq| {
             let days = (target - inq.opened).max(0);
-            let level = match world.dread { d if d >= 80 => "the town in terror", d if d >= 60 => "fear thick in every lane", d if d >= 30 => "a wary dread", _ => "an uneasy quiet" };
+            let dread_word = match world.dread { d if d >= 80 => "the town in terror", d if d >= 60 => "fear thick in every lane", d if d >= 30 => "a wary dread", _ => "an uneasy quiet" };
+            let bench = (inq.investigator >= 0).then(|| world.agents.get(inq.investigator as usize).map(|a| format!(" — {} on the bench", a.name))).flatten().unwrap_or_default();
+            let level = format!("{dread_word}{bench}");
             if inq.closed {
                 let who = (inq.accused >= 0).then(|| world.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten().unwrap_or_else(|| "someone".into());
                 return format!("The murder of {} — {who} hanged for it {days}d on. {level}; no one quite sure justice was done.", inq.victim_name);
@@ -4640,6 +4695,7 @@ mod inquest_tests {
             accused_since: 0,
             hanged: false,
             closed: false,
+            investigator: -1,
         });
         // the suspect is everything the parish fears: bad blood with the dead, an incomer, cornered,
         // and friendless and low — so doubt will not save them when the reckoning comes

@@ -113,7 +113,7 @@ enum Cmd {
     /// Live monitor (q / Esc to quit).
     Watch,
     /// Play the novelist: inject circumstance the town will react to.
-    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint.
+    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate.
     Providence {
         kind: String,
         #[arg(long, default_value = "")]
