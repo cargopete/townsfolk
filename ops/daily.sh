@@ -15,3 +15,4 @@ BIN="$REPO/target/release/thrush"
 "$BIN" --db "$DB" wildcard || true   # now and then, an LLM-invented happening (throttled)
 "$BIN" --db "$DB" hinge    || true   # now and then, a soul faces a turning point
 "$BIN" --db "$DB" converse || true   # let two souls fall into talk of their own accord
+"$BIN" --db "$DB" reflect  || true   # the most-overdue soul takes a quiet hour to think

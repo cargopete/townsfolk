@@ -4,4 +4,6 @@ After=network-online.target docker.service
 
 [Service]
 Type=oneshot
+# Share the host Ollama (:11434) — one qwen3:8b copy for all apps on the 8GB card.
+Environment=OLLAMA_HOST=http://127.0.0.1:11434
 ExecStart=/home/pepe/townsfolk/ops/daily.sh

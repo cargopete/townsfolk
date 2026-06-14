@@ -491,6 +491,12 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             p.push_str(&format!(" What you already remember of {}: {}.", s.name, about.join("; ")));
         }
     }
+    // what has lately been on your own mind, so you bring a present, thinking self to the talk
+    if let Ok(thoughts) = sim.self_reflections(&t.name, 2) {
+        if !thoughts.is_empty() {
+            p.push_str(&format!(" Of late you have been turning over in your mind: {}.", thoughts.join("; ")));
+        }
+    }
     // the town as it actually stands, so the talk can touch real goings-on
     p.push_str(&format!(" The season is {}.", thrush_core::Season::of(today()).name()));
     if let Ok(recent) = sim.chronicle(5) {

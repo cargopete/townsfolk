@@ -1266,6 +1266,12 @@ pub struct ConversePair {
     pub relation: String,
 }
 
+/// A soul the driver can set to reflecting, with the dossier of their life to contemplate.
+pub struct ReflectSubject {
+    pub name: String,
+    pub dossier: String,
+}
+
 /// A turning point the driver can put to the oracle — assembled from world state for the bin.
 pub struct Hinge {
     pub subject: usize,
@@ -2832,7 +2838,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- Conversations a soul has had: the transcript, and what they took away (their memory).
          CREATE TABLE IF NOT EXISTS dialogues(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, source TEXT NOT NULL, target TEXT NOT NULL,
-            transcript TEXT NOT NULL, memory TEXT NOT NULL);",
+            transcript TEXT NOT NULL, memory TEXT NOT NULL);
+         -- A soul's own reflections: the private thought they came to, hour by hour. Self-memory.
+         CREATE TABLE IF NOT EXISTS reflections(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);",
     )
 }
 
@@ -2856,8 +2865,8 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
     for d in list {
         let Some(si) = world.idx(&d.subject) else { continue };
         let ti = world.idx(&d.target);
-        // a turning-point verdict is a public beat; a private conversation is not
-        if d.kind != "dialogue" {
+        // a turning-point verdict is a public beat; a private conversation or a private thought is not
+        if d.kind != "dialogue" && d.kind != "reflect" {
             out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
         }
         match (d.kind.as_str(), d.choice.as_str()) {
@@ -2961,6 +2970,23 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             world.affinity.insert((si as u32, t as u32), world.aff(si, t).max(15));
                         }
                     }
+                    _ => {}
+                }
+            }
+            // the felt residue of an hour's reflection — a private settling of spirits, and
+            // sometimes a soul talks themselves into a new ambition. choice is "mood:sway".
+            ("reflect", c) => {
+                let mut parts = c.split(':');
+                match parts.next().unwrap_or("") {
+                    "lifts" => nudge_mood(&mut world.agents[si], 8),
+                    "sinks" => nudge_mood(&mut world.agents[si], -8),
+                    _ => {} // steadies — they come away even
+                }
+                match parts.next().unwrap_or("none") {
+                    "debt" => world.agents[si].goal = 1,    // resolved to clear their debts
+                    "rise" => world.agents[si].goal = 2,    // determined to rise in the world
+                    "prosper" => world.agents[si].goal = 5, // set on making their fortune
+                    "content" => world.agents[si].goal = 0, // made their peace, to rest content
                     _ => {}
                 }
             }
@@ -3317,6 +3343,14 @@ impl Sim {
         };
         relation.push_str(&recall(&w.agents[a].name, &w.agents[b].name));
         relation.push_str(&recall(&w.agents[b].name, &w.agents[a].name));
+        // and what has lately been on each one's own mind, so they bring a present self to the talk
+        let mused = |who: &str| -> String {
+            self.self_reflections(who, 1).ok().into_iter().flatten().next()
+                .map(|m| format!(" Of late {who} has been thinking: {m}"))
+                .unwrap_or_default()
+        };
+        relation.push_str(&mused(&w.agents[a].name));
+        relation.push_str(&mused(&w.agents[b].name));
         // the parish as it actually stands, so they have real matter to talk of
         relation.push_str(&format!(" The season is {}.", Season::of(today).name()));
         if let Ok(recent) = self.chronicle(4) {
@@ -3344,6 +3378,93 @@ impl Sim {
         )?;
         let rows = stmt.query_map(params![name, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect()
+    }
+
+    /// Record an hour's reflection: store the private thought (self-memory) and fold its
+    /// felt residue — a settling of spirits, and any new resolve — through the decree mechanism.
+    /// mood is one of [lifts, sinks, steadies]; sway one of [none, debt, rise, prosper, content].
+    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO reflections(day,subject,thought) VALUES(?1,?2,?3)",
+            params![day, subject, thought],
+        )?;
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'reflect','',?3,?4)",
+            params![day, subject, format!("{mood}:{sway}"), thought],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// A soul's own recent thoughts — the inner life they carry forward into talk and the next hour.
+    pub fn self_reflections(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT thought FROM reflections WHERE subject = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![name, limit], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// The day-index a soul last reflected, per soul — for choosing who is most overdue.
+    fn last_reflected(&self) -> rusqlite::Result<BTreeMap<String, i64>> {
+        let mut stmt = self.conn.prepare("SELECT subject, MAX(day) FROM reflections GROUP BY subject")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect()
+    }
+
+    /// Pick the soul most overdue for a reflection — the active adult who has gone longest
+    /// without one (never-reflected come first), tie-broken by a salt so a tied field varies.
+    /// Returns the dossier they would contemplate: who they are, their ties, their late history,
+    /// what they carry of others and of their own thinking, and how the parish stands.
+    pub fn reflect_subject(&self, today: Date, salt: u64) -> Option<ReflectSubject> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let last = self.last_reflected().unwrap_or_default();
+        let idx = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .min_by_key(|&i| {
+                let since = last.get(&w.agents[i].name).copied().unwrap_or(-1);
+                let jitter = (i as u64 ^ salt).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33;
+                (since, jitter)
+            })?;
+        let ag = &w.agents[idx];
+        let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
+            "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+            "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
+        }.to_string());
+        let named = |v: Vec<(usize, i16)>| v.into_iter().map(|(j, _)| w.agents[j].name.clone()).collect::<Vec<_>>().join(", ");
+        let friends = named(w.ties(idx, true, 3));
+        let odds = named(w.ties(idx, false, 3));
+        let feud = (ag.rival >= 0).then(|| w.agents.get(ag.rival as usize).map(|r| r.name.clone())).flatten();
+
+        let mut dossier = format!(
+            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}. They want {goal}.",
+            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
+            mood = mood_word(ag.mood), goal = goal_label(&w, ag.goal, ag.goal_target),
+        );
+        if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
+        if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
+        if let Some(r) = feud { dossier.push_str(&format!("\nThey nurse a running grudge against {r}.")); }
+
+        if let Ok(es) = self.person_events(&ag.name, 5) {
+            let lines: Vec<String> = es.into_iter().rev().map(|e| format!("  {} — {}", e.date, e.text)).collect();
+            if !lines.is_empty() { dossier.push_str(&format!("\nLately for them:\n{}", lines.join("\n"))); }
+        }
+        if let Ok(ms) = self.memories_of(&ag.name, 4) {
+            let lines: Vec<String> = ms.into_iter().map(|(who, m)| format!("  of {who}: {m}")).collect();
+            if !lines.is_empty() { dossier.push_str(&format!("\nWhat they carry of others:\n{}", lines.join("\n"))); }
+        }
+        if let Ok(ts) = self.self_reflections(&ag.name, 3) {
+            if !ts.is_empty() { dossier.push_str(&format!("\nTheir own late thoughts:\n{}", ts.iter().map(|t| format!("  {t}")).collect::<Vec<_>>().join("\n"))); }
+        }
+        dossier.push_str(&format!("\nThe season is {}.", Season::of(today).name()));
+        if let Ok(recent) = self.chronicle(4) {
+            let lines: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
+            if !lines.is_empty() { dossier.push_str(&format!(" About the parish lately: {}", lines.join(" "))); }
+        }
+        Some(ReflectSubject { name: ag.name.clone(), dossier })
     }
 
     /// Find a soul at a genuine turning point — a long feud that might be forgiven, ruin to be

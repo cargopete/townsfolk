@@ -94,6 +94,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Let the soul most overdue take a quiet hour to themselves and reflect — on their life,
+    /// their work, the town, their hopes. Records the thought (self-memory) and its residue.
+    Reflect,
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -218,6 +221,26 @@ fn assess_pair(agent: &ureq::Agent, host: &str, model: &str, a: &str, b: &str, t
         (!memory.is_empty()).then_some((warmth, memory, sway))
     };
     Some((one(parsed.get("a")?)?, one(parsed.get("b")?)?))
+}
+
+const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Thrushcombe St Mary, a 1934 West-Country market town, in a quiet hour to themselves. You are given who they are, their station, their ties, their recent days, and how the parish stands. Speak as their own inward thought — on themselves, their work, their place in the town, those about them, what they hope or fear, the turn of the year, life as they find it. Stay wholly in period voice and true to their station and schooling: they know only the world of 1934 and their own parish — nothing of machines that think, nothing of times to come, and the labouring sort keep to what touches the parish. One or two sentences of genuine, plain, unforced inward thought — no quotation marks, no preamble. Then judge how the hour has left them. Respond ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content]}. mood is whether the contemplation has lifted, lowered, or merely steadied their spirits. sway is whether they have talked themselves into a new resolve: debt=to clear what they owe, rise=to better their standing, prosper=to make their fortune, content=to cease striving and rest content, none=unchanged. Most quiet hours change little — prefer steadies and none unless the dossier gives real cause.";
+
+/// Put a soul's quiet hour to Qwen. Returns (thought, mood, sway), each validated to its
+/// vocabulary, the thought stripped of stock fillers. None on oracle failure.
+fn reflect_one(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<(String, String, String)> {
+    let prompt = format!("{dossier}\n\nWrite their reflection.");
+    let body = serde_json::json!({
+        "model": model, "system": REFLECT_PROMPT, "prompt": prompt,
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.85 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let thought = thrush_core::strip_filler(parsed.get("thought")?.as_str()?.trim());
+    let mood = parsed.get("mood").and_then(|v| v.as_str()).unwrap_or("steadies").trim().to_lowercase();
+    let mood = ["lifts", "sinks", "steadies"].into_iter().find(|m| mood.contains(m)).unwrap_or("steadies").to_string();
+    let sway = parsed.get("sway").and_then(|v| v.as_str()).unwrap_or("none").trim().to_lowercase();
+    let sway = ["debt", "rise", "prosper", "content"].into_iter().find(|s| sway.contains(s)).unwrap_or("none").to_string();
+    (!thought.trim().is_empty()).then_some((thought, mood, sway))
 }
 
 /// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
@@ -442,6 +465,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("Conversation [{} & {}]: {} came away {wa}; {} came away {wb}.", p.a_name, p.b_name, p.a_name, p.b_name);
                 }
                 None => eprintln!("oracle unavailable ({host}) — conversation unrecorded."),
+            }
+        }
+        Cmd::Reflect => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            // the wall-clock hour only breaks ties among the equally-overdue — who reflects is
+            // decided by who has gone longest without; what they think is recorded and replayed.
+            let salt = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()).hour() as u64;
+            let Some(r) = sim.reflect_subject(t, salt) else { return Ok(()) };
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            match reflect_one(&agent, &host, &model, &r.dossier) {
+                Some((thought, mood, sway)) => {
+                    sim.record_reflection(t, &r.name, &thought, &mood, &sway)?;
+                    sim.catch_up(today(), cur_phase())?; // re-fold the day so the residue lands
+                    println!("Reflection [{} · {mood}/{sway}]: {thought}", r.name);
+                }
+                None => eprintln!("oracle unavailable ({host}) — no reflection this hour."),
             }
         }
         Cmd::Status => {
