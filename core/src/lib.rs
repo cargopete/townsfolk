@@ -1321,17 +1321,30 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 world.spawn_news(t, &what, -3, day, &[]);
             }
             "stranger" => {
-                // --target is the newcomer's name; --note is flavour (their trade, their air).
+                // --target is the newcomer's name. --note is either plain flavour, or a structured
+                // "archetype|trade|seat|age|standing|purse|blurb" to drop in a fully-formed incomer.
                 let name = if t.is_empty() { "A stranger".to_string() } else { t.clone() };
-                let mut agent = make_agent(&name, "blunt_hand", "the empty cottage", 25, 12, 1, 33, day);
-                agent.origin = Some("parts unknown".into());
-                let blurb = if iv.note.is_empty() {
-                    format!("{name} arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.")
+                let known = ["genteel_status_seeker", "hill_farmer", "practitioner", "scheming_improver", "blunt_hand", "official"];
+                let p: Vec<&str> = iv.note.split('|').collect();
+                let (arch, trade, seat, age, standing, purse, blurb): (&str, &str, &str, i64, i32, i32, &str) = if p.len() >= 7 {
+                    let a = if known.contains(&p[0].trim()) { p[0].trim() } else { "blunt_hand" };
+                    let seat = if p[2].trim().is_empty() { "the empty cottage" } else { p[2].trim() };
+                    (a, p[1].trim(), seat, p[3].trim().parse().unwrap_or(33), p[4].trim().parse().unwrap_or(25), p[5].trim().parse().unwrap_or(12), p[6].trim())
                 } else {
-                    format!("{name} — {} — arrived in Thrushcombe and took the empty cottage. Nobody knew quite who they were.", iv.note)
+                    ("blunt_hand", "", "the empty cottage", 33, 25, 12, iv.note.as_str())
                 };
-                out.push(mk("providence", &name, blurb));
-                world.spawn_news(&name, "the stranger lately come to the empty cottage", 1, day, &[]);
+                let mut agent = make_agent(&name, arch, seat, standing, purse, 1, age, day);
+                agent.origin = Some("parts unknown".into());
+                if !trade.is_empty() {
+                    agent.trade = Some(trade.to_string());
+                }
+                let blurb_txt = if blurb.is_empty() {
+                    format!("{name} arrived in Thrushcombe and took {seat}. Nobody knew quite who they were.")
+                } else {
+                    format!("{name} — {blurb} — arrived in Thrushcombe and took up at {seat}. Nobody knew quite who they were.")
+                };
+                out.push(mk("providence", &name, blurb_txt));
+                world.spawn_news(&name, &format!("the stranger lately come to {seat}"), 1, day, &[]);
                 world.agents.push(agent);
             }
             other => {
