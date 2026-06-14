@@ -3,3 +3,4 @@ wasm-policies/target
 world.db
 world.db-*
 *.db
+ops/secrets.env

@@ -6,4 +6,7 @@ After=network-online.target docker.service
 Type=oneshot
 # Share the host Ollama (:11434) — one qwen3:8b copy for all apps on the 8GB card.
 Environment=OLLAMA_HOST=http://127.0.0.1:11434
+# Optional secrets (ANTHROPIC_API_KEY) for the Claude-backed reflect job; the leading '-'
+# means the unit still starts if the file is absent, and reflect falls back to local Qwen.
+EnvironmentFile=-/home/pepe/townsfolk/ops/secrets.env
 ExecStart=/home/pepe/townsfolk/ops/daily.sh

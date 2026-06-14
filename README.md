@@ -104,15 +104,22 @@ It runs end to end:
   warming or cooling, now and then a resolve (to clear a debt, to rise, to mend a quarrel).
   The town's relationships and ambitions drift through talk, all of it folded deterministically.
 - **Souls reflect on their lives** — every hour the soul most *overdue* takes a quiet hour
-  to themselves and **thinks**: on their work, their place in the town, those about them,
-  what they hope or fear, life as they find it. Qwen is given their whole dossier — standing,
-  purse, spirits, ties, recent days, what they carry of others and of their own past
-  thinking — and answers in their own inward voice, grounded in 1934 and their station. The
-  thought becomes **self-memory** (carried forward into their next talk and their next hour,
-  so reflection compounds), and its residue is recorded and folded — a settling of spirits,
-  and now and then a soul who has *talked themselves into* a new ambition. Private, never a
+  to themselves and **thinks**. About seven parts in ten the thought turns *inward* — who
+  they are and who they've become, what they've made of their years and what they still want
+  of the ones left, their regrets and small hopes, whether their work and days amount to what
+  they'd wish; the rest turns outward, to one soul they can't put from their mind, the town,
+  the season's work. The oracle gets their whole dossier — standing, purse, spirits, ties,
+  recent days, what they carry of others and of their own past thinking — and answers in
+  their own inward voice, grounded in 1934 and their station. It runs on a **local Qwen by
+  default, or Claude (Haiku) for a sharper inner voice** when an `ANTHROPIC_API_KEY` is set,
+  falling back to Qwen if the key or network is absent — either way the thought is recorded
+  once and replayed, so determinism holds. The thought becomes **self-memory** (carried into
+  their next talk and next hour, so reflection compounds), and its residue folds in with real
+  teeth: a settling of spirits, a turn of ambition, and now and then a *hardened feeling about
+  one named soul* — a warmer or colder regard, or a resolve to **pay court**, to **set
+  themselves against** them (a self-authored feud), or to **make peace**. Private, never a
   public beat; one soul an hour, so the whole town turns its inner life over across a couple
-  of days. The recorded thought is the model's; the effect on the world stays bounded and exact.
+  of days. The recorded verdict is the model's; the effect on the world stays bounded and exact.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
@@ -187,7 +194,9 @@ The town can run itself on an **hourly** systemd user timer — see [`ops/`](ops
 beat catches the town up to the current phase, fetches the weather, narrates the new
 events, and lets the town's inner life turn over — a wildcard or a turning point now and
 then, two souls falling into talk, and the most-overdue soul taking an hour to reflect.
-Idempotent and self-healing across missed hours.
+Idempotent and self-healing across missed hours. Drop an `ANTHROPIC_API_KEY=…` line in
+`ops/secrets.env` (gitignored, loaded by the timer) to back the **reflect** job with Claude
+instead of the local Qwen; everything else stays local.
 
 ## The two engines (native ↔ wasm)
 

@@ -2973,8 +2973,9 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     _ => {}
                 }
             }
-            // the felt residue of an hour's reflection — a private settling of spirits, and
-            // sometimes a soul talks themselves into a new ambition. choice is "mood:sway".
+            // the felt residue of an hour's reflection — a private settling of spirits, a turn
+            // of ambition, a hardened feeling about one soul, and now and then a resolve to act
+            // on it. choice is "mood:sway:regard:resolve"; target (if any) is the soul mused on.
             ("reflect", c) => {
                 let mut parts = c.split(':');
                 match parts.next().unwrap_or("") {
@@ -2988,6 +2989,46 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     "prosper" => world.agents[si].goal = 5, // set on making their fortune
                     "content" => world.agents[si].goal = 0, // made their peace, to rest content
                     _ => {}
+                }
+                let regard = parts.next().unwrap_or("none");
+                let resolve = parts.next().unwrap_or("none");
+                if let Some(t) = ti {
+                    if t != si {
+                        // a thought can warm or sour how they hold one particular soul
+                        match regard {
+                            "warmer" => world.nudge_aff(si, t, 10),
+                            "colder" => world.nudge_aff(si, t, -10),
+                            _ => {}
+                        }
+                        // …and, rarely, resolve them to act on it of their own accord
+                        match resolve {
+                            // pay court — begin a suit, if both are free and the match is possible
+                            "court" => {
+                                let (a, b) = (&world.agents[si], &world.agents[t]);
+                                if a.courting < 0 && a.spouse.is_none() && b.spouse.is_none()
+                                    && a.sex != b.sex && a.archetype != "child" && b.archetype != "child"
+                                {
+                                    world.agents[si].courting = t as i32;
+                                    world.agents[si].courtship = 0;
+                                }
+                            }
+                            // set themselves against them — a self-authored feud, pressed toward a reckoning
+                            "confront" => {
+                                world.agents[si].rival = t as i32;
+                                world.agents[si].feud = 0;
+                                world.nudge_aff(si, t, -15);
+                            }
+                            // resolve to make peace — spend the grudge they had been carrying
+                            "mend" => {
+                                world.nudge_aff(si, t, 25);
+                                if world.agents[si].rival == t as i32 {
+                                    world.agents[si].rival = -1;
+                                    world.agents[si].feud = 0;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             _ => {}
@@ -3381,18 +3422,28 @@ impl Sim {
     }
 
     /// Record an hour's reflection: store the private thought (self-memory) and fold its
-    /// felt residue — a settling of spirits, and any new resolve — through the decree mechanism.
-    /// mood is one of [lifts, sinks, steadies]; sway one of [none, debt, rise, prosper, content].
-    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str) -> rusqlite::Result<()> {
+    /// felt residue through the decree mechanism. mood ∈ [lifts, sinks, steadies]; sway ∈
+    /// [none, debt, rise, prosper, content]; regard ∈ [none, warmer, colder] and resolve ∈
+    /// [none, court, confront, mend] both bear on `toward` (the one soul mused on, or "").
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str, toward: &str, regard: &str, resolve: &str) -> rusqlite::Result<()> {
         let day = self.target_day(date).max(0);
         self.conn.execute(
             "INSERT INTO reflections(day,subject,thought) VALUES(?1,?2,?3)",
             params![day, subject, thought],
         )?;
         self.conn.execute(
-            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'reflect','',?3,?4)",
-            params![day, subject, format!("{mood}:{sway}"), thought],
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'reflect',?3,?4,?5)",
+            params![day, subject, toward, format!("{mood}:{sway}:{regard}:{resolve}"), thought],
         )?;
+        // if the hour hardened their regard for a particular soul, keep it as a memory of that
+        // soul, so it surfaces on their page and colours the next time the two of them speak.
+        if !toward.is_empty() && regard != "none" {
+            self.conn.execute(
+                "INSERT INTO dialogues(day,source,target,transcript,memory) VALUES(?1,?2,?3,?4,?5)",
+                params![day, toward, subject, thought, thought],
+            )?;
+        }
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
         Ok(())
