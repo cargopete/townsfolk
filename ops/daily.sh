@@ -16,3 +16,4 @@ BIN="$REPO/target/release/thrush"
 "$BIN" --db "$DB" hinge    || true   # now and then, a soul faces a turning point
 "$BIN" --db "$DB" converse || true   # let two souls fall into talk of their own accord
 "$BIN" --db "$DB" reflect  || true   # the most-overdue soul takes a quiet hour to think
+"$BIN" --db "$DB" biography --limit 2 || true  # write the lives of any souls still lacking one

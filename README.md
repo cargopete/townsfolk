@@ -128,6 +128,14 @@ It runs end to end:
   at a time, its threshold captured the moment it's set, so the weeks of trying are a real
   test — continuity of *purpose* to go with the continuity of memory. Shown on each soul's
   page (*Pursuing*) and resolved with a public beat that spreads on the gossip graph.
+- **Every soul has a life** — a biography the parish would tell of them, written once by the
+  oracle from their settled facts (station, household, age, kin, where they came from): where
+  they were born and how they came to their place, their character, a defining turn, a private
+  hope or old wound — in period and in keeping with their station. Shown on each soul's page
+  (*A life*), and — crucially — **injected into talk and reflection**, so a soul answers from
+  their own history *and knows the other's*: when Cynthia Pelham speaks to Lady Aldermaston,
+  each brings the other's story to the exchange. Flavour, recorded once and never folded, so it
+  costs the determinism nothing. `thrush biography` works through whoever still lacks one.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
@@ -186,6 +194,7 @@ thrush narrate                           # render new salient beats in voice (lo
 thrush wildcard                          # now and then, let Qwen invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
 thrush reflect                           # the most-overdue soul takes a quiet hour to think
+thrush biography --limit 60              # write the lives of souls who lack one (Claude/Qwen)
 thrush status                            # the town at a glance
 thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit
 

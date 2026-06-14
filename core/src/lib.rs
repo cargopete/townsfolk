@@ -2902,7 +2902,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
             transcript TEXT NOT NULL, memory TEXT NOT NULL);
          -- A soul's own reflections: the private thought they came to, hour by hour. Self-memory.
          CREATE TABLE IF NOT EXISTS reflections(
-            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);",
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);
+         -- A soul's biography: the life the parish would tell of them. Flavour, recorded once
+         -- (never folded); injected into talk and reflection so every soul knows the others' stories.
+         CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);",
     )
 }
 
@@ -3481,6 +3484,12 @@ impl Sim {
         };
         relation.push_str(&mused(&w.agents[a].name));
         relation.push_str(&mused(&w.agents[b].name));
+        // each knows the other's history — the life the parish tells of them
+        let life = |who: &str| -> String {
+            self.biography(who).ok().flatten().map(|b| format!(" The life of {who}: {b}")).unwrap_or_default()
+        };
+        relation.push_str(&life(&w.agents[a].name));
+        relation.push_str(&life(&w.agents[b].name));
         // the parish as it actually stands, so they have real matter to talk of
         relation.push_str(&format!(" The season is {}.", Season::of(today).name()));
         if let Ok(recent) = self.chronicle(4) {
@@ -3536,6 +3545,85 @@ impl Sim {
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
         Ok(())
+    }
+
+    /// Record (or replace) a soul's biography — the life the parish tells of them. Flavour, not
+    /// folded; injected into talk and reflection so souls know one another's histories.
+    pub fn record_biography(&mut self, name: &str, text: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO biographies(name,text) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET text=?2",
+            params![name, text],
+        )?;
+        Ok(())
+    }
+
+    /// A soul's recorded biography, if one has been written.
+    pub fn biography(&self, name: &str) -> rusqlite::Result<Option<String>> {
+        match self.conn.query_row("SELECT text FROM biographies WHERE name = ?1", params![name], |r| r.get::<_, String>(0)) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The living adults who have no biography yet — the backlog for the biographer to work through.
+    pub fn souls_without_bio(&self, today: Date) -> Vec<String> {
+        let w = self.world_snapshot(today);
+        let mut have: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(mut stmt) = self.conn.prepare("SELECT name FROM biographies") {
+            if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+                for n in rows.flatten() {
+                    have.insert(n);
+                }
+            }
+        }
+        w.agents.iter()
+            .filter(|a| a.active() && a.archetype != "child" && !have.contains(&a.name))
+            .map(|a| a.name.clone())
+            .collect()
+    }
+
+    /// The settled facts the parish knows of a soul — name, station, household, age, kin, origin —
+    /// the seed a biographer invents a consistent life around.
+    pub fn bio_facts(&self, name: &str, today: Date) -> Option<String> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let idx = w.agents.iter().position(|a| a.name == name)?;
+        let a = &w.agents[idx];
+        let role = a.trade.clone().unwrap_or_else(|| match a.archetype.as_str() {
+            "genteel_status_seeker" => "gentlefolk".into(),
+            "hill_farmer" => "a hill farmer".into(),
+            "practitioner" => "of the practice (a vet or doctor)".into(),
+            "scheming_improver" => "an improver, full of modern schemes".into(),
+            "blunt_hand" => "working folk".into(),
+            "official" => "of the parish (church, school or law)".into(),
+            _ => "of the town".into(),
+        });
+        let sex = if a.sex == 0 { "woman" } else { "man" };
+        let mut f = format!("{}, a {sex}, {role}, of {}, aged {}.", a.name, a.seat, a.age(day));
+        if let Some(o) = &a.origin {
+            f.push_str(&format!(" Came to Thrushcombe from {o}."));
+        }
+        if let Some(s) = a.spouse {
+            f.push_str(&format!(" Married to {}.", w.agents[s].name));
+        }
+        if let Some(p) = a.parent {
+            f.push_str(&format!(" A child of {}.", w.agents[p].name));
+        }
+        let kids: Vec<String> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].parent == Some(idx))
+            .map(|i| w.agents[i].name.clone())
+            .collect();
+        if !kids.is_empty() {
+            f.push_str(&format!(" Their children: {}.", kids.join(", ")));
+        }
+        let standing = match a.standing {
+            s if s >= 65 => "well thought of, near the top of the parish",
+            s if s >= 45 => "of solid middling standing",
+            _ => "of humble standing",
+        };
+        f.push_str(&format!(" They are {standing}."));
+        Some(f)
     }
 
     /// Re-read the recorded inputs (decrees, weather, wildcards, interventions) from the db, so a
@@ -3611,6 +3699,9 @@ impl Sim {
         if ag.intent != 0 {
             let what = match ag.intent { 1 => "to mend their fortunes", 2 => "to better their station", _ => "a bold venture" };
             dossier.push_str(&format!("\nThey are already set on a plan — {what} — resolved {} days since, and not yet come to its head.", ag.intent_age));
+        }
+        if let Ok(Some(bio)) = self.biography(&ag.name) {
+            dossier.push_str(&format!("\nThe life behind them: {bio}"));
         }
 
         if let Ok(es) = self.person_events(&ag.name, 5) {

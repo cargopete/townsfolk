@@ -63,6 +63,7 @@ th{text-align:left;color:var(--faint);font-weight:normal;font-variant:small-caps
 td{padding:.32rem .4rem;border-bottom:1px solid #efe7d8;vertical-align:top}
 .doing{color:#3f6b52}.next{color:var(--faint);font-style:italic}
 .where{font-variant:small-caps;letter-spacing:.02em}
+.life{font-size:1.05rem;line-height:1.7;color:#3a342c;border-left:3px solid var(--rule);padding-left:1rem;margin:1rem 0}
 .think{font-style:italic;color:#4a4036}
 .think::before{content:'\\201C'}.think::after{content:'\\201D'}
 .who{font-variant:small-caps;letter-spacing:.03em}
@@ -249,6 +250,11 @@ fn person(sim: &Sim, idx: usize) -> String {
         "<h1>{}{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
         esc(&a.name), status, speak, esc(&station(a)), esc(&a.seat), a.age(day), origin
     );
+
+    // the life the parish tells of them
+    if let Ok(Some(bio)) = sim.biography(&a.name) {
+        body.push_str(&format!("<p class=life>{}</p>", esc(&bio)));
+    }
 
     body.push_str(&format!(
         "<div class=card>standing <span class=bars>{}</span> {} &middot; purse £{}",
@@ -549,6 +555,13 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         if !about.is_empty() {
             p.push_str(&format!(" What you already remember of {}: {}.", s.name, about.join("; ")));
         }
+    }
+    // your own life, and what the parish knows of the one addressing you — the histories you both carry
+    if let Ok(Some(bio)) = sim.biography(&t.name) {
+        p.push_str(&format!(" Your own life, as the parish tells it: {bio}"));
+    }
+    if let Ok(Some(bio)) = sim.biography(&s.name) {
+        p.push_str(&format!(" What is known of {}: {bio}", s.name));
     }
     // what has lately been on your own mind, so you bring a present, thinking self to the talk
     if let Ok(thoughts) = sim.self_reflections(&t.name, 2) {

@@ -97,6 +97,13 @@ enum Cmd {
     /// Let the soul most overdue take a quiet hour to themselves and reflect — on their life,
     /// their work, the town, their hopes. Records the thought (self-memory) and its residue.
     Reflect,
+    /// Write the life the parish would tell of each soul — backstory, character, a defining turn.
+    /// Works through those who lack one; injected into talk and reflection so souls know each other.
+    Biography {
+        /// How many souls (still lacking one) to write this run.
+        #[arg(long, default_value_t = 3)]
+        limit: i64,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -324,6 +331,51 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
         resolve = "none".into();
     }
     Some((thought, mood, sway, toward, regard, resolve, plan))
+}
+
+const BIO_PROMPT: &str = "You write the biography of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the life the parish would tell of them. You are given their settled facts: name, station, household, age, family, where they came from. Invent a warm, particular life that fits those facts exactly: where they were born and how they came to their place in the town, the shape of their character, a defining turn or two of their life, what they are known (or whispered) for in the parish, and a private hope or an old wound. Stay wholly in period and in keeping with their station — a labourer's life is not a gentlewoman's, and the lettered and the unlettered came to their lot by different roads. Three to five sentences, plain and vivid, in the third person, no quotation marks, no preamble, no lists. This is the story the parish tells of them.";
+
+/// Write one soul's biography via Claude (records token cost). None on failure → Qwen fallback.
+fn bio_claude(agent: &ureq::Agent, key: &str, facts: &str, spend: &std::path::Path, today: &str) -> Option<String> {
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
+    let body = serde_json::json!({
+        "model": model, "max_tokens": 400, "system": BIO_PROMPT,
+        "messages": [{ "role": "user", "content": format!("The facts: {facts}\n\nWrite their biography.") }],
+    });
+    let resp: serde_json::Value = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key)
+        .set("anthropic-version", "2023-06-01")
+        .set("content-type", "application/json")
+        .send_json(body).ok()?.into_json().ok()?;
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
+    let text = resp.get("content")?.as_array()?.iter()
+        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
+        .next()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Tidy a biography: drop a leading markdown heading line the model sometimes prepends
+/// (e.g. "# Mrs Pelham"), and trim. The body is left as the prose it is.
+fn clean_bio(s: &str) -> String {
+    let s = s.trim();
+    match s.strip_prefix('#') {
+        Some(_) => s.splitn(2, '\n').nth(1).unwrap_or("").trim().to_string(),
+        None => s.to_string(),
+    }
+}
+
+/// Write one soul's biography via the local Qwen oracle. None on failure.
+fn bio_qwen(agent: &ureq::Agent, host: &str, model: &str, facts: &str) -> Option<String> {
+    let body = serde_json::json!({
+        "model": model, "system": BIO_PROMPT, "prompt": format!("The facts: {facts}\n\nWrite their biography."),
+        "think": false, "stream": false, "options": { "num_ctx": 4096, "temperature": 0.9 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    let s = resp.get("response")?.as_str()?.trim().to_string();
+    (!s.is_empty()).then_some(s)
 }
 
 /// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
@@ -586,6 +638,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 None => eprintln!("oracle unavailable — no reflection this hour."),
             }
+        }
+        Cmd::Biography { limit } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let todo = sim.souls_without_bio(t);
+            if todo.is_empty() {
+                println!("Every soul has a biography.");
+                return Ok(());
+            }
+            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+            let spend = spend_file(&cli.db);
+            let today_str = t.to_string();
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            let mut done = 0;
+            for name in todo.into_iter().take(limit.max(0) as usize) {
+                let Some(facts) = sim.bio_facts(&name, t) else { continue };
+                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                let bio = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                    .and_then(|key| bio_claude(&agent, &key, &facts, &spend, &today_str))
+                    .or_else(|| {
+                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                        bio_qwen(&agent, &host, &model, &facts)
+                    });
+                match bio {
+                    Some(b) => {
+                        let b = clean_bio(&b);
+                        done += 1;
+                        println!("Biography [{name}]: {}…", b.chars().take(90).collect::<String>());
+                        sim.record_biography(&name, &b)?;
+                    }
+                    None => eprintln!("oracle unavailable — {name}'s life goes unwritten this run."),
+                }
+            }
+            println!("{done} written; {} still want one.", sim.souls_without_bio(t).len());
         }
         Cmd::Status => {
             let mut sim = Sim::open(&cli.db)?;
