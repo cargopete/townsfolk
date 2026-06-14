@@ -63,6 +63,9 @@ th{text-align:left;color:var(--faint);font-weight:normal;font-variant:small-caps
 td{padding:.32rem .4rem;border-bottom:1px solid #efe7d8;vertical-align:top}
 .doing{color:#3f6b52}.next{color:var(--faint);font-style:italic}
 .where{font-variant:small-caps;letter-spacing:.02em}
+.think{font-style:italic;color:#4a4036}
+.think::before{content:'\\201C'}.think::after{content:'\\201D'}
+.who{font-variant:small-caps;letter-spacing:.03em}
 @media(max-width:640px){.cols{grid-template-columns:1fr}.hidesm{display:none}}
 ";
 
@@ -70,7 +73,7 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
          <title>{}</title><style>{}</style></head><body><div class=wrap>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/talk>A word…</a></div>{}</div></body></html>",
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/thoughts>Thoughts</a><a href=/talk>A word…</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
 }
@@ -192,6 +195,39 @@ fn folk(sim: &Sim) -> String {
     page("Thrushcombe — The Town", &body)
 }
 
+/// The town's inner life — every soul's reflections, newest first. The quiet hours laid bare.
+fn thoughts(sim: &Sim) -> String {
+    let world = sim.world_snapshot(today());
+    let idx_of = |name: &str| world.agents.iter().position(|a| a.name == name);
+    let mut body = String::from(
+        "<h1>The town, thinking</h1>\
+         <div class=sub>each hour the soul most overdue takes a quiet turn of thought — on their work, \
+         their place, those about them, life as they find it. What passes through their mind, newest first.</div>",
+    );
+    match sim.recent_reflections(150) {
+        Ok(rs) if !rs.is_empty() => {
+            for (day, who, thought) in rs {
+                let when = sim.day_to_date(day);
+                let nm = match idx_of(&who) {
+                    Some(i) => format!("<a href=/folk/{i} class=who>{}</a>", esc(&who)),
+                    None => format!("<span class=who>{}</span>", esc(&who)),
+                };
+                body.push_str(&format!(
+                    "<div class=entry style='margin:.9rem 0'>{} <span class=date>&middot; {}</span>\
+                     <br><span class=think>{}</span></div>",
+                    nm, esc(&when), esc(&thought)
+                ));
+            }
+        }
+        Ok(_) => body.push_str(
+            "<p class=sub>No one has had a quiet hour to themselves just yet — give the town an hour or two.</p>",
+        ),
+        Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+    }
+    body.push_str("<p style='margin-top:2rem'><a href=/>&larr; Dashboard</a></p>");
+    page("Thrushcombe — the town, thinking", &body)
+}
+
 fn person(sim: &Sim, idx: usize) -> String {
     let t = today();
     let day = sim.target_day(t).max(0);
@@ -240,6 +276,20 @@ fn person(sim: &Sim, idx: usize) -> String {
     body.push_str("</div>");
     if !ties_html.is_empty() {
         body.push_str(&format!("<h2>Where they stand</h2>{}", ties_html));
+    }
+
+    // what has lately been on their own mind — the inner life, hour by hour
+    if let Ok(thoughts) = sim.self_reflections(&a.name, 3) {
+        if !thoughts.is_empty() {
+            body.push_str("<h2>On their mind</h2>");
+            for (k, th) in thoughts.iter().enumerate() {
+                let when = if k == 0 { "of late" } else { "earlier" };
+                body.push_str(&format!(
+                    "<div class=entry><span class=date>{}</span><br><span class=think>{}</span></div>",
+                    when, esc(th)
+                ));
+            }
+        }
     }
 
     // their day, phase by phase — recorded beats slotted into the routine
@@ -332,7 +382,7 @@ fn graph(sim: &Sim) -> String {
          body{{margin:0}}#net{{height:88vh;border:1px solid var(--rule)}}.legend{{color:var(--faint);font-size:.85rem}}</style>\
          <script src='https://unpkg.com/vis-network/standalone/umd/vis-network.min.js'></script></head>\
          <body><div class=wrap style='max-width:1100px'>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/talk>A word…</a></div>\
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/thoughts>Thoughts</a><a href=/talk>A word…</a></div>\
          <h1>Kinship</h1><div class=legend>marriages dashed &middot; descent arrowed &middot; drag to explore, click a soul to open them</div>\
          <div id=net></div>\
          <script>\
@@ -640,6 +690,8 @@ fn route(sim: &Sim, url: &str) -> String {
         day(sim, url)
     } else if path == "/talk" {
         talk_page(sim, url)
+    } else if path == "/thoughts" {
+        thoughts(sim)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),

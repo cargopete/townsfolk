@@ -3407,6 +3407,16 @@ impl Sim {
         rows.collect()
     }
 
+    /// The town's inner life, newest first — every soul's reflections, for the public feed.
+    /// Returns (day, subject, thought).
+    pub fn recent_reflections(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, subject, thought FROM reflections ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
     /// The day-index a soul last reflected, per soul — for choosing who is most overdue.
     fn last_reflected(&self) -> rusqlite::Result<BTreeMap<String, i64>> {
         let mut stmt = self.conn.prepare("SELECT subject, MAX(day) FROM reflections GROUP BY subject")?;
