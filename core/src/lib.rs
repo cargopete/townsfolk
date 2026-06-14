@@ -96,6 +96,10 @@ pub struct Agent {
     pub intent: u8,               // 0 none · 1 mend their fortunes · 2 better their station · 3 a bold venture
     pub intent_goal: i32,         // the purse/standing threshold that would count as making good
     pub intent_age: i16,          // days the plan has been pressed — the throughline toward its reckoning
+    // --- an open killing's shadow: how heavily the town's finger points at this soul. The
+    //     parish has no proof, only its fears and its grudges; suspicion accretes onto whoever
+    //     those already point at, and a soul it settles on hangs — guilty or not, unknowable ---
+    pub suspicion: i32,           // 0 none; rises with the town's dread and what it holds against them
 }
 
 impl Agent {
@@ -137,6 +141,21 @@ pub struct News {
     pub broadcast: bool, // has "most of the town knows" already fired
 }
 
+/// An open murder the town is trying to solve. There is no recorded culprit — not in this
+/// struct, not anywhere: the killer is one of the town's own, and which one is unknown even
+/// to the chronicle. The inquest is the manhunt itself — fear, gossip, and grudge converging
+/// on whoever the parish's existing tensions point at. It may hang an innocent. Nobody knows.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Inquest {
+    pub victim: usize,        // the murdered, by index (kept in the cast, but inert)
+    pub victim_name: String,
+    pub opened: i64,          // the day the body was found
+    pub accused: i32,         // -1 until the town fixes on a soul to hang
+    pub accused_since: i64,   // the day it fixed on them
+    pub hanged: bool,         // the town has had its blood
+    pub closed: bool,         // the inquest is over — by a hanging, or given up
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub agents: Vec<Agent>,
@@ -147,6 +166,11 @@ pub struct World {
     /// ledger — a slow variable that remembers every snub and kindness. Gossip moves it,
     /// so reputation becomes *personal*, not just a global score.
     pub affinity: BTreeMap<(u32, u32), i16>,
+    /// The town's fear in the wake of an unpunished killing — 0 at peace. While an inquest is
+    /// open it lingers high; a hanging breaks it; then the unease ebbs over weeks.
+    pub dread: i16,
+    /// An open murder, if the town is living under one.
+    pub inquest: Option<Inquest>,
 }
 
 impl World {
@@ -205,6 +229,7 @@ impl World {
             intent: 0,
             intent_goal: 0,
             intent_age: 0,
+            suspicion: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -319,6 +344,8 @@ impl World {
             news: Vec::new(),
             next_news_id: 0,
             affinity,
+            dread: 0,
+            inquest: None,
         };
         // every adult opens with an ambition fitting their situation, at their resting mood
         for i in 0..w.agents.len() {
@@ -1347,6 +1374,66 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 world.spawn_news(&name, &format!("the stranger lately come to {seat}"), 1, day, &[]);
                 world.agents.push(agent);
             }
+            "appoint" => {
+                // An existing soul takes on a vacated office — a rise in standing and means. If a
+                // killing is open, the parish marks the one who profits by a death, and suspicion
+                // gathers on them: the negative talk both lands now and feeds the inquest for weeks.
+                let role = if iv.note.is_empty() { "new duties in the town".to_string() } else { iv.note.clone() };
+                let rise = if iv.amount > 0 { iv.amount } else { 8 };
+                if let Some(a) = world.agent_mut(t) {
+                    clamp_standing(a, rise);
+                    a.purse += rise * 2; // the office's emolument
+                    a.trade = Some(role.clone());
+                }
+                out.push(mk("succession", t, format!("{t} has taken on {role}, and risen in the town's eyes for it.")));
+                world.spawn_news(t, &format!("{t} coming into {role}"), 2, day, &[]);
+                let open_victim = world.inquest.as_ref().filter(|q| !q.closed).map(|q| q.victim_name.clone());
+                if let Some(vn) = open_victim {
+                    if let Some(idx) = world.idx(t) {
+                        world.agents[idx].suspicion += 20; // the town notes who gains
+                        world.spawn_news(t, &format!("how it is {t} who profits by {vn}'s death"), -2, day, &[]);
+                    }
+                }
+            }
+            "murder" => {
+                // A killing in the parish, by one of its own. The victim falls inert; the town is
+                // thrown into dread; an inquest opens that the manhunt (tend_inquest) will press.
+                // No culprit is recorded — the killer is unknown even to the chronicle.
+                match world.idx(t) {
+                    Some(v) if world.agents[v].active() => {
+                        let seat = world.agents[v].seat.clone();
+                        let how = if iv.note.is_empty() {
+                            "no natural death — a life taken by a hand the parish does not yet know".to_string()
+                        } else {
+                            iv.note.clone()
+                        };
+                        world.agents[v].death_day = Some(day);
+                        world.agents[v].courting = -1;
+                        world.agents[v].rival = -1;
+                        out.push(mk("murder", t, format!("{t}, of {seat}, was found dead — and {how}. Murder, in Thrushcombe St Mary, by one of its own.")));
+                        // every soul knows a murder at once; what they do not know is whose hand
+                        let all: Vec<usize> = (0..world.agents.len()).filter(|&i| world.agents[i].active()).collect();
+                        world.spawn_news_idx(v, &format!("the murder of {t} — and the killer still among them"), 0, day, &all);
+                        // grief on any kin; fear on everyone — doors barred, neighbour eyeing neighbour
+                        for k in 0..world.agents.len() {
+                            if !world.agents[k].active() { continue; }
+                            let kin = world.agents[k].spouse == Some(v) || world.agents[k].parent == Some(v) || world.agents[v].parent == Some(k);
+                            nudge_mood(&mut world.agents[k], if kin { -45 } else { -22 });
+                        }
+                        world.dread = 85;
+                        world.inquest = Some(Inquest {
+                            victim: v,
+                            victim_name: t.clone(),
+                            opened: day,
+                            accused: -1,
+                            accused_since: 0,
+                            hanged: false,
+                            closed: false,
+                        });
+                    }
+                    _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
+                }
+            }
             other => {
                 out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
             }
@@ -1525,6 +1612,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         intent: 0,
         intent_goal: 0,
         intent_age: 0,
+        suspicion: 0,
     }
 }
 
@@ -1757,6 +1845,162 @@ fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>)
             world.spawn_news(&a, &format!("the bad blood between {a} and {b}"), -2, day, &[]);
         }
     }
+}
+
+/// The manhunt for an unsolved killing, pressed day by day. There is no recorded culprit:
+/// suspicion accretes onto whoever the town's standing fears and grudges already point at —
+/// the soul who quarrelled with the dead, the one with a secret, the incomer, the desperate.
+/// When it settles past bearing on one of them the parish fixes on them, and — doubt failing —
+/// hangs them, guilty or innocent, a thing no living soul will ever truly know. A hanging
+/// breaks the dread; until then it festers, and a case that collapses only deepens the fear.
+fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, out: &mut Vec<Event>) {
+    let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
+    let Some(inq) = world.inquest.clone() else { return };
+    if inq.closed {
+        // the town has had its reckoning; the unease ebbs over weeks, then lifts entirely
+        world.dread = (world.dread - 2).max(0);
+        if world.dread == 0 {
+            world.inquest = None;
+        }
+        return;
+    }
+    let v = inq.victim;
+    let vn = inq.victim_name.clone();
+    let n = world.agents.len();
+
+    // dread festers while a killer walks free: it drifts down, but never settles
+    world.dread = (world.dread - 1).max(45);
+
+    // --- suspicion accretes onto whoever the town already mistrusts ---
+    let has_secret: Vec<bool> = (0..n)
+        .map(|i| world.news.iter().any(|nw| nw.subject == i && nw.valence < 0 && day - nw.born <= 40))
+        .collect();
+    let top_standing = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
+    for i in 0..n {
+        if i == v || !world.agents[i].active() || world.agents[i].archetype == "child" {
+            world.agents[i].suspicion = (world.agents[i].suspicion - 1).max(0);
+            continue;
+        }
+        let mut d = 0i32;
+        // bad blood with the victim — the first motive the town reaches for
+        let av = world.aff(i, v).min(world.aff(v, i));
+        if av <= -40 { d += 5; } else if av <= -20 { d += 3; } else if av <= -8 { d += 1; }
+        if has_secret[i] { d += 3; }                              // something to hide
+        if world.agents[i].origin.is_some() { d += 3; }          // an incomer the parish never trusted
+        if world.agents[i].purse < -25 { d += 2; }               // the cornered and the desperate
+        if world.agents[i].mood <= -40 { d += 1; }
+        if world.agents[i].standing < top_standing - 30 { d += 1; } // ill repute
+        if rng.gen_bool(0.18) { d += rng.gen_range(1..=3); }     // the rumour lights where it will
+        if d == 0 { d = -2; }                                    // suspicion is fickle; unfed, it cools
+        world.agents[i].suspicion = (world.agents[i].suspicion + d).clamp(0, 200);
+    }
+
+    // the soul the finger points at hardest today
+    let most = (0..n)
+        .filter(|&i| world.agents[i].active() && i != v && world.agents[i].archetype != "child")
+        .max_by_key(|&i| world.agents[i].suspicion);
+
+    // --- public finger-pointing: the most-suspected take the parish's hard looks ---
+    if let Some(m) = most {
+        if world.agents[m].suspicion >= 40 && inq.accused < 0 && rng.gen_bool(0.22) {
+            world.agents[m].standing = (world.agents[m].standing - 1).max(0);
+            nudge_mood(&mut world.agents[m], -6);
+            let nm = world.agents[m].name.clone();
+            let line = match rng.gen_range(0..4) {
+                0 => format!("At the Pelican the talk turned ugly, and more than one head turned toward {nm}."),
+                1 => format!("They are saying in the lanes that {nm} was abroad the night {vn} died."),
+                2 => format!("{nm} found the shop gone quiet at their entering, and every eye sliding away."),
+                _ => format!("A stone was thrown at {nm}'s door in the night, and no grown soul rebuked the throwing."),
+            };
+            out.push(mk(&nm, line));
+            world.spawn_news(&nm, &format!("the whisper that {nm} had a hand in {vn}'s death"), -3, day, &[]);
+            world.dread = (world.dread + 3).min(100);
+        }
+    }
+
+    // --- the reckoning: the town fixes on a soul, then hangs them or lets the case fall to doubt ---
+    const ACCUSE_AT: i32 = 90;
+    const TRIAL_DAYS: i64 = 6;
+    let mut inq = inq;
+    if inq.accused < 0 {
+        if let Some(m) = most {
+            if world.agents[m].suspicion >= ACCUSE_AT {
+                inq.accused = m as i32;
+                inq.accused_since = day;
+                let nm = world.agents[m].name.clone();
+                world.agents[m].standing = (world.agents[m].standing - 10).max(0);
+                nudge_mood(&mut world.agents[m], -40);
+                out.push(mk(&nm, format!("The parish has fixed on {nm} as the murderer of {vn}, and means to see them answer for it.")));
+                world.spawn_news(&nm, &format!("that {nm} stands named for {vn}'s murder"), -4, day, &[]);
+                world.dread = (world.dread + 8).min(100);
+            }
+        }
+    } else {
+        let m = inq.accused as usize;
+        if !world.agents[m].active() {
+            inq.accused = -1; // gone by some other road — the hunt resets
+        } else if day - inq.accused_since >= TRIAL_DAYS {
+            // doubt may save them: standing, or staunch defenders, gives the parish pause; a
+            // friendless soul of low face it does not. Innocence does not enter into it.
+            let defenders = (0..n).filter(|&j| j != m && world.agents[j].active() && world.aff(j, m) >= 40).count();
+            let saved = world.agents[m].standing >= top_standing - 12 || defenders >= 2;
+            let nm = world.agents[m].name.clone();
+            if saved {
+                world.agents[m].suspicion = 30; // spared, not cleared — the doubt clings
+                inq.accused = -1;
+                nudge_mood(&mut world.agents[m], 12);
+                out.push(mk(&nm, format!("The case against {nm} fell apart for want of proof, and the parish let them go — half of it unconvinced still. {vn}'s killer walks free yet.")));
+                world.spawn_news(&nm, &format!("how the case against {nm} came to nothing"), 1, day, &[]);
+                world.dread = (world.dread + 6).min(100); // a killer still loose — the fear deepens
+            } else {
+                // the town has its blood. Guilty or innocent, no one will ever know.
+                world.agents[m].death_day = Some(day);
+                inq.hanged = true;
+                inq.closed = true;
+                out.push(Event { day, date: date.to_string(), kind: "murder".into(), actor: nm.clone(), text: format!("{nm} was hanged for the murder of {vn} — whether by a just hand or a frightened one, the parish will never be sure.") });
+                world.spawn_news_idx(m, &format!("the hanging of {nm} for {vn}'s murder"), 0, day, &(0..n).filter(|&i| world.agents[i].active()).collect::<Vec<_>>());
+                for k in 0..n {
+                    if world.agents[k].active() { nudge_mood(&mut world.agents[k], 8); } // relief, and horror
+                    world.agents[k].suspicion = 0; // a corpse to blame — the pointing stops
+                }
+                world.dread = 20; // the dread breaks, though a shadow stays on the town
+            }
+        }
+    }
+    world.inquest = Some(inq);
+}
+
+/// What the shadow of an open (or freshly-closed) killing means for one soul, in words the
+/// oracle can carry into a reflection or a conversation — so the dread is *felt*, not just
+/// tracked. None when the town is at peace.
+fn inquest_brief(w: &World, idx: usize) -> Option<String> {
+    let inq = w.inquest.as_ref()?;
+    let vn = &inq.victim_name;
+    if inq.closed {
+        if w.dread <= 0 { return None; }
+        let who = (inq.accused >= 0).then(|| w.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten();
+        return Some(match who {
+            Some(name) => format!("The town is still raw from the hanging of {name} for the murder of {vn}. No one is quite sure the right neck was stretched, and the unease has not lifted."),
+            None => format!("The town is still raw from the murder of {vn}, and the unease has not lifted."),
+        });
+    }
+    // an open, unsolved killing — the dominant fact of every soul's days
+    let mut s = format!(
+        "A killing hangs over Thrushcombe: {vn} was murdered, and the killer — one of the town's own — has not been found. Fear walks the lanes; doors are barred early; every soul weighs every other, and no one feels safe."
+    );
+    let most = (0..w.agents.len())
+        .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i != inq.victim)
+        .max_by_key(|&i| w.agents[i].suspicion);
+    if inq.accused == idx as i32 {
+        s.push_str(" And it is THEY the parish has fixed upon: they stand accused of the murder, and the talk is openly of hanging. They protest, but fear does not listen.");
+    } else if w.agents[idx].suspicion >= 40 {
+        s.push_str(" And the whispers have begun to fall on THEM — they have caught the sliding eyes, the silences; some in the parish wonder if it was their hand.");
+    } else if let Some(m) = most {
+        if w.agents[m].suspicion >= 40 && m != idx {
+            s.push_str(&format!(" The town's suspicion is settling on {} — though whether justly, who can say.", w.agents[m].name));
+        }
+    }
+    Some(s)
 }
 
 /// Derive a soul's ambition from their situation.
@@ -2239,6 +2483,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         world.agents[i].goal = g;
         world.agents[i].goal_target = t;
     }
+
+    // --- the inquest, pressed: an open murder hunts itself toward a hanging, day by day ---
+    tend_inquest(world, day, date, &mut rng, &mut out);
 
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
@@ -2874,6 +3121,8 @@ pub struct Report {
     pub pending: Vec<String>,
     pub news: Vec<String>,
     pub chronicle: Vec<String>,
+    /// When a killing hangs over the town: the banner of dread and where suspicion falls.
+    pub fear: Option<String>,
 }
 
 /// Event kinds worth rendering in voice. Pure flavour (market, vet rounds) keeps its
@@ -2881,11 +3130,12 @@ pub struct Report {
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
     "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk", "intent",
+    "murder", "inquest",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 25;
+const SNAPSHOT_VERSION: i64 = 26;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3503,6 +3753,10 @@ impl Sim {
         };
         relation.push_str(&life(&w.agents[a].name));
         relation.push_str(&life(&w.agents[b].name));
+        // a killing in the parish colours everything — they cannot but speak of it, and of whom they fear
+        if let Some(brief) = inquest_brief(&w, a).or_else(|| inquest_brief(&w, b)) {
+            relation.push_str(&format!(" {brief}"));
+        }
         // the parish as it actually stands, so they have real matter to talk of
         relation.push_str(&format!(" The season is {}.", Season::of(today).name()));
         if let Ok(recent) = self.chronicle(4) {
@@ -3717,6 +3971,9 @@ impl Sim {
         }
         if let Ok(Some(bio)) = self.biography(&ag.name) {
             dossier.push_str(&format!("\nThe life behind them: {bio}"));
+        }
+        if let Some(brief) = inquest_brief(&w, idx) {
+            dossier.push_str(&format!("\n{brief}"));
         }
 
         if let Ok(es) = self.person_events(&ag.name, 5) {
@@ -4175,6 +4432,27 @@ impl Sim {
         let mut agents: Vec<Agent> = world.agents.iter().filter(|a| a.active()).cloned().collect();
         agents.sort_by(|x, y| y.standing.cmp(&x.standing));
 
+        let fear = world.inquest.as_ref().map(|inq| {
+            let days = (target - inq.opened).max(0);
+            let level = match world.dread { d if d >= 80 => "the town in terror", d if d >= 60 => "fear thick in every lane", d if d >= 30 => "a wary dread", _ => "an uneasy quiet" };
+            if inq.closed {
+                let who = (inq.accused >= 0).then(|| world.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten().unwrap_or_else(|| "someone".into());
+                return format!("The murder of {} — {who} hanged for it {days}d on. {level}; no one quite sure justice was done.", inq.victim_name);
+            }
+            if inq.accused >= 0 {
+                let acc = world.agents.get(inq.accused as usize).map(|a| a.name.clone()).unwrap_or_default();
+                return format!("MURDER of {} ({days}d unsolved) — the parish has fixed on {acc}, and means to hang them. {level}.", inq.victim_name);
+            }
+            // name the soul suspicion falls on hardest
+            let most = world.agents.iter().enumerate()
+                .filter(|(i, a)| a.active() && a.archetype != "child" && *i != inq.victim)
+                .max_by_key(|(_, a)| a.suspicion);
+            match most {
+                Some((_, a)) if a.suspicion >= 40 => format!("MURDER of {} — {days}d, killer unknown. Suspicion falls on {} (susp {}). {level}.", inq.victim_name, a.name, a.suspicion),
+                _ => format!("MURDER of {} — {days}d, killer unknown, and no one yet named. {level}.", inq.victim_name),
+            }
+        });
+
         Ok(Report {
             date: today.to_string(),
             day: target,
@@ -4186,6 +4464,7 @@ impl Sim {
             pending,
             news,
             chronicle,
+            fear,
         })
     }
 
@@ -4331,5 +4610,70 @@ mod intent_tests {
         assert_eq!(w.agents[i].intent, 0, "the plan is spent once reckoned");
         assert_eq!(w.agents[i].intent_age, 0, "the plan counter resets once reckoned");
         assert!(w.agents[i].standing >= standing_before, "making good should not cost them standing");
+    }
+}
+
+#[cfg(test)]
+mod inquest_tests {
+    use super::*;
+
+    // An open killing hunts itself. With no recorded culprit, suspicion accretes onto the soul
+    // the town already mistrusts — bad blood with the dead, an outsider's face, a desperate purse —
+    // and a friendless soul it settles on hangs, the dread breaking only when the town has its blood.
+    #[test]
+    fn an_open_murder_presses_to_a_hanging() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (victim, suspect) = (grown[0], grown[1]);
+        w.agents[suspect].birth_day = -40 * 365; // middle-aged, to keep death's hazard out of the test
+
+        // the victim is dead; an inquest is open and the town gripped by dread
+        w.agents[victim].death_day = Some(0);
+        w.dread = 85;
+        w.inquest = Some(Inquest {
+            victim,
+            victim_name: w.agents[victim].name.clone(),
+            opened: 0,
+            accused: -1,
+            accused_since: 0,
+            hanged: false,
+            closed: false,
+        });
+        // the suspect is everything the parish fears: bad blood with the dead, an incomer, cornered,
+        // and friendless and low — so doubt will not save them when the reckoning comes
+        w.nudge_aff(suspect, victim, -90);
+        w.nudge_aff(victim, suspect, -90);
+        w.agents[suspect].origin = Some("parts unknown".into());
+        w.agents[suspect].purse = -40;
+        w.agents[suspect].standing = 12;
+
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let mut accused_on: Option<i64> = None;
+        let mut hanged: Option<(i64, String)> = None;
+        for day in 1..60i64 {
+            let evs = life_tick(&mut w, day, date, 42);
+            // while the killer is unfound, the dread must not fade to calm
+            if w.inquest.as_ref().is_some_and(|q| !q.closed) {
+                assert!(w.dread >= 40, "dread should fester while the killing is unsolved (day {day}, dread {})", w.dread);
+            }
+            if accused_on.is_none() && w.inquest.as_ref().is_some_and(|q| q.accused == suspect as i32) {
+                accused_on = Some(day);
+            }
+            if let Some(e) = evs.iter().find(|e| e.kind == "murder" && e.text.contains("hanged")) {
+                hanged = Some((day, e.text.clone()));
+                break;
+            }
+        }
+
+        let acc = accused_on.expect("the town should fix on the most-suspected soul");
+        let (day, text) = hanged.expect("a friendless suspect should hang within the window");
+        assert!(day > acc, "the hanging follows the accusation, not precedes it");
+        assert!(text.contains(&w.agents[suspect].name), "the suspect is the one hanged, got: {text}");
+        assert!(!w.agents[suspect].active(), "the hanged soul leaves the cast");
+        let q = w.inquest.as_ref().expect("the inquest record persists");
+        assert!(q.closed && q.hanged, "a hanging closes the inquest");
+        assert!(w.dread < 40, "the town's blood breaks the dread");
     }
 }

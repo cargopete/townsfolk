@@ -113,7 +113,7 @@ enum Cmd {
     /// Live monitor (q / Esc to quit).
     Watch,
     /// Play the novelist: inject circumstance the town will react to.
-    /// KIND = letter | loan | legacy | scandal | stranger.
+    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint.
     Providence {
         kind: String,
         #[arg(long, default_value = "")]
@@ -712,6 +712,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn print_status(r: &Report) {
     println!("\n  THRUSHCOMBE ST MARY        {}  {}   ·   day {}", r.weekday, r.date, r.day);
     println!("  {} — {}   ({})\n", r.season, phase_now(), r.armed);
+    if let Some(fear) = &r.fear {
+        println!("  ☠  {fear}\n");
+    }
     println!("  The town");
     for a in &r.agents {
         println!(

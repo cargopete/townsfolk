@@ -67,6 +67,9 @@ td{padding:.32rem .4rem;border-bottom:1px solid #efe7d8;vertical-align:top}
 .think{font-style:italic;color:#4a4036}
 .think::before{content:'\\201C'}.think::after{content:'\\201D'}
 .who{font-variant:small-caps;letter-spacing:.03em}
+.fear{background:#3a2622;color:#f3e9dd;border:1px solid #5a3a30;border-radius:6px;padding:.75rem 1.05rem;margin:0 0 1.5rem;font-style:italic;letter-spacing:.01em;line-height:1.5}
+.fear b{font-style:normal;font-variant:small-caps;letter-spacing:.06em;color:#e8b9a0}
+.suspect{color:#9a3b2b;font-variant:small-caps;letter-spacing:.04em;font-size:.82rem}
 @media(max-width:640px){.cols{grid-template-columns:1fr}.hidesm{display:none}}
 ";
 
@@ -77,6 +80,31 @@ fn page(title: &str, body: &str) -> String {
          <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/thoughts>Thoughts</a><a href=/talk>A word…</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
+}
+
+/// The town-wide pall of an open (or freshly-closed) killing, for the top of every page.
+fn fear_banner(sim: &Sim) -> String {
+    let w = sim.world_snapshot(today());
+    let Some(inq) = &w.inquest else { return String::new() };
+    if inq.closed && w.dread <= 0 { return String::new(); }
+    let vn = esc(&inq.victim_name);
+    let body = if inq.closed {
+        let who = (inq.accused >= 0).then(|| w.agents.get(inq.accused as usize).map(|a| esc(&a.name))).flatten().unwrap_or_else(|| "a soul".into());
+        format!("<b>after the hanging</b> &nbsp; The town is still raw from the hanging of {who} for the murder of {vn}. No one is quite sure the right neck was stretched, and the unease has not lifted.")
+    } else if inq.accused >= 0 {
+        let acc = w.agents.get(inq.accused as usize).map(|a| esc(&a.name)).unwrap_or_default();
+        format!("<b>murder &middot; the accused</b> &nbsp; {vn} was murdered, and the parish has fixed on <span class=suspect>{acc}</span> — the talk is openly of hanging.")
+    } else {
+        let most = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i != inq.victim)
+            .max_by_key(|&i| w.agents[i].suspicion);
+        let tail = match most {
+            Some(m) if w.agents[m].suspicion >= 40 => format!(" Suspicion is settling on <span class=suspect>{}</span> — though whether justly, who can say.", esc(&w.agents[m].name)),
+            _ => " No one is yet named.".into(),
+        };
+        format!("<b>murder &middot; killer unknown</b> &nbsp; {vn} was found dead — murder, by one of the town's own. Fear walks the lanes; every soul weighs every other.{tail}")
+    };
+    format!("<div class=fear>{body}</div>")
 }
 
 fn bar(v: i32) -> String {
@@ -133,7 +161,7 @@ fn dashboard(sim: &Sim) -> String {
             esc(&e.date), esc(&e.actor), esc(&e.text)
         ));
     }
-    page("Thrushcombe — Dashboard", &body)
+    page("Thrushcombe — Dashboard", &format!("{}{}", fear_banner(sim), body))
 }
 
 /// A person's station: their specific trade if they have one, else their stratum.
@@ -193,7 +221,7 @@ fn folk(sim: &Sim) -> String {
     body.push_str(&section("The grown folk", &grown, false));
     body.push_str(&section("The children", &children, false));
     body.push_str(&section("Gone before & gone away", &gone, true));
-    page("Thrushcombe — The Town", &body)
+    page("Thrushcombe — The Town", &format!("{}{}", fear_banner(sim), body))
 }
 
 /// The town's inner life — every soul's reflections, newest first. The quiet hours laid bare.
@@ -226,7 +254,7 @@ fn thoughts(sim: &Sim) -> String {
         Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
     }
     body.push_str("<p style='margin-top:2rem'><a href=/>&larr; Dashboard</a></p>");
-    page("Thrushcombe — the town, thinking", &body)
+    page("Thrushcombe — the town, thinking", &format!("{}{}", fear_banner(sim), body))
 }
 
 fn person(sim: &Sim, idx: usize) -> String {
@@ -362,7 +390,7 @@ fn person(sim: &Sim, idx: usize) -> String {
         Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
     }
     body.push_str("<p style='margin-top:2rem'><a href=/folk>&larr; The Town</a></p>");
-    page(&format!("Thrushcombe — {}", a.name), &body)
+    page(&format!("Thrushcombe — {}", a.name), &format!("{}{}", fear_banner(sim), body))
 }
 
 fn jstr(s: &str) -> String {
