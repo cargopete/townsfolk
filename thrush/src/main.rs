@@ -94,9 +94,13 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// Let the soul most overdue take a quiet hour to themselves and reflect — on their life,
-    /// their work, the town, their hopes. Records the thought (self-memory) and its residue.
-    Reflect,
+    /// Advance the inner life: the most-overdue souls each take a quiet hour and carry their
+    /// stream of consciousness forward a beat — recording the thought (self-memory) and its residue.
+    Reflect {
+        /// How many souls' streams to advance this run (each the next most overdue).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+    },
     /// Write the life the parish would tell of each soul — backstory, character, a defining turn.
     /// Works through those who lack one; injected into talk and reflection so souls know each other.
     Biography {
@@ -231,6 +235,7 @@ fn assess_pair(agent: &ureq::Agent, host: &str, model: &str, a: &str, b: &str, t
 }
 
 const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Thrushcombe St Mary, a 1934 West-Country market town, in a quiet hour to themselves. You are given who they are, their station, their ties, their recent days, and how the parish stands. \
+CRUCIAL — this is a CONTINUOUS STREAM OF CONSCIOUSNESS, not a fresh start each time. The lines under 'The thread of their recent thinking' are THEIR OWN inner monologue from recent hours, oldest first. Carry that train of thought forward where it left off: pick up what was unfinished, let an earlier worry deepen or ease or give way, follow a resolve to where it now stands, change their mind if the days have changed it — but NEVER simply restate a thought already in the thread. Each hour is the next moment of one unbroken inner life. \
 Most of an hour's thought — about seven parts in ten — turns INWARD, on themselves and their own life: who they are and who they have become, what they have made of their years and what they still want of the ones left to them, their regrets and small hopes, their faith and their failings, whether their work and their days amount to what they would wish. The plain inward reckoning of a life, as such a person would truly turn it over alone. Only the rest — about three parts in ten — turns outward: to one particular soul they cannot put from their mind, to the town, to the season's work. \
 Stay wholly in period voice and true to their station and schooling: they know only the world of 1934 and their own parish — nothing of machines that think, nothing of times to come, no modern words or notions. One or two sentences of genuine, plain, unforced inward thought — no quotation marks, no preamble. Let it be honest: a real grief may sink them, a real hope lift them, a long grievance harden, an old fondness soften — do not flatten every hour into bland contentment, and do not manufacture drama where the soul would feel none. \
 Then judge how the hour has left them, ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content], \"toward\": the EXACT name (from the dossier) of the one soul they mused on if their thought turned to a particular person, else \"\", \"regard\": one of [none, warmer, colder] — whether the thought warmed or soured how they hold that soul, \"resolve\": one of [none, court, confront, mend] — and only rarely: court=resolved to pay court to them, confront=resolved to set themselves against them, mend=resolved to make peace with them, \"plan\": one of [none, fortune, rise, venture] — a DATED resolve they mean to pursue over weeks, distinct from a mere change of heart and set ONLY when a real, durable ambition takes hold: fortune=to mend their fortunes (clear what they owe, put money by), rise=to better their standing in the parish, venture=a bold scheme that may make them or ruin them}. \
@@ -602,41 +607,47 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => eprintln!("oracle unavailable ({host}) — conversation unrecorded."),
             }
         }
-        Cmd::Reflect => {
+        Cmd::Reflect { count } => {
             let mut sim = Sim::open(&cli.db)?;
             sim.catch_up(today(), cur_phase())?;
             let t = today();
-            // the wall-clock hour only breaks ties among the equally-overdue — who reflects is
-            // decided by who has gone longest without; what they think is recorded and replayed.
-            let salt = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()).hour() as u64;
-            let Some(r) = sim.reflect_subject(t, salt) else { return Ok(()) };
             let names: Vec<String> = sim.world_snapshot(t).agents.iter()
                 .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
-            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
             // prefer Claude (Haiku) for a sharper inner voice — but never past the day's Anthropic
             // cap (default $1; set ANTHROPIC_DAILY_USD). Beyond it, reflect on the free local Qwen.
             let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
             let spend = spend_file(&cli.db);
             let today_str = t.to_string();
-            let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
-            let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
-                .and_then(|key| reflect_claude(&agent, &key, &r.dossier, &spend, &today_str))
-                .or_else(|| {
-                    let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
-                    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
-                    reflect_qwen(&agent, &host, &model, &r.dossier)
-                });
-            match raw.as_ref().and_then(|v| parse_reflection(v, &names)) {
-                Some((thought, mood, sway, toward, regard, resolve, plan)) => {
-                    sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan)?;
-                    sim.catch_up(today(), cur_phase())?; // re-fold the day so the residue lands
-                    let tail = if plan != "none" { format!(" · set on {plan}") }
-                        else if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
-                        else if regard != "none" { format!(" · {regard} toward {toward}") }
-                        else { String::new() };
-                    println!("Reflection [{} · {mood}/{sway}{tail}]: {thought}", r.name);
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            // the wall-clock hour only breaks ties among the equally-overdue; who reflects is decided
+            // by who has gone longest without. Advance `count` souls' streams a beat each — after each
+            // is recorded and re-folded, the next-most-overdue is a different soul.
+            let salt = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()).hour() as u64;
+            for _ in 0..count.max(1) {
+                let Some(r) = sim.reflect_subject(t, salt) else { break };
+                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                    .and_then(|key| reflect_claude(&agent, &key, &r.dossier, &spend, &today_str))
+                    .or_else(|| {
+                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                        reflect_qwen(&agent, &host, &model, &r.dossier)
+                    });
+                match raw.as_ref().and_then(|v| parse_reflection(v, &names)) {
+                    Some((thought, mood, sway, toward, regard, resolve, plan)) => {
+                        sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan)?;
+                        sim.catch_up(today(), cur_phase())?; // re-fold so the residue lands + next pick differs
+                        let tail = if plan != "none" { format!(" · set on {plan}") }
+                            else if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
+                            else if regard != "none" { format!(" · {regard} toward {toward}") }
+                            else { String::new() };
+                        println!("Reflection [{} · {mood}/{sway}{tail}]: {thought}", r.name);
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the stream stalls this beat.");
+                        break;
+                    }
                 }
-                None => eprintln!("oracle unavailable — no reflection this hour."),
             }
         }
         Cmd::Biography { limit } => {

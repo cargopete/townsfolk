@@ -103,8 +103,13 @@ It runs end to end:
   met), Qwen plays both, and the same residue is recorded for each — a memory kept, a
   warming or cooling, now and then a resolve (to clear a debt, to rise, to mend a quarrel).
   The town's relationships and ambitions drift through talk, all of it folded deterministically.
-- **Souls reflect on their lives** — every hour the soul most *overdue* takes a quiet hour
-  to themselves and **thinks**. About seven parts in ten the thought turns *inward* — who
+- **Souls reflect on their lives — a continuous stream of consciousness** — each hour the
+  most *overdue* souls each carry their inner monologue forward a beat (`reflect --count N`).
+  This is not a fresh musing each time: a soul's recent reflections are fed back as their own
+  ongoing thread, and the oracle is told to *continue* it — pick up what was unfinished, let
+  an earlier worry deepen or ease, follow a resolve to where it now stands — so each hour is
+  the next moment of one unbroken interior life, not a disconnected thought. About seven parts
+  in ten the thought turns *inward* — who
   they are and who they've become, what they've made of their years and what they still want
   of the ones left, their regrets and small hopes, whether their work and days amount to what
   they'd wish; the rest turns outward, to one soul they can't put from their mind, the town,
@@ -118,8 +123,8 @@ It runs end to end:
   teeth: a settling of spirits, a turn of ambition, and now and then a *hardened feeling about
   one named soul* — a warmer or colder regard, or a resolve to **pay court**, to **set
   themselves against** them (a self-authored feud), or to **make peace**. Private, never a
-  public beat; one soul an hour, so the whole town turns its inner life over across a couple
-  of days. The recorded verdict is the model's; the effect on the world stays bounded and exact.
+  public beat; several souls a beat, so the whole town's inner life flows on continuously.
+  The recorded verdict is the model's; the effect on the world stays bounded and exact.
 - **…and pursue a plan over weeks** — a reflective hour can harden into a *dated resolve* the
   soul then carries: to **mend their fortunes**, **better their station**, or chance a **bold
   venture**. The kernel bends their daily pursuit toward it and, weeks on, judges it in the
@@ -193,7 +198,7 @@ thrush tick                              # advance the chronicle to the current 
 thrush narrate                           # render new salient beats in voice (local Qwen)
 thrush wildcard                          # now and then, let Qwen invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
-thrush reflect                           # the most-overdue soul takes a quiet hour to think
+thrush reflect --count 6                 # advance several souls' streams of consciousness a beat
 thrush biography --limit 60              # write the lives of souls who lack one (Claude/Qwen)
 thrush status                            # the town at a glance
 thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit

@@ -3656,9 +3656,11 @@ impl Sim {
         rows.collect()
     }
 
-    /// The day-index a soul last reflected, per soul — for choosing who is most overdue.
+    /// The sequence-id of each soul's most recent reflection — for choosing who is most overdue.
+    /// Ranked by insertion order, not day, so many reflections within one day still cycle the
+    /// whole town (lower id = reflected longer ago; never-reflected souls come first, at -1).
     fn last_reflected(&self) -> rusqlite::Result<BTreeMap<String, i64>> {
-        let mut stmt = self.conn.prepare("SELECT subject, MAX(day) FROM reflections GROUP BY subject")?;
+        let mut stmt = self.conn.prepare("SELECT subject, MAX(id) FROM reflections GROUP BY subject")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         rows.collect()
     }
@@ -3712,8 +3714,15 @@ impl Sim {
             let lines: Vec<String> = ms.into_iter().map(|(who, m)| format!("  of {who}: {m}")).collect();
             if !lines.is_empty() { dossier.push_str(&format!("\nWhat they carry of others:\n{}", lines.join("\n"))); }
         }
-        if let Ok(ts) = self.self_reflections(&ag.name, 3) {
-            if !ts.is_empty() { dossier.push_str(&format!("\nTheir own late thoughts:\n{}", ts.iter().map(|t| format!("  {t}")).collect::<Vec<_>>().join("\n"))); }
+        // their running inner monologue these recent hours, oldest first — the thread to continue
+        if let Ok(mut ts) = self.self_reflections(&ag.name, 6) {
+            if !ts.is_empty() {
+                ts.reverse(); // self_reflections is newest-first; a thread reads oldest → newest
+                dossier.push_str(&format!(
+                    "\nThe thread of their recent thinking (oldest first — this is the ongoing stream to carry forward, not restate):\n{}",
+                    ts.iter().map(|t| format!("  · {t}")).collect::<Vec<_>>().join("\n")
+                ));
+            }
         }
         dossier.push_str(&format!("\nThe season is {}.", Season::of(today).name()));
         if let Ok(recent) = self.chronicle(4) {
