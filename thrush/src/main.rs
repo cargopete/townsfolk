@@ -108,12 +108,22 @@ enum Cmd {
         #[arg(long, default_value_t = 3)]
         limit: i64,
     },
+    /// Question the town under an open murder: the magistrate takes statements (alibi, and any
+    /// blame cast), recorded and read out — they fold into suspicion. Works through the unquestioned.
+    Interrogate {
+        /// How many souls to question this run (each the next most-suspected, unless --target).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+        /// Question one named soul instead of working through the most-suspected.
+        #[arg(long, default_value = "")]
+        target: String,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
     Watch,
     /// Play the novelist: inject circumstance the town will react to.
-    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate.
+    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate | inquiry.
     Providence {
         kind: String,
         #[arg(long, default_value = "")]
@@ -336,6 +346,54 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
         resolve = "none".into();
     }
     Some((thought, mood, sway, toward, regard, resolve, plan))
+}
+
+const TESTIMONY_PROMPT: &str = "You voice one soul of Thrushcombe St Mary, a 1934 West-Country market town, giving a statement to the magistrate, who under public outcry is questioning the whole parish about the night Mr Quint was murdered. You are given who they are and how they stand. In their own period voice, true to their station and schooling, write what they say to the magistrate: where they were that night and what they were doing (their alibi), and — if they are frightened, or have an enemy, or are pressed hard — they may cast the suspicion onto another soul by name. A soul of standing answers calm and brief; a cornered or common soul may bluster, plead, or point a finger to save themselves. If the dossier states a KNOWN ALIBI as settled fact, their account MUST reflect it truthfully and fully. Two to four sentences, first person, no quotation marks, no preamble. \
+Then judge it ONLY as JSON: {\"statement\": what they said to the magistrate, \"alibi\": one of [none, weak, strong] — strong ONLY if they were genuinely witnessed by someone OUTSIDE their own household, or it is otherwise proven; a spouse or a servant of their own house vouching alone is merely weak; weak if unsupported or only their own family can speak for them; none if they can give no account of themselves at all, \"accuses\": the EXACT name (from the dossier) of the one soul they cast suspicion on, else \"\"}.";
+
+/// One statement to the magistrate from the local Qwen oracle — raw JSON {statement,alibi,accuses}.
+fn testimony_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
+    let body = serde_json::json!({
+        "model": model, "system": TESTIMONY_PROMPT,
+        "prompt": format!("{dossier}\n\nGive their statement to the magistrate."),
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.9 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+}
+
+/// One statement from Claude (Haiku) — sharper voice; tallies token cost. None on failure → Qwen.
+fn testimony_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
+    let body = serde_json::json!({
+        "model": model, "max_tokens": 512, "system": TESTIMONY_PROMPT,
+        "messages": [{ "role": "user", "content": format!("{dossier}\n\nGive their statement to the magistrate. Respond only with the JSON object.") }],
+    });
+    let resp: serde_json::Value = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
+        .send_json(body).ok()?.into_json().ok()?;
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
+    let text = resp.get("content")?.as_array()?.iter()
+        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
+        .next()?;
+    serde_json::from_str(&extract_json(text)?).ok()
+}
+
+/// Validate a statement: (statement, alibi∈[none,weak,strong], accuses→a living name or ""). None if empty.
+fn parse_testimony(p: &serde_json::Value, names: &[String]) -> Option<(String, String, String)> {
+    let statement = p.get("statement")?.as_str()?.trim().to_string();
+    if statement.is_empty() {
+        return None;
+    }
+    let a = p.get("alibi").and_then(|v| v.as_str()).unwrap_or("weak").trim().to_lowercase();
+    let alibi = ["strong", "weak", "none"].iter().find(|o| a.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "weak".into());
+    let raw = p.get("accuses").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let accuses = if raw.is_empty() { String::new() }
+        else { names.iter().find(|n| n.as_str() == raw || raw.contains(n.as_str()) || n.eq_ignore_ascii_case(&raw)).cloned().unwrap_or_default() };
+    Some((statement, alibi, accuses))
 }
 
 const BIO_PROMPT: &str = "You write the biography of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the life the parish would tell of them. You are given their settled facts: name, station, household, age, family, where they came from. Invent a warm, particular life that fits those facts exactly: where they were born and how they came to their place in the town, the shape of their character, a defining turn or two of their life, what they are known (or whispered) for in the parish, and a private hope or an old wound. Stay wholly in period and in keeping with their station — a labourer's life is not a gentlewoman's, and the lettered and the unlettered came to their lot by different roads. Three to five sentences, plain and vivid, in the third person, no quotation marks, no preamble, no lists. This is the story the parish tells of them.";
@@ -645,6 +703,50 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     None => {
                         eprintln!("oracle unavailable — the stream stalls this beat.");
+                        break;
+                    }
+                }
+            }
+        }
+        Cmd::Interrogate { count, target } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let names: Vec<String> = sim.world_snapshot(t).agents.iter()
+                .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
+            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+            let spend = spend_file(&cli.db);
+            let today_str = t.to_string();
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            let tgt = (!target.is_empty()).then_some(target.as_str());
+            for _ in 0..count.max(1) {
+                let Some(r) = sim.testimony_subject(t, tgt) else {
+                    println!("No one left for the magistrate to question.");
+                    break;
+                };
+                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                    .and_then(|key| testimony_claude(&agent, &key, &r.dossier, &spend, &today_str))
+                    .or_else(|| {
+                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                        testimony_qwen(&agent, &host, &model, &r.dossier)
+                    });
+                match raw.as_ref().and_then(|v| parse_testimony(v, &names)) {
+                    Some((statement, mut alibi, mut accuses)) => {
+                        // Pete Peckers' alibi is a settled fact — he was mending Mr Sunter's tractor; it holds.
+                        if r.name == "Mr Pete Peckers" { alibi = "strong".into(); accuses = String::new(); }
+                        // the magistrate reads out the telling statements — a clearing, a poor account, a finger pointed
+                        let public = !accuses.is_empty() || alibi != "weak" || tgt.is_some();
+                        sim.record_testimony(t, &r.name, &alibi, &accuses, public, &statement)?;
+                        sim.catch_up(today(), cur_phase())?; // fold the effect on suspicion + next pick differs
+                        let tail = if !accuses.is_empty() { format!(" · names {accuses}") } else { String::new() };
+                        let vis = if public { "read out" } else { "in private" };
+                        println!("Statement [{} · alibi {alibi}{tail} · {vis}]: {statement}", r.name);
+                        if tgt.is_some() { break; } // a named questioning is a single act
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the questioning halts.");
                         break;
                     }
                 }

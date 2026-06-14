@@ -77,7 +77,7 @@ fn page(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>\
          <title>{}</title><style>{}</style></head><body><div class=wrap>\
-         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/thoughts>Thoughts</a><a href=/talk>A word…</a></div>{}</div></body></html>",
+         <div class=nav><a href=/>Dashboard</a><a href=/folk>The Town</a><a href=/graph>Kinship</a><a href=/day>History</a><a href=/thoughts>Thoughts</a><a href=/inquiry>The Inquiry</a><a href=/talk>A word…</a></div>{}</div></body></html>",
         esc(title), CSS, body
     )
 }
@@ -107,7 +107,10 @@ fn fear_banner(sim: &Sim) -> String {
     let bench = (!inq.closed && inq.investigator >= 0)
         .then(|| w.agents.get(inq.investigator as usize).map(|a| format!(" <span class=suspect>{} sits as magistrate</span> — and his questions fall on the working folk and the strangers, never on his own kind.", esc(&a.name))))
         .flatten().unwrap_or_default();
-    format!("<div class=fear>{body}{bench}</div>")
+    let inquiry = (!inq.closed && inq.public_inquiry)
+        .then_some(" The whole town is being questioned — <a href=/inquiry style='color:#e8b9a0'>read the transcripts &rarr;</a>")
+        .unwrap_or_default();
+    format!("<div class=fear>{body}{bench}{inquiry}</div>")
 }
 
 fn bar(v: i32) -> String {
@@ -305,6 +308,53 @@ fn thoughts(sim: &Sim, url: &str) -> String {
     page("Thrushcombe — the town, thinking", &format!("{}{}", fear_banner(sim), body))
 }
 
+/// The released transcripts of the magistrate's inquiry — what each questioned soul claimed,
+/// their alibi, and any name they cast the blame upon. Public knowledge the whole town turns over.
+fn inquiry(sim: &Sim) -> String {
+    let world = sim.world_snapshot(today());
+    let idx_of = |name: &str| world.agents.iter().position(|a| a.name == name);
+    let open = world.inquest.as_ref().filter(|q| !q.closed);
+    let mut body = String::from("<h1>The Inquiry</h1>");
+    match open {
+        Some(inq) => {
+            let mag = world.agents.get(inq.investigator as usize).map(|a| esc(&a.name)).unwrap_or_else(|| "the magistrate".into());
+            body.push_str(&format!(
+                "<div class=sub>{mag} questions the parish over the murder of {}. \
+                 The statements read out in the open, newest first — alibis given, fingers pointed. \
+                 The town hears each, and weighs it.</div>",
+                esc(&inq.victim_name)
+            ));
+        }
+        None => body.push_str("<div class=sub>No inquiry sits at present.</div>"),
+    }
+    let link = |who: &str| match idx_of(who) {
+        Some(i) => format!("<a href=/folk/{i} class=who>{}</a>", esc(who)),
+        None => format!("<span class=who>{}</span>", esc(who)),
+    };
+    match sim.public_testimony(60) {
+        Ok(ts) if !ts.is_empty() => {
+            for (day, who, alibi, accuses, text) in ts {
+                let badge = match alibi.as_str() {
+                    "strong" => "<span class=tag style='color:#2f6b3f;border-color:#2f6b3f'>alibi holds</span>",
+                    "none" => "<span class=tag style='color:#9a3b2b;border-color:#9a3b2b'>no account</span>",
+                    _ => "<span class=tag>thin account</span>",
+                };
+                let named = if accuses.is_empty() { String::new() }
+                    else { format!(" <span class=suspect>points at {}</span>", link(&accuses)) };
+                body.push_str(&format!(
+                    "<div class=card><div>{} {} <span class=date>&middot; {}</span>{}</div>\
+                     <div class=think style='margin-top:.4rem'>{}</div></div>",
+                    link(&who), badge, esc(&sim.day_to_date(day)), named, esc(&text)
+                ));
+            }
+        }
+        Ok(_) => body.push_str("<p class=sub>The magistrate has read out no statements yet.</p>"),
+        Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+    }
+    body.push_str("<p style='margin-top:2rem'><a href=/>&larr; Dashboard</a></p>");
+    page("Thrushcombe — the inquiry", &format!("{}{}", fear_banner(sim), body))
+}
+
 fn person(sim: &Sim, idx: usize) -> String {
     let t = today();
     let day = sim.target_day(t).max(0);
@@ -367,6 +417,32 @@ fn person(sim: &Sim, idx: usize) -> String {
             "<h2>Pursuing</h2><div class=doing>{} <span class=date>— resolved {} days since, not yet come to its head</span></div>",
             esc(what), a.intent_age
         ));
+    }
+
+    // where they stand in an open murder inquiry — suspicion, a clearing, and their own statement
+    if let Some(inq) = world.inquest.as_ref().filter(|q| !q.closed) {
+        if idx != inq.victim {
+            let standing = if a.cleared {
+                "<span class=tag style='color:#2f6b3f;border-color:#2f6b3f'>alibi holds — cleared</span>".to_string()
+            } else if inq.accused == idx as i32 {
+                "<span class=suspect>stands accused of the murder</span>".to_string()
+            } else if a.suspicion >= 60 {
+                format!("<span class=suspect>heavily suspected</span> <span class=date>&middot; suspicion {}</span>", a.suspicion)
+            } else if a.suspicion >= 30 {
+                format!("<span class=suspect>under a cloud</span> <span class=date>&middot; suspicion {}</span>", a.suspicion)
+            } else {
+                "little suspected".to_string()
+            };
+            body.push_str(&format!("<h2>The inquiry</h2><div class=doing>{}</div>", standing));
+            if let Ok(Some((alibi, accuses, text))) = sim.testimony_of(&a.name) {
+                let named = if accuses.is_empty() { String::new() } else { format!(" <span class=suspect>They named {}.</span>", esc(&accuses)) };
+                body.push_str(&format!(
+                    "<div class=card><div class=date>Before the magistrate &middot; alibi {}</div>\
+                     <div class=think style='margin-top:.3rem'>{}</div>{}</div>",
+                    esc(&alibi), esc(&text), named
+                ));
+            }
+        }
     }
 
     // what has lately been on their own mind — the inner life, hour by hour
@@ -790,6 +866,8 @@ fn route(sim: &Sim, url: &str) -> String {
         talk_page(sim, url)
     } else if path == "/thoughts" {
         thoughts(sim, url)
+    } else if path == "/inquiry" {
+        inquiry(sim)
     } else if let Some(rest) = path.strip_prefix("/folk/") {
         match rest.parse::<usize>() {
             Ok(i) => person(sim, i),

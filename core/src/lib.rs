@@ -100,6 +100,7 @@ pub struct Agent {
     //     parish has no proof, only its fears and its grudges; suspicion accretes onto whoever
     //     those already point at, and a soul it settles on hangs — guilty or not, unknowable ---
     pub suspicion: i32,           // 0 none; rises with the town's dread and what it holds against them
+    pub cleared: bool,            // a solid alibi has put them beyond suspicion — the pointing slides off
 }
 
 impl Agent {
@@ -155,6 +156,7 @@ pub struct Inquest {
     pub hanged: bool,         // the town has had its blood
     pub closed: bool,         // the inquest is over — by a hanging, or given up
     pub investigator: i32,    // -1, or the soul who leads the official inquiry, bending it their way
+    pub public_inquiry: bool, // the magistrate is compelled to question every soul and read it out
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -231,6 +233,7 @@ impl World {
             intent_goal: 0,
             intent_age: 0,
             suspicion: 0,
+            cleared: false,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1396,6 +1399,16 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "inquiry" => {
+                // public outcry and pressure from the county compel the magistrate to question
+                // every soul and read the transcripts in the open. Sets the flag the inquest runs on.
+                if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) {
+                    q.public_inquiry = true;
+                }
+                let who = world.inquest.as_ref().and_then(|q| world.agents.get(q.investigator as usize)).map(|a| a.name.clone()).unwrap_or_else(|| "the magistrate".into());
+                out.push(mk("inquest", &who, format!("Under an outcry in the parish and pressure from the county, {who} is compelled to question every soul in Thrushcombe, and the transcripts are to be read in the open.")));
+                world.spawn_news(&who, "how the magistrate must question the whole town", 0, day, &[]);
+            }
             "investigate" => {
                 // Name the soul who will lead the official inquiry into an open killing. They bend it
                 // their way: a genteel magistrate shields the respectable and presses the working folk
@@ -1444,6 +1457,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             hanged: false,
                             closed: false,
                             investigator: -1,
+                            public_inquiry: false,
                         });
                     }
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
@@ -1628,6 +1642,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         intent_goal: 0,
         intent_age: 0,
         suspicion: 0,
+        cleared: false,
     }
 }
 
@@ -1904,6 +1919,10 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
             world.agents[i].suspicion = (world.agents[i].suspicion - 1).max(0);
             continue;
         }
+        if world.agents[i].cleared {
+            world.agents[i].suspicion = 0; // a solid alibi — the pointing slides off them
+            continue;
+        }
         let mut d = 0i32;
         // bad blood with the victim — the first motive the town reaches for
         let av = world.aff(i, v).min(world.aff(v, i));
@@ -2043,6 +2062,12 @@ fn inquest_brief(w: &World, idx: usize) -> Option<String> {
                 s.push_str(" And being of his own rank, they know the inquiry will not trouble people like them, whatever the truth of it.");
             }
         }
+    }
+    if inq.public_inquiry {
+        s.push_str(" Every soul is being questioned now, and the statements read out in the open — so the whole parish weighs each neighbour's account, and who named whom.");
+    }
+    if w.agents[idx].cleared {
+        s.push_str(" They themselves have given their account, and it held — the magistrate let them go; the eyes have slid off them, for now, and there is some relief in that, however uneasy.");
     }
     Some(s)
 }
@@ -3179,7 +3204,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 27;
+const SNAPSHOT_VERSION: i64 = 28;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3212,7 +3237,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);
          -- A soul's biography: the life the parish would tell of them. Flavour, recorded once
          -- (never folded); injected into talk and reflection so every soul knows the others' stories.
-         CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);",
+         CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS testimony(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL,
+            alibi TEXT NOT NULL, accuses TEXT NOT NULL, public INTEGER NOT NULL, text TEXT NOT NULL);",
     )
 }
 
@@ -3236,8 +3264,9 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
     for d in list {
         let Some(si) = world.idx(&d.subject) else { continue };
         let ti = world.idx(&d.target);
-        // a turning-point verdict is a public beat; a private conversation or a private thought is not
-        if d.kind != "dialogue" && d.kind != "reflect" {
+        // a turning-point verdict is a public beat; a private conversation, a private thought, or a
+        // statement to the magistrate (surfaced on its own page + as gossip) is not a chronicle beat
+        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" {
             out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
         }
         match (d.kind.as_str(), d.choice.as_str()) {
@@ -3427,6 +3456,43 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             world.agents[si].goal = 5;
                         }
                         _ => {}
+                    }
+                }
+            }
+            // a statement given to the magistrate. choice is "alibi:visibility" (alibi ∈
+            // none|weak|strong, vis ∈ pub|priv); target (if any) = the soul they cast blame on.
+            // an alibi moves the witness's own suspicion; an accusation moves the accused's; what
+            // is read out in the open becomes gossip the whole town turns over.
+            ("testimony", c) => {
+                if world.inquest.as_ref().is_some_and(|q| !q.closed) {
+                    let mut parts = c.split(':');
+                    let alibi = parts.next().unwrap_or("none");
+                    let public = parts.next() == Some("pub");
+                    let nm = world.agents[si].name.clone();
+                    match alibi {
+                        "strong" => {
+                            world.agents[si].suspicion = (world.agents[si].suspicion - 45).max(0);
+                            world.agents[si].cleared = true; // a solid alibi puts them beyond it
+                            if public { world.spawn_news(&nm, &format!("how {nm}'s alibi cleared them before the magistrate"), 1, day, &[]); }
+                        }
+                        "weak" => {
+                            world.agents[si].suspicion = (world.agents[si].suspicion + 12).min(200);
+                            if public { world.spawn_news(&nm, &format!("how thin {nm}'s account to the magistrate sounded"), -2, day, &[]); }
+                        }
+                        _ => {
+                            world.agents[si].suspicion = (world.agents[si].suspicion + 22).min(200);
+                            if public { world.spawn_news(&nm, &format!("how {nm} could give no account of themselves to the magistrate"), -3, day, &[]); }
+                        }
+                    }
+                    // casting blame: the named soul takes fresh suspicion, and bad blood opens both ways
+                    if let Some(t) = ti {
+                        if t != si && world.agents[t].active() && !world.agents[t].cleared {
+                            world.agents[t].suspicion = (world.agents[t].suspicion + 18).min(200);
+                            world.nudge_aff(si, t, -10);
+                            world.nudge_aff(t, si, -12);
+                            let tn = world.agents[t].name.clone();
+                            if public { world.spawn_news(&tn, &format!("how {nm} named {tn} to the magistrate"), -3, day, &[]); }
+                        }
                     }
                 }
             }
@@ -3856,6 +3922,109 @@ impl Sim {
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
         Ok(())
+    }
+
+    /// Record a soul's statement to the magistrate: store the transcript (for the inquiry page)
+    /// and fold its effect through a `testimony` decree. alibi ∈ [none, weak, strong]; accuses is
+    /// a named soul or ""; public decides whether it is read out in the open (and so becomes gossip).
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_testimony(&mut self, date: Date, subject: &str, alibi: &str, accuses: &str, public: bool, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO testimony(day,subject,alibi,accuses,public,text) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![day, subject, alibi, accuses, public as i64, text],
+        )?;
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'testimony',?3,?4,?5)",
+            params![day, subject, accuses, format!("{alibi}:{}", if public { "pub" } else { "priv" }), text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Names of souls already questioned in the inquiry, so the magistrate works through the rest.
+    pub fn questioned(&self) -> rusqlite::Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT subject FROM testimony")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map(|v| v.into_iter().collect())
+    }
+
+    /// One soul's own statement to the magistrate, if they have given one.
+    pub fn testimony_of(&self, name: &str) -> rusqlite::Result<Option<(String, String, String)>> {
+        match self.conn.query_row(
+            "SELECT alibi, accuses, text FROM testimony WHERE subject = ?1 ORDER BY id DESC LIMIT 1",
+            params![name],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        ) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The transcripts the magistrate has read out in the open — for the inquiry page, newest first.
+    pub fn public_testimony(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, subject, alibi, accuses, text FROM testimony WHERE public = 1 ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Assemble the soul the magistrate questions next — a named one, or the most-suspected of
+    /// those not yet questioned — with the dossier their statement should be drawn from. None when
+    /// the town is at peace or everyone has been heard.
+    pub fn testimony_subject(&self, today: Date, target: Option<&str>) -> Option<ReflectSubject> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let inq = w.inquest.as_ref().filter(|q| !q.closed)?;
+        let done = self.questioned().unwrap_or_default();
+        let idx = match target {
+            Some(t) => w.agents.iter().position(|a| a.name == t && a.active())?,
+            None => (0..w.agents.len())
+                .filter(|&i| {
+                    w.agents[i].active() && w.agents[i].archetype != "child"
+                        && i != inq.victim && i as i32 != inq.investigator
+                        && !done.contains(&w.agents[i].name)
+                })
+                .max_by_key(|&i| (w.agents[i].suspicion, std::cmp::Reverse(i)))?,
+        };
+        let ag = &w.agents[idx];
+        let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
+            "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+            "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
+        }.to_string());
+        let mag = w.agents.get(inq.investigator as usize).map(|a| a.name.clone()).unwrap_or_else(|| "the magistrate".into());
+        let mut d = format!(
+            "{name}, {role}, of {seat}, aged {age}, is brought before {mag}, sitting as magistrate, to answer for their whereabouts the night {victim} was murdered.",
+            name = ag.name, seat = ag.seat, age = ag.age(day), victim = inq.victim_name,
+        );
+        if let Ok(Some(bio)) = self.biography(&ag.name) {
+            d.push_str(&format!("\nWho they are: {bio}"));
+        }
+        let odds: Vec<String> = w.ties(idx, false, 3).into_iter().map(|(j, _)| w.agents[j].name.clone()).collect();
+        if !odds.is_empty() {
+            d.push_str(&format!("\nThose they are at odds with (whom a frightened soul might be tempted to name): {}.", odds.join(", ")));
+        }
+        // the known facts of their alibi, where there are any settled ones
+        if ag.name == "Mr Pete Peckers" {
+            d.push_str("\nKNOWN ALIBI (settled fact — their account must reflect it): the night Quint died, Pete Peckers was up at High Foldside the whole evening, repairing Mr Sunter's broken tractor, and Mr Sunter and his household vouch for him. His alibi is solid and witnessed.");
+        }
+        if ag.suspicion >= 60 {
+            d.push_str("\nThe town's eye is hard upon them already; they come frightened, and a frightened soul protests, or points elsewhere.");
+        } else if ag.suspicion >= 30 {
+            d.push_str("\nThere have been looks, whispers; they know they must give a good account of themselves.");
+        }
+        let respectable = matches!(ag.archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner");
+        d.push_str(if respectable {
+            "\nBeing of standing, the magistrate handles them gently — theirs is a formality."
+        } else {
+            "\nBeing common folk or a stranger, the magistrate presses them hard, and is minded to believe the worst."
+        });
+        Some(ReflectSubject { name: ag.name.clone(), dossier: d })
     }
 
     /// Record (or replace) a soul's biography — the life the parish tells of them. Flavour, not
@@ -4696,6 +4865,7 @@ mod inquest_tests {
             hanged: false,
             closed: false,
             investigator: -1,
+            public_inquiry: false,
         });
         // the suspect is everything the parish fears: bad blood with the dead, an incomer, cornered,
         // and friendless and low — so doubt will not save them when the reckoning comes
