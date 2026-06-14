@@ -120,6 +120,14 @@ It runs end to end:
   themselves against** them (a self-authored feud), or to **make peace**. Private, never a
   public beat; one soul an hour, so the whole town turns its inner life over across a couple
   of days. The recorded verdict is the model's; the effect on the world stays bounded and exact.
+- **…and pursue a plan over weeks** — a reflective hour can harden into a *dated resolve* the
+  soul then carries: to **mend their fortunes**, **better their station**, or chance a **bold
+  venture**. The kernel bends their daily pursuit toward it and, weeks on, judges it in the
+  open — **made good** (a lift in standing and spirits, and the parish marks the doing of it)
+  or **come to nothing** (and a failed venture costs the schemer purse *and* face). One plan
+  at a time, its threshold captured the moment it's set, so the weeks of trying are a real
+  test — continuity of *purpose* to go with the continuity of memory. Shown on each soul's
+  page (*Pursuing*) and resolved with a public beat that spreads on the gossip graph.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
@@ -196,7 +204,9 @@ events, and lets the town's inner life turn over — a wildcard or a turning poi
 then, two souls falling into talk, and the most-overdue soul taking an hour to reflect.
 Idempotent and self-healing across missed hours. Drop an `ANTHROPIC_API_KEY=…` line in
 `ops/secrets.env` (gitignored, loaded by the timer) to back the **reflect** job with Claude
-instead of the local Qwen; everything else stays local.
+instead of the local Qwen; everything else stays local. Spend is capped per day
+(`ANTHROPIC_DAILY_USD`, default **$1**) — the job tallies each call's real token cost beside
+the db and falls back to the free local Qwen once the day's cap is reached.
 
 ## The two engines (native ↔ wasm)
 

@@ -4,3 +4,4 @@ world.db
 world.db-*
 *.db
 ops/secrets.env
+.anthropic_spend.tsv

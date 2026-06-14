@@ -226,14 +226,36 @@ fn assess_pair(agent: &ureq::Agent, host: &str, model: &str, a: &str, b: &str, t
 const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Thrushcombe St Mary, a 1934 West-Country market town, in a quiet hour to themselves. You are given who they are, their station, their ties, their recent days, and how the parish stands. \
 Most of an hour's thought — about seven parts in ten — turns INWARD, on themselves and their own life: who they are and who they have become, what they have made of their years and what they still want of the ones left to them, their regrets and small hopes, their faith and their failings, whether their work and their days amount to what they would wish. The plain inward reckoning of a life, as such a person would truly turn it over alone. Only the rest — about three parts in ten — turns outward: to one particular soul they cannot put from their mind, to the town, to the season's work. \
 Stay wholly in period voice and true to their station and schooling: they know only the world of 1934 and their own parish — nothing of machines that think, nothing of times to come, no modern words or notions. One or two sentences of genuine, plain, unforced inward thought — no quotation marks, no preamble. Let it be honest: a real grief may sink them, a real hope lift them, a long grievance harden, an old fondness soften — do not flatten every hour into bland contentment, and do not manufacture drama where the soul would feel none. \
-Then judge how the hour has left them, ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content], \"toward\": the EXACT name (from the dossier) of the one soul they mused on if their thought turned to a particular person, else \"\", \"regard\": one of [none, warmer, colder] — whether the thought warmed or soured how they hold that soul, \"resolve\": one of [none, court, confront, mend] — and only rarely: court=resolved to pay court to them, confront=resolved to set themselves against them, mend=resolved to make peace with them}. \
-mood is whether the contemplation lifted, lowered, or merely steadied their spirits. sway is whether they talked themselves into a new aim: debt=to clear what they owe, rise=to better their standing, prosper=to make their fortune, content=to cease striving and rest content, none=unchanged. Use toward/regard/resolve ONLY when the thought genuinely turned to one named person; a purely inward hour leaves them \"\", none, none.";
+Then judge how the hour has left them, ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content], \"toward\": the EXACT name (from the dossier) of the one soul they mused on if their thought turned to a particular person, else \"\", \"regard\": one of [none, warmer, colder] — whether the thought warmed or soured how they hold that soul, \"resolve\": one of [none, court, confront, mend] — and only rarely: court=resolved to pay court to them, confront=resolved to set themselves against them, mend=resolved to make peace with them, \"plan\": one of [none, fortune, rise, venture] — a DATED resolve they mean to pursue over weeks, distinct from a mere change of heart and set ONLY when a real, durable ambition takes hold: fortune=to mend their fortunes (clear what they owe, put money by), rise=to better their standing in the parish, venture=a bold scheme that may make them or ruin them}. \
+mood is whether the contemplation lifted, lowered, or merely steadied their spirits. sway is whether they talked themselves into a new aim: debt=to clear what they owe, rise=to better their standing, prosper=to make their fortune, content=to cease striving and rest content, none=unchanged. Use toward/regard/resolve ONLY when the thought genuinely turned to one named person; a purely inward hour leaves them \"\", none, none. Set plan only when a true ambition with a horizon forms — most hours, and any hour where they already pursue a plan, leave it none.";
 
 /// Pull the first {...} JSON object out of a reply that may wrap it in prose or code fences.
 fn extract_json(s: &str) -> Option<String> {
     let start = s.find('{')?;
     let end = s.rfind('}')?;
     (end > start).then(|| s[start..=end].to_string())
+}
+
+/// The day's Anthropic spend ledger — a "DATE\tUSD" sidecar beside the world db. Host-side ops
+/// state, never folded into the world; it only governs whether to call Claude or fall to Qwen.
+fn spend_file(db: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new(db).parent().filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+    dir.join(".anthropic_spend.tsv")
+}
+
+/// Read today's spend from the ledger (0 if the file is for an earlier day or absent).
+fn spent_today(path: &std::path::Path, today: &str) -> f64 {
+    std::fs::read_to_string(path).ok().and_then(|s| {
+        let mut it = s.split_whitespace();
+        (it.next()? == today).then(|| it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0))
+    }).unwrap_or(0.0)
+}
+
+/// Add a call's cost to today's ledger, carrying forward (or resetting on a new day).
+fn add_spend(path: &std::path::Path, today: &str, cost: f64) {
+    let total = spent_today(path, today) + cost;
+    let _ = std::fs::write(path, format!("{today}\t{total:.6}"));
 }
 
 /// One reflection from the local Qwen oracle — returns the raw JSON verdict object.
@@ -247,9 +269,10 @@ fn reflect_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> 
     serde_json::from_str(resp.get("response")?.as_str()?).ok()
 }
 
-/// One reflection from Claude (Haiku by default) over raw HTTP — a sharper inner voice. Returns
-/// the raw JSON verdict object; None on any failure, so the caller can fall back to local Qwen.
-fn reflect_claude(agent: &ureq::Agent, key: &str, dossier: &str) -> Option<serde_json::Value> {
+/// One reflection from Claude (Haiku by default) over raw HTTP — a sharper inner voice. Records
+/// the call's real token cost to the daily ledger. Returns the raw JSON verdict object; None on
+/// any failure, so the caller can fall back to local Qwen.
+fn reflect_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
     let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
     let body = serde_json::json!({
         "model": model, "max_tokens": 512, "system": REFLECT_PROMPT,
@@ -261,17 +284,21 @@ fn reflect_claude(agent: &ureq::Agent, key: &str, dossier: &str) -> Option<serde
         .set("anthropic-version", "2023-06-01")
         .set("content-type", "application/json")
         .send_json(body).ok()?.into_json().ok()?;
+    // tally the spend — Haiku 4.5 rates ($1/MTok in, $5/MTok out); a costlier override under-counts.
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
     let text = resp.get("content")?.as_array()?.iter()
         .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
         .next()?;
     serde_json::from_str(&extract_json(text)?).ok()
 }
 
-type Verdict = (String, String, String, String, String, String);
+type Verdict = (String, String, String, String, String, String, String);
 
 /// Validate a raw reflection verdict to its vocabularies; `toward` must name a living adult,
 /// else the regard/resolve that lean on it are dropped. Returns (thought, mood, sway, toward,
-/// regard, resolve), the thought stripped of stock fillers. None if the thought is empty.
+/// regard, resolve, plan), the thought stripped of stock fillers. None if the thought is empty.
 fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> {
     let thought = thrush_core::strip_filler(p.get("thought")?.as_str()?.trim());
     if thought.trim().is_empty() {
@@ -285,6 +312,7 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
     let sway = pick("sway", &["debt", "rise", "prosper", "content"], "none");
     let mut regard = pick("regard", &["warmer", "colder"], "none");
     let mut resolve = pick("resolve", &["court", "confront", "mend"], "none");
+    let plan = pick("plan", &["fortune", "rise", "venture"], "none");
     let raw = p.get("toward").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let toward = if raw.is_empty() {
         String::new()
@@ -295,7 +323,7 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
         regard = "none".into();
         resolve = "none".into();
     }
-    Some((thought, mood, sway, toward, regard, resolve))
+    Some((thought, mood, sway, toward, regard, resolve, plan))
 }
 
 /// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
@@ -533,19 +561,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             let names: Vec<String> = sim.world_snapshot(t).agents.iter()
                 .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
             let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
-            // prefer Claude (Haiku) for a sharper inner voice; fall back to the local Qwen offline.
-            let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty())
-                .and_then(|key| reflect_claude(&agent, &key, &r.dossier))
+            // prefer Claude (Haiku) for a sharper inner voice — but never past the day's Anthropic
+            // cap (default $1; set ANTHROPIC_DAILY_USD). Beyond it, reflect on the free local Qwen.
+            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+            let spend = spend_file(&cli.db);
+            let today_str = t.to_string();
+            let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+            let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                .and_then(|key| reflect_claude(&agent, &key, &r.dossier, &spend, &today_str))
                 .or_else(|| {
                     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
                     let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
                     reflect_qwen(&agent, &host, &model, &r.dossier)
                 });
             match raw.as_ref().and_then(|v| parse_reflection(v, &names)) {
-                Some((thought, mood, sway, toward, regard, resolve)) => {
-                    sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve)?;
+                Some((thought, mood, sway, toward, regard, resolve, plan)) => {
+                    sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan)?;
                     sim.catch_up(today(), cur_phase())?; // re-fold the day so the residue lands
-                    let tail = if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
+                    let tail = if plan != "none" { format!(" · set on {plan}") }
+                        else if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
                         else if regard != "none" { format!(" · {regard} toward {toward}") }
                         else { String::new() };
                     println!("Reflection [{} · {mood}/{sway}{tail}]: {thought}", r.name);

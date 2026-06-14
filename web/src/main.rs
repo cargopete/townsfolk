@@ -278,6 +278,15 @@ fn person(sim: &Sim, idx: usize) -> String {
         body.push_str(&format!("<h2>Where they stand</h2>{}", ties_html));
     }
 
+    // a plan they set themselves and are carrying toward its reckoning
+    if a.active() && a.intent != 0 {
+        let what = match a.intent { 1 => "to mend their fortunes", 2 => "to better their station", _ => "a bold venture" };
+        body.push_str(&format!(
+            "<h2>Pursuing</h2><div class=doing>{} <span class=date>— resolved {} days since, not yet come to its head</span></div>",
+            esc(what), a.intent_age
+        ));
+    }
+
     // what has lately been on their own mind — the inner life, hour by hour
     if let Ok(thoughts) = sim.self_reflections(&a.name, 3) {
         if !thoughts.is_empty() {
@@ -921,6 +930,9 @@ fn main() {
                 continue;
             }
         }
+        // pick up anything the hourly driver has written since (new decrees: feuds, courtships,
+        // plans, conversation residue), so the live dashboard never lags a fold behind.
+        let _ = sim.reload_inputs();
         let is_post = matches!(req.method(), tiny_http::Method::Post);
         let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
         let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();

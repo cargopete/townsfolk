@@ -91,6 +91,11 @@ pub struct Agent {
     pub acted_day: i64,           // last day this soul made a social set-piece — one per day, no per-phase repeats
     pub rival: i32,               // a declared nemesis (index) — a durable grudge that outlives the standing of the day, else -1
     pub feud: i16,                // how far the campaign against the rival has been pressed — a throughline toward a reckoning
+    // --- a self-authored plan with a horizon: a dated ambition the soul set itself, pressed
+    //     toward a public reckoning weeks on (made good, or come to nothing) ---
+    pub intent: u8,               // 0 none · 1 mend their fortunes · 2 better their station · 3 a bold venture
+    pub intent_goal: i32,         // the purse/standing threshold that would count as making good
+    pub intent_age: i16,          // days the plan has been pressed — the throughline toward its reckoning
 }
 
 impl Agent {
@@ -197,6 +202,9 @@ impl World {
             acted_day: -1,
             rival: -1,
             feud: 0,
+            intent: 0,
+            intent_goal: 0,
+            intent_age: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1501,6 +1509,9 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         acted_day: -1,
         rival: -1,
         feud: 0,
+        intent: 0,
+        intent_goal: 0,
+        intent_age: 0,
     }
 }
 
@@ -2166,6 +2177,56 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         }
     }
 
+    // --- the self-authored plan, run out to its reckoning: an ambition a soul set itself in a
+    // reflective hour, carried over weeks while the policy layer pursues the matching goal, then
+    // judged in the open — made good (by the purse, or the standing they aimed at) or come to nothing ---
+    const PLAN_HORIZON: i16 = 28;
+    for i in 0..world.agents.len() {
+        if world.agents[i].intent == 0 {
+            continue;
+        }
+        if !world.agents[i].active() {
+            world.agents[i].intent = 0;
+            world.agents[i].intent_age = 0;
+            continue;
+        }
+        world.agents[i].intent_age += 1;
+        if world.agents[i].intent_age < PLAN_HORIZON {
+            continue; // still in the pursuit — the weeks of it play out through their daily acts
+        }
+        let a = world.agents[i].name.clone();
+        let kind = world.agents[i].intent;
+        let made_good = match kind {
+            1 | 3 => world.agents[i].purse >= world.agents[i].intent_goal, // fortune / venture: by the purse
+            2 => world.agents[i].standing >= world.agents[i].intent_goal,  // rise: by the standing
+            _ => false,
+        };
+        let what = match kind { 1 => "mend their fortunes", 2 => "better their station", _ => "a bold venture" };
+        if made_good {
+            world.agents[i].standing = (world.agents[i].standing + if kind == 3 { 5 } else { 3 }).min(100);
+            nudge_mood(&mut world.agents[i], if kind == 3 { 20 } else { 15 });
+            out.push(mk("intent", &a, format!("{a} made good on the resolve to {what}, and the parish marked the doing of it.")));
+            world.spawn_news(&a, &format!("how {a} made good on a resolve to {what}"), 1, day, &[]);
+        } else if kind == 3 {
+            // a bold venture that fails costs the schemer dear — purse and face both
+            world.agents[i].purse -= 20;
+            world.agents[i].standing = (world.agents[i].standing - 3).max(0);
+            nudge_mood(&mut world.agents[i], -15);
+            out.push(mk("intent", &a, format!("{a}'s bold venture came to nothing but loss, as the wiser heads had foretold.")));
+            world.spawn_news(&a, &format!("the money {a} sank in a failed notion"), -1, day, &[]);
+        } else {
+            nudge_mood(&mut world.agents[i], -12);
+            out.push(mk("intent", &a, format!("{a}'s resolve to {what} came to nothing, for all the trying.")));
+            world.spawn_news(&a, &format!("how {a}'s hopes of {what} came to nothing"), -1, day, &[]);
+        }
+        world.agents[i].intent = 0;
+        world.agents[i].intent_age = 0;
+        world.agents[i].intent_goal = 0;
+        let (g, t) = assess_goal(world, i, day); // re-take their bearings now the plan is done
+        world.agents[i].goal = g;
+        world.agents[i].goal_target = t;
+    }
+
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
     for i in 0..world.agents.len() {
@@ -2806,12 +2867,12 @@ pub struct Report {
 /// template line; the salient beats get the oracle.
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
-    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk",
+    "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk", "intent",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 24;
+const SNAPSHOT_VERSION: i64 = 25;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -2992,6 +3053,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                 }
                 let regard = parts.next().unwrap_or("none");
                 let resolve = parts.next().unwrap_or("none");
+                let plan = parts.next().unwrap_or("none");
                 if let Some(t) = ti {
                     if t != si {
                         // a thought can warm or sour how they hold one particular soul
@@ -3028,6 +3090,33 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             }
                             _ => {}
                         }
+                    }
+                }
+                // a dated plan the soul set itself this hour — one at a time; an active plan
+                // runs its course. the target threshold is captured from their present state,
+                // so making good is a real test of the weeks of pursuit that follow.
+                if world.agents[si].intent == 0 {
+                    let (purse, standing) = (world.agents[si].purse, world.agents[si].standing);
+                    match plan {
+                        "fortune" => {
+                            world.agents[si].intent = 1;
+                            world.agents[si].intent_goal = purse + 30;
+                            world.agents[si].intent_age = 0;
+                            world.agents[si].goal = if purse < 0 { 1 } else { 5 }; // clear debt / make fortune
+                        }
+                        "rise" => {
+                            world.agents[si].intent = 2;
+                            world.agents[si].intent_goal = (standing + 6).min(100);
+                            world.agents[si].intent_age = 0;
+                            world.agents[si].goal = 2;
+                        }
+                        "venture" => {
+                            world.agents[si].intent = 3;
+                            world.agents[si].intent_goal = purse + 70;
+                            world.agents[si].intent_age = 0;
+                            world.agents[si].goal = 5;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -3426,7 +3515,7 @@ impl Sim {
     /// [none, debt, rise, prosper, content]; regard ∈ [none, warmer, colder] and resolve ∈
     /// [none, court, confront, mend] both bear on `toward` (the one soul mused on, or "").
     #[allow(clippy::too_many_arguments)]
-    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str, toward: &str, regard: &str, resolve: &str) -> rusqlite::Result<()> {
+    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str, toward: &str, regard: &str, resolve: &str, plan: &str) -> rusqlite::Result<()> {
         let day = self.target_day(date).max(0);
         self.conn.execute(
             "INSERT INTO reflections(day,subject,thought) VALUES(?1,?2,?3)",
@@ -3434,7 +3523,7 @@ impl Sim {
         )?;
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'reflect',?3,?4,?5)",
-            params![day, subject, toward, format!("{mood}:{sway}:{regard}:{resolve}"), thought],
+            params![day, subject, toward, format!("{mood}:{sway}:{regard}:{resolve}:{plan}"), thought],
         )?;
         // if the hour hardened their regard for a particular soul, keep it as a memory of that
         // soul, so it surfaces on their page and colours the next time the two of them speak.
@@ -3446,6 +3535,17 @@ impl Sim {
         }
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Re-read the recorded inputs (decrees, weather, wildcards, interventions) from the db, so a
+    /// long-running reader process picks up what another process (the hourly driver) has since
+    /// written. The fold then reflects new feuds, courtships, plans and the like without a restart.
+    pub fn reload_inputs(&mut self) -> rusqlite::Result<()> {
+        self.decrees = load_decrees(&self.conn)?;
+        self.weather = load_weather(&self.conn)?;
+        self.wildcards = load_wildcards(&self.conn)?;
+        self.interventions = load_interventions(&self.conn)?;
         Ok(())
     }
 
@@ -3508,6 +3608,10 @@ impl Sim {
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
         if let Some(r) = feud { dossier.push_str(&format!("\nThey nurse a running grudge against {r}.")); }
+        if ag.intent != 0 {
+            let what = match ag.intent { 1 => "to mend their fortunes", 2 => "to better their station", _ => "a bold venture" };
+            dossier.push_str(&format!("\nThey are already set on a plan — {what} — resolved {} days since, and not yet come to its head.", ag.intent_age));
+        }
 
         if let Ok(es) = self.person_events(&ag.name, 5) {
             let lines: Vec<String> = es.into_iter().rev().map(|e| format!("  {} — {}", e.date, e.text)).collect();
@@ -4070,5 +4174,49 @@ mod feud_tests {
         assert_eq!(w.agents[i].feud, 0, "the campaign counter resets once reckoned");
         assert_ne!(w.agents[i].goal, 4, "with the rival bested, the goal moves on");
         assert!(w.agents[j].standing < rival_standing_before, "the bested rival's standing should fall");
+    }
+}
+
+#[cfg(test)]
+mod intent_tests {
+    use super::*;
+
+    // A plan a soul sets itself is carried for weeks, then judged in the open. A purse already
+    // past the threshold makes good; the resolve is spent and a public beat thrown off.
+    #[test]
+    fn a_self_set_plan_comes_to_a_reckoning() {
+        let mut w = World::seed();
+        let i = (0..w.agents.len())
+            .find(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .expect("the seed town holds a grown soul");
+        w.agents[i].birth_day = -45 * 365; // middle-aged, to keep death's hazard out of the test
+
+        // they resolved to mend their fortunes, and the threshold sits at or below what they hold,
+        // so the weeks of pursuit will be judged to have made good
+        w.agents[i].intent = 1;
+        w.agents[i].intent_goal = w.agents[i].purse; // already met — a made-good reckoning
+        w.agents[i].intent_age = 0;
+        let standing_before = w.agents[i].standing;
+
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let mut reckoned: Option<(i64, String)> = None;
+        for day in 0..40i64 {
+            let age_before = w.agents[i].intent_age;
+            let evs = life_tick(&mut w, day, date, 42);
+            if w.agents[i].intent != 0 {
+                assert!(w.agents[i].intent_age >= age_before, "the plan regressed on day {day}");
+            }
+            if let Some(e) = evs.iter().find(|e| e.kind == "intent") {
+                reckoned = Some((day, e.text.clone()));
+                break;
+            }
+        }
+
+        let (day, text) = reckoned.expect("a plan should reach its reckoning within six weeks");
+        assert!(day >= 27, "a plan is carried over weeks, not settled overnight (came on day {day})");
+        assert!(text.contains("made good"), "a met threshold should make good, got: {text}");
+        assert_eq!(w.agents[i].intent, 0, "the plan is spent once reckoned");
+        assert_eq!(w.agents[i].intent_age, 0, "the plan counter resets once reckoned");
+        assert!(w.agents[i].standing >= standing_before, "making good should not cost them standing");
     }
 }
