@@ -135,7 +135,10 @@ enum Cmd {
     },
 }
 
-const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a small West-Country market town in 1934. Render the given event as a single short, warm, wry diary-style sentence or two, in the register of interwar English provincial comedy — gentle misfortune borne with dignity, the small humiliation, the understated joke. Never melodrama. No preamble, no quotation marks.";
+const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a West-Country market town in 1934. Render the given event as ONE plain sentence (two at the very most), in the register of interwar English provincial writing — dry, observed, lightly wry, the small dignity and the small humiliation borne with grace. \
+Be STRICTLY FAITHFUL to the event you are given: use only the people, places, and facts named in it, and NEVER invent a name, a person, a surname, or a detail that is not there. If a soul is named, name them exactly; do not conjure new villagers. \
+Note especially: to say two people have 'grown thick' or 'grown close' means they have become friends or intimates — it is NEVER about bodily size, weight, or a swelling figure. Read such phrases as friendship. \
+Do not escalate into farce, do not pile embellishment upon embellishment, do not stretch a small thing into an absurdity. One wry touch is plenty. No preamble, no quotation marks, no lists.";
 
 /// One call to the recorded oracle. Returns the rendered prose, or None on failure
 /// (container down, timeout) so a batch degrades gracefully instead of dying.
@@ -146,7 +149,7 @@ fn narrate_one(agent: &ureq::Agent, host: &str, model: &str, _date: &str, text: 
         "prompt": text,
         "think": false,
         "stream": false,
-        "options": { "num_ctx": 4096, "temperature": 0.8 },
+        "options": { "num_ctx": 4096, "temperature": 0.6 },
     });
     let resp: serde_json::Value = agent
         .post(&format!("{host}/api/generate"))
