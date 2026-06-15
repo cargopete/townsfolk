@@ -108,6 +108,17 @@ enum Cmd {
         #[arg(long, default_value_t = 3)]
         limit: i64,
     },
+    /// Deepen the inner life: the most-overdue soul steps back from the hour-by-hour stream and
+    /// consolidates — revising who they take themselves to be, updating what they believe of the
+    /// souls who weigh on them (a tracked theory of mind), and facing any crack in their self-model.
+    Introspect {
+        /// How many souls to consolidate this run (each the next most overdue, unless --target).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+        /// Consolidate one named soul instead of working through the most overdue.
+        #[arg(long, default_value = "")]
+        target: String,
+    },
     /// Question the town under an open murder: the magistrate takes statements (alibi, and any
     /// blame cast), recorded and read out — they fold into suspicion. Works through the unquestioned.
     Interrogate {
@@ -251,7 +262,7 @@ const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Th
 CRUCIAL — this is a CONTINUOUS STREAM OF CONSCIOUSNESS, not a fresh start each time. The lines under 'The thread of their recent thinking' are THEIR OWN inner monologue from recent hours, oldest first. Carry that train of thought forward where it left off: pick up what was unfinished, let an earlier worry deepen or ease or give way, follow a resolve to where it now stands, change their mind if the days have changed it — but NEVER simply restate a thought already in the thread. Each hour is the next moment of one unbroken inner life. \
 Most of an hour's thought — about seven parts in ten — turns INWARD, on themselves and their own life: who they are and who they have become, what they have made of their years and what they still want of the ones left to them, their regrets and small hopes, their faith and their failings, whether their work and their days amount to what they would wish. The plain inward reckoning of a life, as such a person would truly turn it over alone. Only the rest — about three parts in ten — turns outward: to one particular soul they cannot put from their mind, to the town, to the season's work. \
 Stay wholly in period voice and true to their station and schooling: they know only the world of 1934 and their own parish — nothing of machines that think, nothing of times to come, no modern words or notions. One or two sentences of genuine, plain, unforced inward thought — no quotation marks, no preamble. Let it be honest: a real grief may sink them, a real hope lift them, a long grievance harden, an old fondness soften — do not flatten every hour into bland contentment, and do not manufacture drama where the soul would feel none. \
-Then judge how the hour has left them, ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content], \"toward\": the EXACT name (from the dossier) of the one soul they mused on if their thought turned to a particular person, else \"\", \"regard\": one of [none, warmer, colder] — whether the thought warmed or soured how they hold that soul, \"resolve\": one of [none, court, confront, mend] — and only rarely: court=resolved to pay court to them, confront=resolved to set themselves against them, mend=resolved to make peace with them, \"plan\": one of [none, fortune, rise, venture] — a DATED resolve they mean to pursue over weeks, distinct from a mere change of heart and set ONLY when a real, durable ambition takes hold: fortune=to mend their fortunes (clear what they owe, put money by), rise=to better their standing in the parish, venture=a bold scheme that may make them or ruin them}. \
+Then judge how the hour has left them, ONLY as JSON: {\"thought\": the inward sentence(s), \"mood\": one of [lifts, sinks, steadies], \"sway\": one of [none, debt, rise, prosper, content], \"toward\": the EXACT name (from the dossier) of the one soul they mused on if their thought turned to a particular person, else \"\", \"regard\": one of [none, warmer, colder] — whether the thought warmed or soured how they hold that soul, \"resolve\": one of [none, court, confront, mend] — and only rarely: court=resolved to pay court to them, confront=resolved to set themselves against them, mend=resolved to make peace with them, \"plan\": one of [none, fortune, rise, venture] — a DATED resolve they mean to pursue over weeks, distinct from a mere change of heart and set ONLY when a real, durable ambition takes hold: fortune=to mend their fortunes (clear what they owe, put money by), rise=to better their standing in the parish, venture=a bold scheme that may make them or ruin them, \"revise\": one of [keep, abandon, harder] — meaningful ONLY if the dossier says they ALREADY pursue a plan: keep=hold to it as before, abandon=think better of it and set it down, harder=renew the resolve and raise their sights; if they have no plan in train, leave it keep}. \
 mood is whether the contemplation lifted, lowered, or merely steadied their spirits. sway is whether they talked themselves into a new aim: debt=to clear what they owe, rise=to better their standing, prosper=to make their fortune, content=to cease striving and rest content, none=unchanged. Use toward/regard/resolve ONLY when the thought genuinely turned to one named person; a purely inward hour leaves them \"\", none, none. Set plan only when a true ambition with a horizon forms — most hours, and any hour where they already pursue a plan, leave it none.";
 
 /// Pull the first {...} JSON object out of a reply that may wrap it in prose or code fences.
@@ -319,11 +330,11 @@ fn reflect_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::pa
     serde_json::from_str(&extract_json(text)?).ok()
 }
 
-type Verdict = (String, String, String, String, String, String, String);
+type Verdict = (String, String, String, String, String, String, String, String);
 
 /// Validate a raw reflection verdict to its vocabularies; `toward` must name a living adult,
 /// else the regard/resolve that lean on it are dropped. Returns (thought, mood, sway, toward,
-/// regard, resolve, plan), the thought stripped of stock fillers. None if the thought is empty.
+/// regard, resolve, plan, revise), the thought stripped of stock fillers. None if thought empty.
 fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> {
     let thought = thrush_core::strip_filler(p.get("thought")?.as_str()?.trim());
     if thought.trim().is_empty() {
@@ -338,6 +349,7 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
     let mut regard = pick("regard", &["warmer", "colder"], "none");
     let mut resolve = pick("resolve", &["court", "confront", "mend"], "none");
     let plan = pick("plan", &["fortune", "rise", "venture"], "none");
+    let revise = pick("revise", &["abandon", "harder"], "keep");
     let raw = p.get("toward").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let toward = if raw.is_empty() {
         String::new()
@@ -348,7 +360,7 @@ fn parse_reflection(p: &serde_json::Value, names: &[String]) -> Option<Verdict> 
         regard = "none".into();
         resolve = "none".into();
     }
-    Some((thought, mood, sway, toward, regard, resolve, plan))
+    Some((thought, mood, sway, toward, regard, resolve, plan, revise))
 }
 
 const TESTIMONY_PROMPT: &str = "You voice one soul of Thrushcombe St Mary, a 1934 West-Country market town, giving a statement to the magistrate, who under public outcry is questioning the whole parish about the night Mr Quint was murdered. You are given who they are and how they stand. In their own period voice, true to their station and schooling, write what they say to the magistrate: where they were that night and what they were doing (their alibi), and — if they are frightened, or have an enemy, or are pressed hard — they may cast the suspicion onto another soul by name. A soul of standing answers calm and brief; a cornered or common soul may bluster, plead, or point a finger to save themselves. If the dossier states a KNOWN ALIBI as settled fact, their account MUST reflect it truthfully and fully. Two to four sentences, first person, no quotation marks, no preamble. \
@@ -397,6 +409,63 @@ fn parse_testimony(p: &serde_json::Value, names: &[String]) -> Option<(String, S
     let accuses = if raw.is_empty() { String::new() }
         else { names.iter().find(|n| n.as_str() == raw || raw.contains(n.as_str()) || n.eq_ignore_ascii_case(&raw)).cloned().unwrap_or_default() };
     Some((statement, alibi, accuses))
+}
+
+const INTROSPECT_PROMPT: &str = "You voice the deepest hour of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the hour they step back from the day's passing thoughts and take stock of their whole self. You are given who they are, who they have so far taken themselves to be, the recent run of their thinking, what has befallen them, and the souls who weigh on them with whatever they have believed of each. Wholly in their period voice and true to their station and schooling (they know only the world of 1934 and their own parish), do three things: \
+1. SELF — set down their settled, revised sense of who they are NOW: not the mood of an hour but the durable self-concept they carry — the kind of person they take themselves to be, what they have made of their life and what they still want of it, the truths they own and the lies they tell themselves. Carry forward what they believed of themselves before, and let it shift only where the recent days have genuinely moved it. A few plain sentences, first person. \
+2. BELIEFS — for one or two of the named souls who weigh on them, set down what they NOW privately believe about that person: their read of that soul's character and intentions, updated by what has lately passed between them. Particular and honest, in their own voice. \
+3. FRACTURE — judge whether there is a real crack between who they believe themselves to be and what is actually so (or what they have done): none = no true contradiction; reckoning = they face it and let it change how they understand themselves, at a cost; denial = the contradiction is more than they can bear, and they push it down, refuse it, harden the old self-image against the evidence. Most hours are none; reserve reckoning and denial for a genuine collision. \
+Respond ONLY as JSON: {\"self\": the revised self-concept in the first person, \"beliefs\": [{\"about\": EXACT name from the dossier, \"belief\": what they now believe of that soul}], \"fracture\": one of [none, reckoning, denial]}. No preamble, no quotation marks inside the strings.";
+
+/// One consolidation of the inner life from the local Qwen oracle — raw JSON {self,beliefs,fracture}.
+fn introspect_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
+    let body = serde_json::json!({
+        "model": model, "system": INTROSPECT_PROMPT,
+        "prompt": format!("{dossier}\n\nTake stock of themselves."),
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.85 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+}
+
+/// One consolidation from Claude (Haiku) — sharper; tallies token cost. None on failure → Qwen.
+fn introspect_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
+    let body = serde_json::json!({
+        "model": model, "max_tokens": 700, "system": INTROSPECT_PROMPT,
+        "messages": [{ "role": "user", "content": format!("{dossier}\n\nTake stock of themselves. Respond only with the JSON object.") }],
+    });
+    let resp: serde_json::Value = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
+        .send_json(body).ok()?.into_json().ok()?;
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
+    let text = resp.get("content")?.as_array()?.iter()
+        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
+        .next()?;
+    serde_json::from_str(&extract_json(text)?).ok()
+}
+
+/// Validate a consolidation: (self_concept, beliefs as (name,text) for living adults, fracture∈
+/// [none,reckoning,denial]). None if there is nothing usable (no self and no beliefs).
+fn parse_introspect(p: &serde_json::Value, names: &[String]) -> Option<(String, Vec<(String, String)>, String)> {
+    let self_concept = p.get("self").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let resolve_name = |raw: &str| names.iter().find(|n| n.as_str() == raw || raw.contains(n.as_str()) || n.eq_ignore_ascii_case(raw)).cloned();
+    let mut beliefs = Vec::new();
+    if let Some(arr) = p.get("beliefs").and_then(|v| v.as_array()) {
+        for b in arr {
+            let about = b.get("about").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let text = b.get("belief").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if let (Some(nm), false) = (resolve_name(about), text.is_empty()) {
+                beliefs.push((nm, text));
+            }
+        }
+    }
+    let f = p.get("fracture").and_then(|v| v.as_str()).unwrap_or("none").trim().to_lowercase();
+    let fracture = ["reckoning", "denial"].iter().find(|o| f.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "none".into());
+    (!self_concept.is_empty() || !beliefs.is_empty()).then_some((self_concept, beliefs, fracture))
 }
 
 const BIO_PROMPT: &str = "You write the biography of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the life the parish would tell of them. You are given their settled facts: name, station, household, age, family, where they came from. Invent a warm, particular life that fits those facts exactly: where they were born and how they came to their place in the town, the shape of their character, a defining turn or two of their life, what they are known (or whispered) for in the parish, and a private hope or an old wound. Stay wholly in period and in keeping with their station — a labourer's life is not a gentlewoman's, and the lettered and the unlettered came to their lot by different roads. Three to five sentences, plain and vivid, in the third person, no quotation marks, no preamble, no lists. This is the story the parish tells of them.";
@@ -695,10 +764,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         reflect_qwen(&agent, &host, &model, &r.dossier)
                     });
                 match raw.as_ref().and_then(|v| parse_reflection(v, &names)) {
-                    Some((thought, mood, sway, toward, regard, resolve, plan)) => {
-                        sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan)?;
+                    Some((thought, mood, sway, toward, regard, resolve, plan, revise)) => {
+                        sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan, &revise)?;
                         sim.catch_up(today(), cur_phase())?; // re-fold so the residue lands + next pick differs
-                        let tail = if plan != "none" { format!(" · set on {plan}") }
+                        let tail = if revise != "keep" { format!(" · plan {revise}") }
+                            else if plan != "none" { format!(" · set on {plan}") }
                             else if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
                             else if regard != "none" { format!(" · {regard} toward {toward}") }
                             else { String::new() };
@@ -706,6 +776,47 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     None => {
                         eprintln!("oracle unavailable — the stream stalls this beat.");
+                        break;
+                    }
+                }
+            }
+        }
+        Cmd::Introspect { count, target } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let names: Vec<String> = sim.world_snapshot(t).agents.iter()
+                .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
+            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+            let spend = spend_file(&cli.db);
+            let today_str = t.to_string();
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            let tgt = (!target.is_empty()).then_some(target.as_str());
+            for _ in 0..count.max(1) {
+                let Some(r) = sim.psyche_subject(t, tgt) else {
+                    println!("No soul to consolidate.");
+                    break;
+                };
+                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                    .and_then(|key| introspect_claude(&agent, &key, &r.dossier, &spend, &today_str))
+                    .or_else(|| {
+                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                        introspect_qwen(&agent, &host, &model, &r.dossier)
+                    });
+                match raw.as_ref().and_then(|v| parse_introspect(v, &names)) {
+                    Some((self_concept, beliefs, fracture)) => {
+                        sim.record_psyche(t, &r.name, &self_concept, &beliefs, &fracture)?;
+                        sim.catch_up(today(), cur_phase())?; // fold any fracture residue + next pick differs
+                        let bl = beliefs.iter().map(|(a, _)| a.as_str()).collect::<Vec<_>>().join(", ");
+                        let ftail = if fracture != "none" { format!(" · FRACTURE: {fracture}") } else { String::new() };
+                        let btail = if bl.is_empty() { String::new() } else { format!(" · reads {bl}") };
+                        println!("Introspection [{}{btail}{ftail}]: {}", r.name, self_concept);
+                        if tgt.is_some() { break; }
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the soul cannot gather itself this hour.");
                         break;
                     }
                 }

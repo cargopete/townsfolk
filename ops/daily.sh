@@ -17,4 +17,5 @@ BIN="$REPO/target/release/thrush"
 "$BIN" --db "$DB" converse || true   # let two souls fall into talk of their own accord
 "$BIN" --db "$DB" interrogate --count 3 || true  # the magistrate questions a few more souls, if a murder is open
 "$BIN" --db "$DB" reflect --count 6 || true  # advance several souls' streams of consciousness a beat
+"$BIN" --db "$DB" introspect --count 2 || true  # let a couple of souls consolidate self-model + theory of mind
 "$BIN" --db "$DB" biography --limit 2 || true  # write the lives of any souls still lacking one

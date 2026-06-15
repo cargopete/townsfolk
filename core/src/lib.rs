@@ -3240,7 +3240,13 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS testimony(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL,
-            alibi TEXT NOT NULL, accuses TEXT NOT NULL, public INTEGER NOT NULL, text TEXT NOT NULL);",
+            alibi TEXT NOT NULL, accuses TEXT NOT NULL, public INTEGER NOT NULL, text TEXT NOT NULL);
+         -- The evolving life-model a soul reasons over: their self-concept (about=''), and their
+         -- belief about each other soul they know (about=name) — a tracked, updating theory of mind.
+         -- Flavour, recorded by the `introspect` job (never folded); injected into reflection and talk.
+         CREATE TABLE IF NOT EXISTS psyche(
+            id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL,
+            about TEXT NOT NULL, text TEXT NOT NULL);",
     )
 }
 
@@ -3266,7 +3272,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
         let ti = world.idx(&d.target);
         // a turning-point verdict is a public beat; a private conversation, a private thought, or a
         // statement to the magistrate (surfaced on its own page + as gossip) is not a chronicle beat
-        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" {
+        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" && d.kind != "psyche" {
             out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
         }
         match (d.kind.as_str(), d.choice.as_str()) {
@@ -3393,6 +3399,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                 let regard = parts.next().unwrap_or("none");
                 let resolve = parts.next().unwrap_or("none");
                 let plan = parts.next().unwrap_or("none");
+                let revise = parts.next().unwrap_or("keep");
                 if let Some(t) = ti {
                     if t != si {
                         // a thought can warm or sour how they hold one particular soul
@@ -3431,9 +3438,10 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         }
                     }
                 }
-                // a dated plan the soul set itself this hour — one at a time; an active plan
-                // runs its course. the target threshold is captured from their present state,
-                // so making good is a real test of the weeks of pursuit that follow.
+                // a dated plan the soul set itself this hour — one at a time. With no plan running,
+                // this hour may take one up. With a plan already in train, the hour may instead
+                // *revise* it: a plan is a living commitment a soul revisits as the world pushes back,
+                // not a thing fixed once and merely waited out.
                 if world.agents[si].intent == 0 {
                     let (purse, standing) = (world.agents[si].purse, world.agents[si].standing);
                     match plan {
@@ -3456,6 +3464,29 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             world.agents[si].goal = 5;
                         }
                         _ => {}
+                    }
+                } else {
+                    match revise {
+                        // they think better of it and set the plan down — a quiet defeat, or a wiser peace
+                        "abandon" => {
+                            world.agents[si].intent = 0;
+                            world.agents[si].intent_age = 0;
+                            world.agents[si].intent_goal = 0;
+                            nudge_mood(&mut world.agents[si], -10);
+                            let (g, t) = assess_goal(world, si, day);
+                            world.agents[si].goal = g;
+                            world.agents[si].goal_target = t;
+                            out.push(Event { day, date: date.to_string(), kind: "intent".into(), actor: world.agents[si].name.clone(),
+                                text: format!("{} has given up the plan they had set themselves, thinking better of it.", world.agents[si].name) });
+                        }
+                        // they renew the resolve and raise their sights — the horizon resets, the aim hardens
+                        "harder" => {
+                            world.agents[si].intent_age = 0; // a renewed commitment buys fresh weeks
+                            let bump = match world.agents[si].intent { 2 => 4, _ => 25 };
+                            world.agents[si].intent_goal += bump;
+                            nudge_mood(&mut world.agents[si], 6);
+                        }
+                        _ => {} // keep — the plan stands, the weeks of pursuit go on
                     }
                 }
             }
@@ -3494,6 +3525,15 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             if public { world.spawn_news(&tn, &format!("how {nm} named {tn} to the magistrate"), -3, day, &[]); }
                         }
                     }
+                }
+            }
+            // the felt cost of facing (or refusing) a crack in one's own self-model: a reckoning
+            // integrates it at a price; denial hardens against it, which costs more, and quietly.
+            ("psyche", c) => {
+                match c {
+                    "reckoning" => nudge_mood(&mut world.agents[si], -6),
+                    "denial" => nudge_mood(&mut world.agents[si], -12),
+                    _ => {}
                 }
             }
             _ => {}
@@ -3901,7 +3941,7 @@ impl Sim {
     /// [none, debt, rise, prosper, content]; regard ∈ [none, warmer, colder] and resolve ∈
     /// [none, court, confront, mend] both bear on `toward` (the one soul mused on, or "").
     #[allow(clippy::too_many_arguments)]
-    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str, toward: &str, regard: &str, resolve: &str, plan: &str) -> rusqlite::Result<()> {
+    pub fn record_reflection(&mut self, date: Date, subject: &str, thought: &str, mood: &str, sway: &str, toward: &str, regard: &str, resolve: &str, plan: &str, revise: &str) -> rusqlite::Result<()> {
         let day = self.target_day(date).max(0);
         self.conn.execute(
             "INSERT INTO reflections(day,subject,thought) VALUES(?1,?2,?3)",
@@ -3909,7 +3949,7 @@ impl Sim {
         )?;
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'reflect',?3,?4,?5)",
-            params![day, subject, toward, format!("{mood}:{sway}:{regard}:{resolve}:{plan}"), thought],
+            params![day, subject, toward, format!("{mood}:{sway}:{regard}:{resolve}:{plan}:{revise}"), thought],
         )?;
         // if the hour hardened their regard for a particular soul, keep it as a memory of that
         // soul, so it surfaces on their page and colours the next time the two of them speak.
@@ -4135,6 +4175,66 @@ impl Sim {
         rows.collect()
     }
 
+    /// Record a consolidation of the inner life: the soul's revised self-concept, their updated
+    /// beliefs about named others (a tracked theory of mind), and any fracture between who they
+    /// believe they are and what is so. The texts are flavour (injected, never folded); a fracture
+    /// rides a `psyche` decree so its felt cost on spirits stays deterministic.
+    pub fn record_psyche(&mut self, date: Date, subject: &str, self_concept: &str, beliefs: &[(String, String)], fracture: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        if !self_concept.trim().is_empty() {
+            self.conn.execute("INSERT INTO psyche(day,subject,about,text) VALUES(?1,?2,'',?3)", params![day, subject, self_concept])?;
+        }
+        for (about, text) in beliefs {
+            if !about.trim().is_empty() && !text.trim().is_empty() {
+                self.conn.execute("INSERT INTO psyche(day,subject,about,text) VALUES(?1,?2,?3,?4)", params![day, subject, about, text])?;
+            }
+        }
+        if fracture != "none" {
+            self.conn.execute(
+                "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'psyche','',?3,?4)",
+                params![day, subject, fracture, self_concept],
+            )?;
+            self.decrees = load_decrees(&self.conn)?;
+            self.invalidate_from(day)?;
+        }
+        Ok(())
+    }
+
+    /// How a soul has come to see themselves — their current self-concept (latest consolidation).
+    pub fn self_model(&self, name: &str) -> rusqlite::Result<Option<String>> {
+        match self.conn.query_row(
+            "SELECT text FROM psyche WHERE subject = ?1 AND about = '' ORDER BY id DESC LIMIT 1",
+            params![name], |r| r.get::<_, String>(0),
+        ) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// What a soul currently believes about another named soul — their theory of that person.
+    pub fn belief_of(&self, name: &str, about: &str) -> rusqlite::Result<Option<String>> {
+        match self.conn.query_row(
+            "SELECT text FROM psyche WHERE subject = ?1 AND about = ?2 ORDER BY id DESC LIMIT 1",
+            params![name, about], |r| r.get::<_, String>(0),
+        ) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The beliefs a soul currently holds about others (latest per person) — their theory of mind.
+    pub fn beliefs_held_by(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT about, text FROM psyche WHERE subject = ?1 AND about <> '' AND id IN
+               (SELECT MAX(id) FROM psyche WHERE subject = ?1 AND about <> '' GROUP BY about)
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![name, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
     /// The town's inner life, newest first — every soul's reflections, for the public feed.
     /// Returns (day, subject, thought).
     pub fn recent_reflections(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String)>> {
@@ -4194,6 +4294,14 @@ impl Sim {
         if let Ok(Some(bio)) = self.biography(&ag.name) {
             dossier.push_str(&format!("\nThe life behind them: {bio}"));
         }
+        // the evolving self-model they reason from, and their theory of those on their mind
+        if let Ok(Some(sc)) = self.self_model(&ag.name) {
+            dossier.push_str(&format!("\nHow they have come to see themselves (their settled sense of who they are — reason from it, and let it shift only if this hour truly moves it): {sc}"));
+        }
+        if let Ok(bs) = self.beliefs_held_by(&ag.name, 4) {
+            let lines: Vec<String> = bs.into_iter().map(|(who, t)| format!("  what they make of {who}: {t}")).collect();
+            if !lines.is_empty() { dossier.push_str(&format!("\nWhat they privately believe of others:\n{}", lines.join("\n"))); }
+        }
         if let Some(brief) = inquest_brief(&w, idx) {
             dossier.push_str(&format!("\n{brief}"));
         }
@@ -4222,6 +4330,79 @@ impl Sim {
             if !lines.is_empty() { dossier.push_str(&format!(" About the parish lately: {}", lines.join(" "))); }
         }
         Some(ReflectSubject { name: ag.name.clone(), dossier })
+    }
+
+    /// Assemble the soul whose inner life is most overdue for consolidation — to step back from
+    /// the hour-by-hour stream and reason over the whole: revise who they take themselves to be,
+    /// update what they believe of the souls who weigh on them, and face any gap between the two.
+    /// A named target overrides the pick. The dossier carries their current self-model, the recent
+    /// thread, what has lately happened to them, and the people presently on their mind.
+    pub fn psyche_subject(&self, today: Date, target: Option<&str>) -> Option<ReflectSubject> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let last: BTreeMap<String, i64> = {
+            let mut m = BTreeMap::new();
+            if let Ok(mut stmt) = self.conn.prepare("SELECT subject, MAX(id) FROM psyche GROUP BY subject") {
+                if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                    for row in rows.flatten() { m.insert(row.0, row.1); }
+                }
+            }
+            m
+        };
+        let idx = match target {
+            Some(t) => w.agents.iter().position(|a| a.name == t && a.active() && a.archetype != "child")?,
+            None => (0..w.agents.len())
+                .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+                .min_by_key(|&i| last.get(&w.agents[i].name).copied().unwrap_or(-1))?,
+        };
+        let ag = &w.agents[idx];
+        let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
+            "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+            "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
+        }.to_string());
+        let mut d = format!(
+            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}.",
+            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse, mood = mood_word(ag.mood),
+        );
+        if let Ok(Some(bio)) = self.biography(&ag.name) {
+            d.push_str(&format!("\nThe life the parish tells of them: {bio}"));
+        }
+        match self.self_model(&ag.name) {
+            Ok(Some(sc)) => d.push_str(&format!("\nWho they have until now taken themselves to be: {sc}")),
+            _ => d.push_str("\nThey have never yet sat and reckoned who they truly are; this is the first such hour."),
+        }
+        // the people presently weighing on them — from their recent thread and their ledger of feeling
+        let mut onmind: Vec<String> = Vec::new();
+        for (j, _) in w.ties(idx, true, 2).into_iter().chain(w.ties(idx, false, 2)) {
+            onmind.push(w.agents[j].name.clone());
+        }
+        if ag.rival >= 0 { if let Some(r) = w.agents.get(ag.rival as usize) { onmind.push(r.name.clone()); } }
+        onmind.dedup();
+        for who in onmind.iter().take(4) {
+            let cur = self.belief_of(&ag.name, who).ok().flatten();
+            match cur {
+                Some(b) => d.push_str(&format!("\n  Of {who}, they have believed: {b}")),
+                None => d.push_str(&format!("\n  {who} is on their mind, though they have never set down what they make of them.")),
+            }
+        }
+        if let Ok(ms) = self.memories_of(&ag.name, 4) {
+            let lines: Vec<String> = ms.into_iter().map(|(who, m)| format!("  of {who}: {m}")).collect();
+            if !lines.is_empty() { d.push_str(&format!("\nWhat others have lately left with them:\n{}", lines.join("\n"))); }
+        }
+        if let Ok(mut ts) = self.self_reflections(&ag.name, 6) {
+            if !ts.is_empty() {
+                ts.reverse();
+                d.push_str(&format!("\nThe recent stream of their thinking (oldest first):\n{}", ts.iter().map(|t| format!("  · {t}")).collect::<Vec<_>>().join("\n")));
+            }
+        }
+        if let Ok(es) = self.person_events(&ag.name, 5) {
+            let lines: Vec<String> = es.into_iter().rev().map(|e| format!("  {} — {}", e.date, e.text)).collect();
+            if !lines.is_empty() { d.push_str(&format!("\nWhat has lately befallen them:\n{}", lines.join("\n"))); }
+        }
+        if let Some(brief) = inquest_brief(&w, idx) {
+            d.push_str(&format!("\n{brief}"));
+        }
+        Some(ReflectSubject { name: ag.name.clone(), dossier: d })
     }
 
     /// Find a soul at a genuine turning point — a long feud that might be forgiven, ruin to be

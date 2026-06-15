@@ -388,6 +388,7 @@ fn person(sim: &Sim, idx: usize) -> String {
     };
     let name = |i: usize| esc(&world.agents[i].name);
     let link = |i: usize| format!("<a href=/folk/{}>{}</a>", i, name(i));
+    let idx_of = |nm: &str| world.agents.iter().position(|x| x.name == nm);
 
     let status = status_label(sim, a).map(|s| format!(" <span class=tag>{}</span>", esc(&s))).unwrap_or_default();
     let origin = a.origin.as_ref().map(|o| format!(" &middot; came from {}", esc(o))).unwrap_or_default();
@@ -465,6 +466,21 @@ fn person(sim: &Sim, idx: usize) -> String {
                      <div class=think style='margin-top:.3rem'>{}</div>{}</div>",
                     esc(&alibi), esc(&text), named
                 ));
+            }
+        }
+    }
+
+    // how they have come to see themselves — the evolving self-concept they reason from
+    if let Ok(Some(sc)) = sim.self_model(&a.name) {
+        body.push_str(&format!("<h2>How they see themselves</h2><p class=life>{}</p>", esc(&sc)));
+    }
+    // their theory of the souls who weigh on them — what they privately make of each
+    if let Ok(beliefs) = sim.beliefs_held_by(&a.name, 8) {
+        if !beliefs.is_empty() {
+            body.push_str("<h2>What they make of others</h2>");
+            for (who, t) in beliefs {
+                let lk = idx_of(&who).map(|i| format!("<a href=/folk/{i} class=who>{}</a>", esc(&who))).unwrap_or_else(|| esc(&who));
+                body.push_str(&format!("<div class=entry><span class=date>of {}</span><br><span class=think>{}</span></div>", lk, esc(&t)));
             }
         }
     }
@@ -731,6 +747,10 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         if !about.is_empty() {
             p.push_str(&format!(" What you already remember of {}: {}.", s.name, about.join("; ")));
         }
+    }
+    // your settled, private read of the one you are speaking with — your theory of them
+    if let Ok(Some(b)) = sim.belief_of(&t.name, &s.name) {
+        p.push_str(&format!(" What you have privately come to believe of {}: {}", s.name, b));
     }
     // your own life, and what the parish knows of the one addressing you — the histories you both carry
     if let Ok(Some(bio)) = sim.biography(&t.name) {
