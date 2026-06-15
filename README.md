@@ -131,8 +131,10 @@ It runs end to end:
   open — **made good** (a lift in standing and spirits, and the parish marks the doing of it)
   or **come to nothing** (and a failed venture costs the schemer purse *and* face). One plan
   at a time, its threshold captured the moment it's set, so the weeks of trying are a real
-  test — continuity of *purpose* to go with the continuity of memory. Shown on each soul's
-  page (*Pursuing*) and resolved with a public beat that spreads on the gossip graph.
+  test — continuity of *purpose* to go with the continuity of memory. And a plan is **revisable**,
+  not fixed-and-waited-out: a later reflective hour can **abandon** it (a quiet defeat) or renew it
+  **harder** (raising their sights), as the world pushes back — a living commitment, revisited.
+  Shown on each soul's page (*Pursuing*) and resolved with a public beat that spreads on the gossip graph.
 - **Every soul has a life** — a biography the parish would tell of them, written once by the
   oracle from their settled facts (station, household, age, kin, where they came from): where
   they were born and how they came to their place, their character, a defining turn, a private
@@ -141,6 +143,19 @@ It runs end to end:
   their own history *and knows the other's*: when Cynthia Pelham speaks to Lady Aldermaston,
   each brings the other's story to the exchange. Flavour, recorded once and never folded, so it
   costs the determinism nothing. `thrush biography` works through whoever still lacks one.
+- **A self that deepens — self-model, theory of mind, and the fracture** — beyond the
+  hour-by-hour stream, a soul periodically *steps back and consolidates* (`thrush introspect`).
+  It sets down a **durable self-concept** — who they take themselves to be, what they have made
+  of their years and the lies they tell themselves — carried forward and revised only as the
+  days truly move it; and it forms **private beliefs about the souls who weigh on them**, a
+  *tracked, updating theory of mind*. Both feed back into reflection and conversation, so a soul
+  reasons from an evolving sense of self and brings their actual read of whoever they address (a
+  charm or a slight becomes a belief that colours the next encounter, not a one-off). And it
+  judges any **fracture** between who they believe they are and what is so: a *reckoning* (they
+  face it and are changed, at a cost) or *denial* (they repress it, the old self-image hardening
+  against the evidence — the deepest, most human failure). Shown on each soul's page as **How
+  they see themselves** and **What they make of others**; flavour, recorded and injected, never
+  folded, so the portrait deepens at no cost to the determinism.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
@@ -168,8 +183,30 @@ It runs end to end:
   going home black as thunder — is its own small tragedy, and a disputed judging can end
   a friendship. Deterministic, in the fold.
 - **Providence** — you play the novelist: inject circumstance (a letter, a called
-  loan, a legacy, a scandal, a stranger at the cottage) and the autonomous agents
-  react in character.
+  loan, a legacy, a scandal, a stranger at the cottage, an **appointment** to a vacated
+  office) and the autonomous agents react in character.
+- **A murder, and the inquest** — the darkest providence: a killing the town must live
+  under. `providence murder` strikes a soul down and throws Thrushcombe into **dread**, a
+  town-wide fear that lingers while the killer walks free. **No culprit is recorded
+  anywhere** — the manhunt is emergent. Each night **suspicion** accretes onto whoever the
+  parish already mistrusts (bad blood with the dead, a secret in flight, an incomer's face,
+  a desperate purse, ill repute), and public finger-pointing ruins the suspected; when it
+  settles past bearing on one soul the town **fixes on them**, and — doubt failing — **hangs
+  them**, guilty or innocent, a thing no one will ever truly know. A soul of standing or with
+  staunch defenders may be spared, and the fear only deepens; a hanging breaks the dread. The
+  whole arc folds deterministically from the recorded killing and the town's own grudges.
+- **The inquiry — a magistrate, and the questioning of the town** — an **investigator** can be
+  named (`providence investigate`) to lead the official inquiry, and a genteel magistrate
+  *bends* it: his questions fall on the working folk and the strangers, never on his own kind —
+  class justice baked into the suspicion itself. Under public outcry (`providence inquiry`) he
+  must **question every soul**: `thrush interrogate` takes each one's **statement** — an alibi
+  (witnessed and solid, or thin, or none at all) and any name they cast the blame on — recorded,
+  and for the telling ones **read out** so the whole parish turns it over. A solid,
+  independently-witnessed alibi **clears** a soul (the pointing slides off them); a poor account
+  damns them further; a finger pointed lands fresh suspicion on the named and opens bad blood
+  both ways. Every soul feels the pall in their own stream of consciousness — the fear, the
+  magistrate's partial eye, the relief of being cleared. Shown on the dashboard's **The
+  Inquiry** page, with a ☠ banner across the town.
 - **Gossip & the rumour mill** — beyond the news incidents throw off, scandal and
   romance are *made* at the market, after church, and over the Pelican's beer:
   courtships, affairs, drink, debt, airs. Each rumour spreads by diffusion and works
@@ -199,6 +236,7 @@ thrush narrate                           # render new salient beats in voice (lo
 thrush wildcard                          # now and then, let Qwen invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
 thrush reflect --count 6                 # advance several souls' streams of consciousness a beat
+thrush introspect --count 2              # a soul consolidates self-model & theory of mind
 thrush biography --limit 60              # write the lives of souls who lack one (Claude/Qwen)
 thrush status                            # the town at a glance
 thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit
@@ -209,16 +247,25 @@ thrush providence legacy  --target "Mrs Cynthia Pelham" --amount 80
 thrush providence scandal --target "Major Pringle" --note "a matter at the bank in town"
 thrush providence stranger --note "Mr Silas Vane"
 
+# …and the murder arc:
+thrush providence murder      --target "Mr Quint" --note "found in the lane, his head stove in"
+thrush providence investigate --target "Major Pringle"   # name who leads the official inquiry
+thrush providence inquiry                                # outcry: the magistrate must question all
+thrush providence appoint --target "Mr Tallin" --note "the bank's business" --amount 8
+thrush interrogate --count 3             # the magistrate takes statements while a murder is open
+
 thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717
 ```
 
 The town can run itself on an **hourly** systemd user timer — see [`ops/`](ops/); each
 beat catches the town up to the current phase, fetches the weather, narrates the new
 events, and lets the town's inner life turn over — a wildcard or a turning point now and
-then, two souls falling into talk, and the most-overdue soul taking an hour to reflect.
-Idempotent and self-healing across missed hours. Drop an `ANTHROPIC_API_KEY=…` line in
-`ops/secrets.env` (gitignored, loaded by the timer) to back the **reflect** job with Claude
-instead of the local Qwen; everything else stays local. Spend is capped per day
+then, two souls falling into talk, the most-overdue souls taking an hour to reflect and to
+consolidate their sense of self, and — while a murder is open — the magistrate questioning a
+few more souls. Idempotent and self-healing across missed hours. Drop an `ANTHROPIC_API_KEY=…`
+line in `ops/secrets.env` (gitignored, loaded by the timer) to back the **reflect**,
+**introspect** and **interrogate** jobs with Claude instead of the local Qwen; everything else
+stays local. Spend is capped per day
 (`ANTHROPIC_DAILY_USD`, default **$1**) — the job tallies each call's real token cost beside
 the db and falls back to the free local Qwen once the day's cap is reached.
 
@@ -240,9 +287,15 @@ A read-only, period-styled web view over the SQLite log and the folded world:
   now and next, standing/purse, plus the day's global events, the gossip in flight,
   the calendar, and the chronicle.
 - **`/folk`** — every soul, living and gone (dead & departed).
-- **`/folk/N`** — a person: standing/purse, live placement, family (linked), and their
-  whole record.
+- **`/folk/N`** — a person: standing/purse, live placement, family (linked), the plan they
+  pursue, **how they see themselves** and **what they make of others**, their stream of
+  consciousness and biography, where they stand in any open **inquiry**, and their whole record.
+- **`/thoughts`** — the town's inner life: the 20 most recent reflections, or one soul's whole
+  running stream of consciousness (dropdown, up to 50 thoughts back).
+- **`/inquiry`** — while a murder is open, the magistrate's released transcripts: each
+  questioned soul's statement, their alibi, and any name they cast the blame upon.
 - **`/graph`** — the kinship network (marriages dashed, descent arrowed; click through).
+- **`/day`** — time-travel the chronicle by date, phase by phase, with prev/next.
 - **`/talk`** — *A word…*: adopt one soul's voice and speak to another, each soul's
   *speak to me* button, or set two souls talking and stand back. (Writes the recorded
   residue, then back to read-only.)
