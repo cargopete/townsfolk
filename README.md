@@ -207,6 +207,13 @@ It runs end to end:
   both ways. Every soul feels the pall in their own stream of consciousness — the fear, the
   magistrate's partial eye, the relief of being cleared. Shown on the dashboard's **The
   Inquiry** page, with a ☠ banner across the town.
+- **Funerals — the town's great occasions** — a death is not just a line in the ledger: the
+  parish *gathers to bury its own* a few days on, a marked occasion shown coming on the calendar
+  and then held in the chronicle, narrated in voice. It renews grief on the kin and casts a
+  communal pall over the town, and a murdered soul's funeral is charged — the whole parish over
+  the coffin, every soul weighing every other, for the hand that did it stands among the
+  mourners, and the burying sharpens the dread. Scheduled automatically at every death (and
+  `providence funeral` holds one on the novelist's cue), it folds deterministically toward its day.
 - **Gossip & the rumour mill** — beyond the news incidents throw off, scandal and
   romance are *made* at the market, after church, and over the Pelican's beer:
   courtships, affairs, drink, debt, airs. Each rumour spreads by diffusion and works
@@ -252,6 +259,7 @@ thrush providence murder      --target "Mr Quint" --note "found in the lane, his
 thrush providence investigate --target "Major Pringle"   # name who leads the official inquiry
 thrush providence inquiry                                # outcry: the magistrate must question all
 thrush providence appoint --target "Mr Tallin" --note "the bank's business" --amount 8
+thrush providence funeral --target "Mr Quint"            # the parish gathers to bury its dead
 thrush interrogate --count 3             # the magistrate takes statements while a murder is open
 
 thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717

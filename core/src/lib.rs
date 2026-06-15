@@ -159,6 +159,16 @@ pub struct Inquest {
     pub public_inquiry: bool, // the magistrate is compelled to question every soul and read it out
 }
 
+/// A death the parish has yet to bury — the funeral is held some days on, a great occasion the
+/// whole town marks together. Kept in the world so it folds deterministically toward its day.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Funeral {
+    pub who: usize,        // the dead, by index (inert, but the name is kept for the rite)
+    pub name: String,
+    pub scheduled: i64,    // the day the parish gathers
+    pub murdered: bool,    // a murdered soul's funeral is charged — the killer among the mourners
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub agents: Vec<Agent>,
@@ -174,6 +184,8 @@ pub struct World {
     pub dread: i16,
     /// An open murder, if the town is living under one.
     pub inquest: Option<Inquest>,
+    /// Deaths awaiting burial — the funerals the parish will gather for, each on its day.
+    pub funerals: Vec<Funeral>,
 }
 
 impl World {
@@ -350,6 +362,7 @@ impl World {
             affinity,
             dread: 0,
             inquest: None,
+            funerals: Vec::new(),
         };
         // every adult opens with an ambition fitting their situation, at their resting mood
         for i in 0..w.agents.len() {
@@ -1399,6 +1412,20 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "funeral" => {
+                // hold a soul's funeral now — a great occasion the parish gathers for. Used to lay
+                // a death to rest on the novelist's cue; any pending automatic funeral is consumed.
+                match world.idx(t) {
+                    Some(w) if !world.agents[w].active() => {
+                        let murdered = world.inquest.as_ref().map(|q| q.victim == w).unwrap_or(false)
+                            || world.funerals.iter().find(|f| f.who == w).map(|f| f.murdered).unwrap_or(false);
+                        world.funerals.retain(|f| f.who != w); // no second burial
+                        hold_funeral(world, w, t, murdered, day, date, &mut out);
+                    }
+                    Some(_) => out.push(mk("providence", t, format!("{t} is alive and well — there is no funeral to hold."))),
+                    None => out.push(mk("providence", t, format!("There is no {t} in the parish to bury."))),
+                }
+            }
             "inquiry" => {
                 // public outcry and pressure from the county compel the magistrate to question
                 // every soul and read the transcripts in the open. Sets the flag the inquest runs on.
@@ -1448,6 +1475,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             nudge_mood(&mut world.agents[k], if kin { -45 } else { -22 });
                         }
                         world.dread = 85;
+                        world.funerals.push(Funeral { who: v, name: t.clone(), scheduled: day + FUNERAL_DELAY, murdered: true });
                         world.inquest = Some(Inquest {
                             victim: v,
                             victim_name: t.clone(),
@@ -2020,6 +2048,39 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
     world.inquest = Some(inq);
 }
 
+/// How many days after a death the parish gathers to bury them.
+const FUNERAL_DELAY: i64 = 3;
+
+/// The parish gathers to bury one of its own — a great occasion the whole town marks together.
+/// It renews grief on the kin and casts a communal pall; a murdered soul's funeral is charged,
+/// the killer somewhere among the mourners, and the burying of the victim sharpens the dread.
+fn hold_funeral(world: &mut World, who: usize, name: &str, murdered: bool, day: i64, date: Date, out: &mut Vec<Event>) {
+    let seat = world.agents.get(who).map(|a| a.seat.clone()).unwrap_or_default();
+    let text = if murdered {
+        format!("The whole parish gathered to bury {name} of {seat}, murdered and now in the ground — and over the coffin every soul weighed every other, for the hand that did it stood somewhere among the mourners.")
+    } else {
+        format!("The parish gathered in the churchyard to see {name} of {seat} into the ground, and Thrushcombe was the quieter for the loss.")
+    };
+    out.push(Event { day, date: date.to_string(), kind: "funeral".into(), actor: name.into(), text });
+    for k in 0..world.agents.len() {
+        if !world.agents[k].active() { continue; }
+        let kin = world.agents[k].spouse == Some(who) || world.agents[k].parent == Some(who) || world.agents[who].parent == Some(k);
+        nudge_mood(&mut world.agents[k], if kin { -20 } else { -6 }); // a communal grief, deeper for the kin
+    }
+    if murdered {
+        world.dread = (world.dread + 8).min(100);
+    }
+}
+
+/// Hold the funerals whose day has come.
+fn tend_funerals(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>) {
+    let due: Vec<Funeral> = world.funerals.iter().filter(|f| f.scheduled <= day).cloned().collect();
+    world.funerals.retain(|f| f.scheduled > day);
+    for f in due {
+        hold_funeral(world, f.who, &f.name, f.murdered, day, date, out);
+    }
+}
+
 /// What the shadow of an open (or freshly-closed) killing means for one soul, in words the
 /// oracle can carry into a reflection or a conversation — so the dread is *felt*, not just
 /// tracked. None when the town is at peace.
@@ -2170,6 +2231,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         world.agents[i].courting = -1; // the dead court no one
         out.push(mk("death", &name, format!("{name}, of {seat}, is dead.")));
         world.spawn_news_idx(i, &format!("the death of {name}"), 0, day, &[]);
+        world.funerals.push(Funeral { who: i, name: name.clone(), scheduled: day + FUNERAL_DELAY, murdered: false });
         // grief falls on the kin
         for k in 0..world.agents.len() {
             if world.agents[k].active() && (world.agents[k].spouse == Some(i) || world.agents[k].parent == Some(i) || world.agents[i].parent == Some(k)) {
@@ -2555,6 +2617,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     // --- the inquest, pressed: an open murder hunts itself toward a hanging, day by day ---
     tend_inquest(world, day, date, &mut rng, &mut out);
+
+    // --- the funerals whose day has come: the parish gathers to bury its dead ---
+    tend_funerals(world, day, date, &mut out);
 
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
@@ -3199,12 +3264,12 @@ pub struct Report {
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
     "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk", "intent",
-    "murder", "inquest",
+    "murder", "inquest", "funeral",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 28;
+const SNAPSHOT_VERSION: i64 = 29;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4875,6 +4940,13 @@ impl Sim {
 
     fn pending(&self, today: Date, world: &World) -> Vec<String> {
         let mut p = Vec::new();
+        // funerals the parish has yet to hold — the town's nearest great occasion
+        let target = self.target_day(today).max(0);
+        for f in &world.funerals {
+            let days = (f.scheduled - target).max(0);
+            let when = if days == 0 { "today".to_string() } else { format!("in {days}d") };
+            p.push(format!("the funeral of {} — {when}", f.name));
+        }
         // garden party, next occurrence of June 14
         if let Ok(party) = Date::from_calendar_date(today.year(), Month::June, 14) {
             let days = (party.to_julian_day() - today.to_julian_day()) as i64;
@@ -5015,6 +5087,33 @@ mod intent_tests {
         assert_eq!(w.agents[i].intent, 0, "the plan is spent once reckoned");
         assert_eq!(w.agents[i].intent_age, 0, "the plan counter resets once reckoned");
         assert!(w.agents[i].standing >= standing_before, "making good should not cost them standing");
+    }
+}
+
+#[cfg(test)]
+mod funeral_tests {
+    use super::*;
+
+    // A death schedules a funeral the parish holds some days on — a great occasion that fires
+    // once, on its day, and is then laid to rest.
+    #[test]
+    fn a_death_is_buried_on_its_day() {
+        let mut w = World::seed();
+        let who = (0..w.agents.len()).find(|&i| w.agents[i].active() && w.agents[i].archetype != "child").unwrap();
+        w.agents[who].death_day = Some(0);
+        let name = w.agents[who].name.clone();
+        w.funerals.push(Funeral { who, name: name.clone(), scheduled: 2, murdered: false });
+
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let mut held: Option<i64> = None;
+        for day in 0..5i64 {
+            let evs = life_tick(&mut w, day, date, 42);
+            if evs.iter().any(|e| e.kind == "funeral" && e.text.contains(&name)) {
+                held = Some(day);
+            }
+        }
+        assert_eq!(held, Some(2), "the funeral is held on its scheduled day");
+        assert!(w.funerals.is_empty(), "a held funeral is laid to rest, not held again");
     }
 }
 
