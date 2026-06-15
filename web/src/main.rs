@@ -40,37 +40,61 @@ fn qparam(url: &str, key: &str) -> Option<String> {
 }
 
 const CSS: &str = "
-:root{--ink:#2b2620;--faint:#8a7f70;--rule:#e2d9c8;--bg:#f5f0e6;--link:#7a4a2b;--card:#fbf8f1}
+:root{--ink:#2b2620;--soft:#5a5046;--faint:#8a7f70;--rule:#e2d9c8;--hair:#efe7d8;--bg:#f5f0e6;--link:#7a4a2b;--card:#fbf8f1;--green:#3f6b52;--red:#9a3b2b;--r:9px;--r-sm:5px}
 *{box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font:16px/1.55 Georgia,'Iowan Old Style',serif;margin:0}
-.wrap{max-width:980px;margin:0 auto;padding:2.2rem 1.3rem 5rem}
-a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
-h1{font-size:1.95rem;margin:0;letter-spacing:.02em}
-h2{font-size:1.05rem;margin:2rem 0 .5rem;border-bottom:1px solid var(--rule);padding-bottom:.3rem;font-variant:small-caps;letter-spacing:.05em;color:#5a5046}
-.sub{color:var(--faint);font-style:italic;margin:.2rem 0 1.3rem}
-.nav{margin:.4rem 0 1.6rem;font-variant:small-caps;letter-spacing:.05em}
-.nav a{margin-right:1.1rem}
-.entry{margin:.45rem 0}
-.date{color:var(--faint);font-size:.8rem;font-variant:small-caps;letter-spacing:.03em}
-.bars{font-family:ui-monospace,monospace;color:var(--faint);font-size:.78rem}
-.tag{display:inline-block;font-size:.68rem;color:var(--faint);font-variant:small-caps;border:1px solid var(--rule);border-radius:3px;padding:0 .35rem;margin-left:.4rem}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font:17px/1.62 Georgia,'Iowan Old Style','Palatino Linotype',serif;margin:0;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:1.4rem 1.05rem 4rem}
+@media(min-width:760px){.wrap{padding:2.4rem 1.6rem 6rem}}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px;border-radius:3px}
+h1{font-size:clamp(1.7rem,5.2vw,2.15rem);line-height:1.12;margin:0;letter-spacing:-.012em;text-wrap:balance}
+h2{font-size:1.02rem;margin:2.4rem 0 .6rem;border-bottom:1px solid var(--rule);padding-bottom:.35rem;font-variant:small-caps;letter-spacing:.06em;color:var(--soft)}
+p{text-wrap:pretty}
+.sub{color:var(--faint);font-style:italic;margin:.35rem 0 1.4rem;text-wrap:pretty}
+.nav{display:flex;flex-wrap:wrap;gap:.1rem;margin:.1rem -.55rem 1.8rem;font-variant:small-caps;letter-spacing:.05em;font-size:.95rem}
+.nav a{color:var(--ink);opacity:.72;padding:.5rem .7rem;border-radius:var(--r-sm);transition:opacity .15s,background .15s}
+.nav a:hover{opacity:1;background:var(--card);text-decoration:none}
+.entry{margin:.5rem 0}
+.date{color:var(--faint);font-size:.78rem;font-variant:small-caps;letter-spacing:.03em;font-variant-numeric:tabular-nums}
+.bars{font-family:ui-monospace,'SF Mono',monospace;color:var(--faint);font-size:.76rem;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:.66rem;color:var(--faint);font-variant:small-caps;letter-spacing:.03em;border:1px solid var(--rule);border-radius:var(--r-sm);padding:.05rem .4rem;margin-left:.4rem;vertical-align:middle}
 .gone td{opacity:.5}
-.card{border:1px solid var(--rule);border-radius:6px;padding:.7rem 1rem;margin:.8rem 0;background:var(--card)}
-.cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.cols ul{margin:.2rem 0;padding-left:1.1rem}.cols li{margin:.15rem 0}
-table{width:100%;border-collapse:collapse;font-size:.92rem}
-th{text-align:left;color:var(--faint);font-weight:normal;font-variant:small-caps;font-size:.78rem;border-bottom:1px solid var(--rule);padding:.3rem .4rem}
-td{padding:.32rem .4rem;border-bottom:1px solid #efe7d8;vertical-align:top}
-.doing{color:#3f6b52}.next{color:var(--faint);font-style:italic}
+.card{border:1px solid var(--rule);border-radius:var(--r);padding:.85rem 1.1rem;margin:.9rem 0;background:var(--card)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:1.1rem}
+.cols ul{margin:.2rem 0;padding-left:1.1rem}.cols li{margin:.2rem 0}
+table{width:100%;border-collapse:collapse;font-size:.93rem}
+th{text-align:left;color:var(--faint);font-weight:normal;font-variant:small-caps;font-size:.76rem;letter-spacing:.04em;border-bottom:1px solid var(--rule);padding:.4rem .45rem}
+td{padding:.42rem .45rem;border-bottom:1px solid var(--hair);vertical-align:top}
+tr:hover td{background:rgba(122,74,43,.045)}
+.doing{color:var(--green)}.next{color:var(--faint);font-style:italic}
 .where{font-variant:small-caps;letter-spacing:.02em}
-.life{font-size:1.05rem;line-height:1.7;color:#3a342c;border-left:3px solid var(--rule);padding-left:1rem;margin:1rem 0}
+.life{font-size:1.06rem;line-height:1.75;color:#3a342c;border-left:3px solid var(--rule);padding-left:1.1rem;margin:1.1rem 0;text-wrap:pretty}
 .think{font-style:italic;color:#4a4036}
 .think::before{content:'\\201C'}.think::after{content:'\\201D'}
 .who{font-variant:small-caps;letter-spacing:.03em}
-.fear{background:#3a2622;color:#f3e9dd;border:1px solid #5a3a30;border-radius:6px;padding:.75rem 1.05rem;margin:0 0 1.5rem;font-style:italic;letter-spacing:.01em;line-height:1.5}
+.fear{background:linear-gradient(180deg,#3f2a25,#34211d);color:#f3e9dd;border:1px solid #5a3a30;border-radius:var(--r);padding:.9rem 1.15rem;margin:0 0 1.6rem;font-style:italic;line-height:1.55}
 .fear b{font-style:normal;font-variant:small-caps;letter-spacing:.06em;color:#e8b9a0}
-.suspect{color:#9a3b2b;font-variant:small-caps;letter-spacing:.04em;font-size:.82rem}
-@media(max-width:640px){.cols{grid-template-columns:1fr}.hidesm{display:none}}
+.fear a{color:#e8b9a0;text-decoration:underline}
+.suspect{color:var(--red);font-variant:small-caps;letter-spacing:.04em;font-size:.82rem}
+select,button,input{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--rule);border-radius:var(--r-sm);padding:.5rem .65rem}
+button{cursor:pointer;transition:background .15s,transform .05s}
+button:hover{background:#f3ecda}button:active{transform:translateY(1px)}
+@media(max-width:640px){
+  body{font-size:16px}
+  .cols{grid-template-columns:1fr;gap:.6rem}
+  .hidesm{display:none}
+  .board thead,.roster thead{display:none}
+  .board tr,.roster tr{display:block;border:1px solid var(--rule);border-radius:var(--r);background:var(--card);padding:.55rem .85rem;margin:.65rem 0}
+  .board tr:hover td,.roster tr:hover td{background:transparent}
+  .board td,.roster td{display:flex;justify-content:space-between;align-items:baseline;gap:1.2rem;border:0;padding:.22rem 0;text-align:right}
+  .board td::before,.roster td::before{content:attr(data-label);color:var(--faint);font-variant:small-caps;letter-spacing:.04em;font-size:.72rem;text-align:left;white-space:nowrap}
+  .board .who-cell,.roster .who-cell{display:block;text-align:left;font-size:1.08rem;border-bottom:1px solid var(--hair);padding-bottom:.4rem;margin-bottom:.35rem}
+  .board .who-cell::before,.roster .who-cell::before{content:none}
+  .gone td{opacity:1}.gone .who-cell{opacity:.55}
+}
 ";
 
 fn page(title: &str, body: &str) -> String {
@@ -148,12 +172,12 @@ fn dashboard(sim: &Sim) -> String {
     // the detailed town board: where everyone is, what they're about, and next
     body.push_str("<h2>The town, this ");
     body.push_str(&esc(&d.phase));
-    body.push_str("</h2><table><tr><th>Soul</th><th class=hidesm>Where</th><th>Doing now</th><th class=hidesm>Wants</th><th>Standing</th><th>£</th></tr>");
+    body.push_str("</h2><table class=board><tr><th>Soul</th><th>Where</th><th>Doing now</th><th>Wants</th><th>Standing</th><th>£</th></tr>");
     for p in &d.people {
         body.push_str(&format!(
-            "<tr><td><a href=/folk/{}>{}</a> <span class=date>{}y &middot; {}</span></td>\
-             <td class='where hidesm'>{}</td><td class=doing>{}</td><td class='next hidesm'>{}</td>\
-             <td><span class=bars>{}</span></td><td>{}</td></tr>",
+            "<tr><td class=who-cell><a href=/folk/{}>{}</a> <span class=date>{}y &middot; {}</span></td>\
+             <td class=where data-label=Where>{}</td><td class=doing data-label='Doing now'>{}</td><td class=next data-label=Wants>{}</td>\
+             <td data-label=Standing><span class=bars>{}</span></td><td class=num data-label=Purse>{}</td></tr>",
             p.idx, esc(&p.name), p.age, esc(&p.mood), esc(&p.location), esc(&p.doing), esc(&p.wants), bar(p.standing), p.purse
         ));
     }
@@ -218,11 +242,11 @@ fn folk(sim: &Sim) -> String {
             let label = status_label(sim, a).map(|s| format!("<span class=tag>{}</span>", esc(&s))).unwrap_or_default();
             let from = a.origin.as_ref().map(|o| format!("<span class=tag>of {}</span>", esc(o))).unwrap_or_default();
             format!(
-                "<tr class='{}'><td><a href=/folk/{}>{}</a>{}{}</td><td class=hidesm>{}</td><td>{}y</td><td><span class=bars>{}</span></td></tr>",
+                "<tr class='{}'><td class=who-cell><a href=/folk/{}>{}</a>{}{}</td><td data-label=Station>{}</td><td class=num data-label=Age>{}y</td><td data-label=Standing><span class=bars>{}</span></td></tr>",
                 if dim { "gone" } else { "" }, i, esc(&a.name), label, from, esc(&station(a)), a.age(day), bar(a.standing)
             )
         }).collect();
-        format!("<h2>{}</h2><table><tr><th>Name</th><th class=hidesm>Station</th><th>Age</th><th>Standing</th></tr>{}</table>", esc(title), rows)
+        format!("<h2>{}</h2><table class=roster><tr><th>Name</th><th>Station</th><th>Age</th><th>Standing</th></tr>{}</table>", esc(title), rows)
     };
     body.push_str(&section("The grown folk", &grown, false));
     body.push_str(&section("The children", &children, false));
