@@ -416,6 +416,16 @@ impl World {
         });
     }
 
+    /// Set loose a piece of news that was announced in the open — read out before the assembled
+    /// parish, cried at the inquiry — so the whole town hears it at once. It starts as common
+    /// knowledge rather than a single-knower whisper that must trickle hop by hop.
+    fn spawn_news_open(&mut self, subject: &str, topic: &str, valence: i32, day: i64) {
+        if let Some(s) = self.idx(subject) {
+            let heard: Vec<usize> = (0..self.agents.len()).filter(|&i| self.agents[i].active()).collect();
+            self.spawn_news_idx(s, topic, valence, day, &heard);
+        }
+    }
+
     /// As `spawn_news`, but the subject is given by index (used by the life cycle, where
     /// the subject may have just died and a name lookup would be ambiguous).
     fn spawn_news_idx(&mut self, subject: usize, topic: &str, valence: i32, day: i64, seeds: &[usize]) {
@@ -1434,7 +1444,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 }
                 let who = world.inquest.as_ref().and_then(|q| world.agents.get(q.investigator as usize)).map(|a| a.name.clone()).unwrap_or_else(|| "the magistrate".into());
                 out.push(mk("inquest", &who, format!("Under an outcry in the parish and pressure from the county, {who} is compelled to question every soul in Thrushcombe, and the transcripts are to be read in the open.")));
-                world.spawn_news(&who, "how the magistrate must question the whole town", 0, day, &[]);
+                world.spawn_news_open(&who, "how the magistrate must question the whole town", 0, day);
             }
             "investigate" => {
                 // Name the soul who will lead the official inquiry into an open killing. They bend it
@@ -1447,7 +1457,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 if let Some(idx) = who { clamp_standing(&mut world.agents[idx], 2); }
                 out.push(mk("inquest", t, format!("{t} has taken the inquiry into {}'s murder in hand, sitting in judgement over the parish.",
                     world.inquest.as_ref().map(|q| q.victim_name.clone()).unwrap_or_default())));
-                world.spawn_news(t, &format!("how {t} sits in judgement over the murder"), 1, day, &[]);
+                world.spawn_news_open(t, &format!("how {t} sits in judgement over the murder"), 1, day);
             }
             "murder" => {
                 // A killing in the parish, by one of its own. The victim falls inert; the town is
@@ -3102,6 +3112,19 @@ fn diffuse(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         text,
     };
 
+    // how abuzz the town is today — when the parish is assembled or afraid, word flies. Market
+    // day and church Sunday throw everyone together; a killing has every tongue going at once.
+    let buzz = {
+        let mut b = 1.0_f64;
+        match date.weekday() {
+            Weekday::Wednesday => b += 1.2, // the market — the whole town in the square
+            Weekday::Sunday => b += 1.0,    // church — the whole parish gathered
+            _ => {}
+        }
+        if world.dread > 30 { b += 1.0; } // fear is the fastest courier of all
+        b
+    };
+
     for item in news.iter_mut() {
         let age = day - item.born;
         let living_knowers = item.knowers.iter().filter(|&&k| alive[k]).count();
@@ -3109,7 +3132,7 @@ fn diffuse(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             continue; // not yet (delay), stale, or every living soul already knows
         }
         let decay = (1.0 - age as f64 / 30.0).max(0.0);
-        let juice = 1.0 + 0.15 * item.valence.unsigned_abs() as f64;
+        let juice = (1.0 + 0.15 * item.valence.unsigned_abs() as f64) * buzz;
 
         // who knew at the start of today — delay is one hop per day; the dead don't talk
         let known: Vec<bool> = (0..n).map(|i| item.knowers.contains(&i)).collect();
@@ -3269,7 +3292,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 29;
+const SNAPSHOT_VERSION: i64 = 30;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3569,15 +3592,15 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         "strong" => {
                             world.agents[si].suspicion = (world.agents[si].suspicion - 45).max(0);
                             world.agents[si].cleared = true; // a solid alibi puts them beyond it
-                            if public { world.spawn_news(&nm, &format!("how {nm}'s alibi cleared them before the magistrate"), 1, day, &[]); }
+                            if public { world.spawn_news_open(&nm, &format!("how {nm}'s alibi cleared them before the magistrate"), 1, day); }
                         }
                         "weak" => {
                             world.agents[si].suspicion = (world.agents[si].suspicion + 12).min(200);
-                            if public { world.spawn_news(&nm, &format!("how thin {nm}'s account to the magistrate sounded"), -2, day, &[]); }
+                            if public { world.spawn_news_open(&nm, &format!("how thin {nm}'s account to the magistrate sounded"), -2, day); }
                         }
                         _ => {
                             world.agents[si].suspicion = (world.agents[si].suspicion + 22).min(200);
-                            if public { world.spawn_news(&nm, &format!("how {nm} could give no account of themselves to the magistrate"), -3, day, &[]); }
+                            if public { world.spawn_news_open(&nm, &format!("how {nm} could give no account of themselves to the magistrate"), -3, day); }
                         }
                     }
                     // casting blame: the named soul takes fresh suspicion, and bad blood opens both ways
@@ -3587,7 +3610,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             world.nudge_aff(si, t, -10);
                             world.nudge_aff(t, si, -12);
                             let tn = world.agents[t].name.clone();
-                            if public { world.spawn_news(&tn, &format!("how {nm} named {tn} to the magistrate"), -3, day, &[]); }
+                            if public { world.spawn_news_open(&tn, &format!("how {nm} named {tn} to the magistrate"), -3, day); }
                         }
                     }
                 }
