@@ -69,6 +69,12 @@ enum Cmd {
     },
     /// Advance the chronicle forward to today (catches up missed days).
     Tick,
+    /// Jump the town forward N whole days (default 1), then catch up — the world lives each
+    /// jumped day in full, just as if the time had passed. Real life still ticks underneath.
+    Jump {
+        #[arg(long, default_value_t = 1)]
+        days: i64,
+    },
     /// Render salient un-narrated events in voice via the local Qwen oracle.
     Narrate {
         #[arg(long, default_value_t = 20)]
@@ -176,10 +182,16 @@ fn narrate_one(agent: &ureq::Agent, host: &str, model: &str, _date: &str, text: 
     }
 }
 
+/// The town's calendar shift (days), loaded from the world at startup. Lets a `jump` carry the
+/// town forward while real life still ticks one day per day underneath. `today()` adds it, so
+/// every existing "now" stays correct with no further plumbing.
+static DAY_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 fn today() -> Date {
-    OffsetDateTime::now_local()
+    let base = OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
-        .date()
+        .date();
+    base + time::Duration::days(DAY_OFFSET.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 const WILDCARD_KINDS: &[&str] = &["fire", "windfall", "fair", "blight", "scandal", "stranger", "foundling", "wonder"];
@@ -587,6 +599,10 @@ fn bar(v: i32) -> String {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    // load the world's standing calendar shift so today() reflects any prior jump
+    if let Ok(sim) = Sim::open(&cli.db) {
+        DAY_OFFSET.store(sim.day_offset(), std::sync::atomic::Ordering::Relaxed);
+    }
     match cli.cmd {
         Cmd::Init { start, seed } => {
             let epoch = start.as_deref().map(parse_date).unwrap_or_else(today);
@@ -604,6 +620,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply_engine(&mut sim, cli.wasm);
             let added = sim.catch_up(today(), cur_phase())?;
             println!("Advanced to {}. {added} new event(s) logged.", today());
+        }
+        Cmd::Jump { days } => {
+            let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
+            let n = days.max(1);
+            let from = today();
+            let off = sim.jump(n)?;
+            DAY_OFFSET.store(off, std::sync::atomic::Ordering::Relaxed); // so today() now reflects the jump
+            // fold every jumped day in full, through its night — the town lives them exactly as
+            // it would have at the real-life pace (deaths, feuds, the inquest, funerals, all of it)
+            let added = sim.catch_up(today(), Phase::Night)?;
+            println!("Jumped {n} day(s): {from} → {}. {added} new event(s) — the town lived them in full.", today());
+            print_status(&sim.report(today())?);
         }
         Cmd::Narrate { limit } => {
             let sim = Sim::open(&cli.db)?;

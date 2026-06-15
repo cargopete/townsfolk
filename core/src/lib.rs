@@ -4583,6 +4583,20 @@ impl Sim {
         (today.to_julian_day() - self.epoch.to_julian_day()) as i64
     }
 
+    /// A persistent calendar shift, in days, the driver adds to the real date to get the town's
+    /// "today" — so the world can **jump forward** while still running at the real-life pace
+    /// underneath. 0 = pure companion mode. Stored, so a jump endures across runs.
+    pub fn day_offset(&self) -> i64 {
+        self.conn.query_row("SELECT val FROM meta WHERE key='day_offset'", [], |r| r.get(0)).unwrap_or(0)
+    }
+
+    /// Bump the calendar shift by `days` (jump forward); returns the new offset.
+    pub fn jump(&mut self, days: i64) -> rusqlite::Result<i64> {
+        let off = self.day_offset() + days.max(0);
+        self.conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('day_offset',?1)", params![off])?;
+        Ok(off)
+    }
+
     fn date_of(&self, day: i64) -> Date {
         Date::from_julian_day((self.epoch.to_julian_day() as i64 + day) as i32).unwrap()
     }

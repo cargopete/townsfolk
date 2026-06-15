@@ -239,6 +239,7 @@ thrush init --start 1976-06-08 --seed 7  # or backdate for instant decades of hi
 thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wasm sandbox
 thrush weather                           # record Sofia's real sky for the days ahead
 thrush tick                              # advance the chronicle to the current phase
+thrush jump --days 1                     # jump the town forward N whole days (lived in full)
 thrush narrate                           # render new salient beats in voice (local Qwen)
 thrush wildcard                          # now and then, let Qwen invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
@@ -334,6 +335,14 @@ phase-locked too, so the town's dawn/forenoon/afternoon/evening *is* yours. Tick
 hourly, checking in at 3pm vs 8pm shows genuinely different fresh happenings. Not a
 saga to binge — an ambient diary you live beside for years, the town ageing at human
 pace. (Backdate the epoch when you want to generate decades at once.)
+
+**Jump forward when you want to** — `thrush jump --days N` carries the town forward N
+whole days at once (usually one), while real life keeps ticking one day per day
+underneath. It is a persistent **calendar offset** added to the real date, not a break
+from the derived clock — so a jumped day is *identical* to a day reached by waiting: the
+world is a pure fold over day-indices, and the town lives each jumped day in full (the
+market, the gossip, the night's deaths, feuds, the inquest's accrual, funerals — all of
+it). In-game time is the same however the day arrives.
 
 ## Determinism
 

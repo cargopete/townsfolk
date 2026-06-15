@@ -9,11 +9,15 @@ use thrush_core::{Agent, Phase, Sim};
 use tiny_http::{Header, Response, Server};
 use time::{Date, OffsetDateTime};
 
+/// The town's calendar shift (days) — refreshed from the world each request so the dashboard
+/// reflects any `jump` the CLI has made. `today()` adds it, so every reader stays correct.
+static DAY_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
 }
 fn today() -> Date {
-    now().date()
+    now().date() + time::Duration::days(DAY_OFFSET.load(std::sync::atomic::Ordering::Relaxed))
 }
 fn phase_now() -> Phase {
     Phase::from_hour(now().hour())
@@ -1142,8 +1146,9 @@ fn main() {
             }
         }
         // pick up anything the hourly driver has written since (new decrees: feuds, courtships,
-        // plans, conversation residue), so the live dashboard never lags a fold behind.
+        // plans, conversation residue, and any calendar jump), so the dashboard never lags behind.
         let _ = sim.reload_inputs();
+        DAY_OFFSET.store(sim.day_offset(), std::sync::atomic::Ordering::Relaxed);
         let is_post = matches!(req.method(), tiny_http::Method::Post);
         let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
         let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
