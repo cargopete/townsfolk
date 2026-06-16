@@ -478,6 +478,31 @@ fn person(sim: &Sim, idx: usize) -> String {
     if let Ok(Some(sc)) = sim.self_model(&a.name) {
         body.push_str(&format!("<h2>How they see themselves</h2><p class=life>{}</p>", esc(&sc)));
     }
+    // the particular occasions still gripping them — their episodic memory, what they carry and
+    // act on. A repressed engram shows only as a nameless dread; its cause is never named.
+    let carried = sim.carried_by(&a.name, t);
+    if !carried.is_empty() {
+        body.push_str("<h2>What they carry</h2>");
+        for (kind, who, valence, salience, _day) in carried {
+            let grip = if salience >= 70 { "still raw" } else if salience >= 40 { "not yet settled" } else { "fading now" };
+            let whol = if who.is_empty() { who.clone() } else {
+                idx_of(&who).map(|i| format!("<a href=/folk/{i} class=who>{}</a>", esc(&who))).unwrap_or_else(|| esc(&who))
+            };
+            let phrase = match kind.as_str() {
+                "grief"   => format!("A grief — the loss of {whol}"),
+                "accused" => "The terror of having stood named for murder before the whole parish".to_string(),
+                "cleared" => "The relief of having been believed, and cleared".to_string(),
+                "snub"    => format!("A slight from {whol}, not forgiven"),
+                "wed"     => format!("The joy of their match with {whol}"),
+                "haunt"   => "A dread that rises with no cause they can name — leaving them adrift, floating, strange to themselves".to_string(),
+                other     => esc(other),
+            };
+            let tone = if valence < 0 { "#7a2e2e" } else { "#3a5a3a" };
+            body.push_str(&format!(
+                "<div class=entry><span class=think style='color:{tone}'>{phrase}</span> <span class=date>· {grip}</span></div>"
+            ));
+        }
+    }
     // their theory of the souls who weigh on them — what they privately make of each
     if let Ok(beliefs) = sim.beliefs_held_by(&a.name, 8) {
         if !beliefs.is_empty() {

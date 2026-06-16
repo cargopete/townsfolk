@@ -101,6 +101,27 @@ pub struct Agent {
     //     those already point at, and a soul it settles on hangs — guilty or not, unknowable ---
     pub suspicion: i32,           // 0 none; rises with the town's dread and what it holds against them
     pub cleared: bool,            // a solid alibi has put them beyond suspicion — the pointing slides off
+    // --- episodic memory: the specific things that happened TO this soul, that they carry and
+    //     act on. A continuous self is mostly continuous memory. Salient fold-events deposit an
+    //     engram; it fades with time (charged ones slower — flashbulb), capped to the few that
+    //     still grip. This is what makes the relationship ledger *personal and remembered*, and
+    //     what a soul's stream of consciousness is grounded in. Pure fold state — deterministic. ---
+    pub memories: Vec<Memory>,
+}
+
+/// One thing that happened to a soul and stuck — an engram. Distinct from the affinity ledger
+/// (a running sum that forgets the particulars): this remembers the *occasion*, dated and charged,
+/// so a soul can carry "the day they were accused" or "the day they buried their husband" and have
+/// it bias what they do, and colour what they think. Salience is how much it still grips (0 = let
+/// go); valence its emotional sign. `who` is the other soul it concerns, or -1 for a thing with no
+/// face (a grief at large, a dread with no recallable cause).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Memory {
+    pub day: i64,        // when it happened
+    pub kind: String,    // grief | snub | kindness | accused | cleared | wed | haunt | ...
+    pub who: i32,        // the other soul concerned, or -1 for a faceless one
+    pub valence: i16,    // emotional charge [-100, 100]
+    pub salience: i16,   // how much it still grips [0, 100]; decays daily, charged ones slower
 }
 
 impl Agent {
@@ -246,6 +267,7 @@ impl World {
             intent_age: 0,
             suspicion: 0,
             cleared: false,
+            memories: Vec::new(),
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -446,6 +468,41 @@ impl World {
             applied: 0,
             broadcast: false,
         });
+    }
+
+    /// Lay down an engram: a thing that happened to `idx` and stuck. Same occasion on the same
+    /// day only deepens (the salience held, not doubled) rather than crowding the store with
+    /// duplicates. The store is kept to the few that still grip most — a soul carries a handful
+    /// of live memories, not a ledger of everything.
+    fn remember(&mut self, idx: usize, kind: &str, who: i32, valence: i16, salience: i16, day: i64) {
+        let store = &mut self.agents[idx].memories;
+        if let Some(m) = store.iter_mut().find(|m| m.kind == kind && m.who == who && m.day == day) {
+            m.salience = m.salience.max(salience.clamp(0, 100));
+            return;
+        }
+        store.push(Memory { day, kind: kind.into(), who, valence: valence.clamp(-100, 100), salience: salience.clamp(0, 100) });
+        if store.len() > MEMORY_CAP {
+            store.sort_by_key(|m| std::cmp::Reverse(m.salience));
+            store.truncate(MEMORY_KEEP);
+        }
+    }
+
+    /// What a soul most carries right now — their live engrams, the most gripping first.
+    fn carried(&self, idx: usize) -> Vec<&Memory> {
+        let mut v: Vec<&Memory> = self.agents[idx].memories.iter().filter(|m| m.salience > 0).collect();
+        v.sort_by_key(|m| std::cmp::Reverse(m.salience));
+        v
+    }
+
+    /// The single live grievance this soul holds against `other`, if any — a remembered wound
+    /// (snub, accusation) still gripping. This is what makes a grudge *stick* past the weekly
+    /// fade: there is a particular occasion behind it, not just a cooled number.
+    fn grievance(&self, idx: usize, other: usize) -> i16 {
+        self.agents[idx].memories.iter()
+            .filter(|m| m.who == other as i32 && m.valence < 0)
+            .map(|m| m.salience)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -1501,6 +1558,17 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
                 }
             }
+            "haunt" => {
+                // A buried thing laid on a soul — a charged engram with no face to it (who = -1),
+                // that does not fade with time and surfaces unbidden as a dread the soul cannot
+                // account for. Private: it touches no public chronicle, spreads no gossip. This is
+                // how a repression is carried without the kernel recording its cause — the parish,
+                // and the chronicle, remain unable to know what sits behind it.
+                if let Some(s) = world.idx(t) {
+                    let sal = if iv.amount > 0 { iv.amount.clamp(1, 100) as i16 } else { 90 };
+                    world.remember(s, "haunt", -1, -90, sal, day);
+                }
+            }
             other => {
                 out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
             }
@@ -1681,6 +1749,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         intent_age: 0,
         suspicion: 0,
         cleared: false,
+        memories: Vec::new(),
     }
 }
 
@@ -1761,6 +1830,23 @@ fn nudge_mood(a: &mut Agent, d: i16) {
     let (sens, _) = temperament(&a.archetype);
     let scaled = (d as i32 * sens / 100) as i16;
     a.mood = (a.mood + scaled).clamp(-100, 100);
+}
+
+/// Render one engram as a felt weight, in the chronicle's voice — for the dossier a soul
+/// contemplates and the dashboard's "what they carry". A repressed haunt is given only as a
+/// nameless dread; its cause is never named, because the soul cannot reach it.
+fn engram_phrase(w: &World, m: &Memory) -> String {
+    let who = (m.who >= 0).then(|| w.agents.get(m.who as usize).map(|a| a.name.as_str())).flatten().unwrap_or("");
+    let grip = if m.salience >= 70 { "still raw" } else if m.salience >= 40 { "not yet settled" } else { "fading now" };
+    match m.kind.as_str() {
+        "grief"   => format!("a grief, {grip} — the loss of {who}"),
+        "accused" => format!("the terror of having stood named for murder before the whole parish, {grip}"),
+        "cleared" => format!("the relief of having been believed and cleared, {grip}"),
+        "snub"    => format!("a slight from {who} they have not forgiven, {grip}"),
+        "wed"     => format!("the joy of their match with {who}, {grip}"),
+        "haunt"   => "a dread that rises in them with no cause they can name — leaving them adrift, floating, strange to themselves".to_string(),
+        other     => format!("something of {other}{}, {grip}", if who.is_empty() { String::new() } else { format!(" concerning {who}") }),
+    }
 }
 
 /// A word for a soul's present spirits.
@@ -2018,6 +2104,7 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
                 let nm = world.agents[m].name.clone();
                 world.agents[m].standing = (world.agents[m].standing - 10).max(0);
                 nudge_mood(&mut world.agents[m], -40);
+                world.remember(m, "accused", inq.victim as i32, -95, 100, day); // the day the town named them — charged, so it grips for weeks
                 out.push(mk(&nm, format!("The parish has fixed on {nm} as the murderer of {vn}, and means to see them answer for it.")));
                 world.spawn_news(&nm, &format!("that {nm} stands named for {vn}'s murder"), -4, day, &[]);
                 world.dread = (world.dread + 8).min(100);
@@ -2060,6 +2147,13 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
 
 /// How many days after a death the parish gathers to bury them.
 const FUNERAL_DELAY: i64 = 3;
+
+// A soul carries only a handful of live memories: the store is trimmed to MEMORY_KEEP whenever
+// it grows past MEMORY_CAP, keeping the most salient. The rest are let go — forgotten.
+const MEMORY_CAP: usize = 12;
+const MEMORY_KEEP: usize = 8;
+// A memory is "charged" — flashbulb — past this absolute valence; it fades slower than a plain one.
+const CHARGED: i16 = 50;
 
 /// The parish gathers to bury one of its own — a great occasion the whole town marks together.
 /// It renews grief on the kin and casts a communal pall; a murdered soul's funeral is charged,
@@ -2220,6 +2314,31 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         text,
     };
 
+    // --- memory fades ---
+    // Every soul lets the day's edge come off what they carry. A plain memory loses a point a
+    // day; a charged one (a real grief, a real terror) holds far longer — flashbulb. What falls
+    // to nothing is forgotten and dropped. A repressed engram (a thing the soul cannot face) does
+    // not fade on its own — it sits, and surfaces unbidden; only a reckoning lets it go.
+    for i in 0..n {
+        if !world.agents[i].active() { continue; }
+        let mut haunted = 0i16;
+        for m in world.agents[i].memories.iter_mut() {
+            if m.kind == "haunt" { haunted = haunted.max(m.salience); continue; } // the buried thing does not fade with time
+            let wear = if m.valence.abs() >= CHARGED { 1 } else { 2 };
+            m.salience = (m.salience - wear).max(0);
+        }
+        world.agents[i].memories.retain(|m| m.salience > 0);
+        // a repressed engram surfaces unbidden: every few days, with no occasion the soul can
+        // name, a dread rises and the spirits dip — the floating, drunk-without-drink unease a
+        // watchful neighbour might mark. It is not reasoned, not triggered; it simply comes.
+        if haunted > 0 {
+            let mut hr = rng_for(seed ^ 0x4855_4E54_0000, day ^ (i as i64));
+            if hr.gen_bool((haunted as f64 / 320.0).clamp(0.0, 0.4)) {
+                nudge_mood(&mut world.agents[i], -(haunted / 6).max(6));
+            }
+        }
+    }
+
     // --- deaths & succession ---
     let mut died = Vec::new();
     for i in 0..n {
@@ -2242,10 +2361,12 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         out.push(mk("death", &name, format!("{name}, of {seat}, is dead.")));
         world.spawn_news_idx(i, &format!("the death of {name}"), 0, day, &[]);
         world.funerals.push(Funeral { who: i, name: name.clone(), scheduled: day + FUNERAL_DELAY, murdered: false });
-        // grief falls on the kin
+        // grief falls on the kin — and is *carried*: a charged engram that fades slowly and
+        // dampens their recovery for weeks, so a bereavement isn't shaken off by Sunday.
         for k in 0..world.agents.len() {
             if world.agents[k].active() && (world.agents[k].spouse == Some(i) || world.agents[k].parent == Some(i) || world.agents[i].parent == Some(k)) {
                 nudge_mood(&mut world.agents[k], -35);
+                world.remember(k, "grief", i as i32, -80, 85, day);
             }
         }
         if let Some(sp) = world.agents[i].spouse {
@@ -2365,6 +2486,8 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             world.agents[tj].courtship = 0;
             nudge_mood(&mut world.agents[i], 22);
             nudge_mood(&mut world.agents[tj], 22);
+            world.remember(i, "wed", tj as i32, 80, 80, day);
+            world.remember(tj, "wed", i as i32, 80, 80, day);
             let (ni, nj) = (world.agents[i].name.clone(), world.agents[tj].name.clone());
             let cross = stratum_archetype(&world.agents[i].archetype) != stratum_archetype(&world.agents[tj].archetype);
             let note = if cross { " — a match that set tongues wagging across the class line" } else { "" };
@@ -2735,12 +2858,35 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
                 *v -= v.signum();
             }
         }
+        // A wound with a *particular occasion* behind it does not fade — it stays raw. Where a
+        // soul carries a live grievance against another, the cool feeling is held there (and a
+        // sharp one kept sharp), so a remembered snub outlasts the general softening of time.
+        let m = world.agents.len();
+        for i in 0..m {
+            if !world.agents[i].active() { continue; }
+            for j in 0..m {
+                if i == j || !world.agents[j].active() { continue; }
+                let g = world.grievance(i, j);
+                if g >= 40 && world.aff(i, j) > -25 {
+                    world.nudge_aff(i, j, -3); // the memory keeps the breach open
+                }
+            }
+        }
         for i in 0..world.agents.len() {
             if !world.agents[i].active() {
                 continue;
             }
             let base = temperament(&world.agents[i].archetype).1; // spirits drift toward their baseline
-            world.agents[i].mood += (base - world.agents[i].mood).signum() * 2;
+            // ...but a soul carrying fresh grief or terror does not bounce back on schedule. The
+            // more an unhealed wound still grips, the more it holds the spirits down — so a
+            // bereavement or an accusation is *carried*, not shaken off by the next Sunday.
+            let weight: i16 = world.agents[i].memories.iter()
+                .filter(|m| m.valence <= -CHARGED)
+                .map(|m| m.salience)
+                .max()
+                .unwrap_or(0);
+            let recovery = if weight >= 70 { 0 } else if weight >= 35 { 1 } else { 2 };
+            world.agents[i].mood += (base - world.agents[i].mood).signum() * recovery;
             if let Some(s) = world.agents[i].spouse {
                 if world.agents[s].active() {
                     world.nudge_aff(i, s, 3);
@@ -2784,6 +2930,9 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
         };
         out.push(mk("feud", &nf, text));
         world.spawn_news(&nf, &format!("the bad blood between {nf} and {nt}"), -1, day, &[]);
+        // the one cut carries it as a particular wound — a remembered occasion that keeps the
+        // grudge from quietly fading the way an unbacked coolness would
+        world.remember(t, "snub", f as i32, -55, 60, day);
     }
     if !warm.is_empty() && rng.gen_bool(0.08) {
         let (f, t) = warm[rng.gen_range(0..warm.len())];
@@ -3292,7 +3441,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 30;
+const SNAPSHOT_VERSION: i64 = 31;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3592,6 +3741,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         "strong" => {
                             world.agents[si].suspicion = (world.agents[si].suspicion - 45).max(0);
                             world.agents[si].cleared = true; // a solid alibi puts them beyond it
+                            world.remember(si, "cleared", -1, 65, 70, day); // the relief of being believed
                             if public { world.spawn_news_open(&nm, &format!("how {nm}'s alibi cleared them before the magistrate"), 1, day); }
                         }
                         "weak" => {
@@ -4402,6 +4552,18 @@ impl Sim {
             let lines: Vec<String> = ms.into_iter().map(|(who, m)| format!("  of {who}: {m}")).collect();
             if !lines.is_empty() { dossier.push_str(&format!("\nWhat they carry of others:\n{}", lines.join("\n"))); }
         }
+        // the particular occasions that still grip them — their episodic memory, the autobiography
+        // a continuous self is grounded in. A repressed engram is given as a nameless dread, never
+        // its cause: the soul cannot reach it, and neither can the telling.
+        {
+            let lines: Vec<String> = w.carried(idx).into_iter().take(5).map(|m| engram_phrase(&w, m)).collect();
+            if !lines.is_empty() {
+                dossier.push_str(&format!(
+                    "\nWhat they carry within themselves (the occasions still gripping them — let these weigh on the hour's thought; do not merely list them):\n{}",
+                    lines.iter().map(|l| format!("  · {l}")).collect::<Vec<_>>().join("\n")
+                ));
+            }
+        }
         // their running inner monologue these recent hours, oldest first — the thread to continue
         if let Ok(mut ts) = self.self_reflections(&ag.name, 6) {
             if !ts.is_empty() {
@@ -4486,6 +4648,16 @@ impl Sim {
         if let Ok(es) = self.person_events(&ag.name, 5) {
             let lines: Vec<String> = es.into_iter().rev().map(|e| format!("  {} — {}", e.date, e.text)).collect();
             if !lines.is_empty() { d.push_str(&format!("\nWhat has lately befallen them:\n{}", lines.join("\n"))); }
+        }
+        // the occasions that still grip them — the episodic ground their self-reckoning must
+        // account for. A repression appears only as a dread they cannot reach the cause of: a
+        // self honestly taking stock must reckon with the part of itself it cannot face.
+        {
+            let lines: Vec<String> = w.carried(idx).into_iter().take(5).map(|m| engram_phrase(&w, m)).collect();
+            if !lines.is_empty() {
+                d.push_str(&format!("\nWhat they carry within themselves (let an honest reckoning take account of these):\n{}",
+                    lines.iter().map(|l| format!("  · {l}")).collect::<Vec<_>>().join("\n")));
+            }
         }
         if let Some(brief) = inquest_brief(&w, idx) {
             d.push_str(&format!("\n{brief}"));
@@ -4721,6 +4893,19 @@ impl Sim {
     /// The full folded world at the end of `date` — for the historical town board.
     pub fn world_on(&self, date: Date) -> World {
         self.world_at(self.target_day(date).max(0) * PHASES + (PHASES - 1))
+    }
+
+    /// What a soul carries on `date` — their live engrams, most gripping first, with the other
+    /// soul (if any) named. This is folded state, not a recorded table: the autobiographical
+    /// memory their stream of consciousness is grounded in, and the dashboard surfaces.
+    /// Each entry: (kind, who_name_or_empty, valence, salience, day_it_happened).
+    pub fn carried_by(&self, name: &str, date: Date) -> Vec<(String, String, i16, i16, i64)> {
+        let world = self.world_on(date);
+        let Some(idx) = world.idx(name) else { return Vec::new() };
+        world.carried(idx).into_iter().map(|m| {
+            let who = if m.who >= 0 { world.agents.get(m.who as usize).map(|a| a.name.clone()).unwrap_or_default() } else { String::new() };
+            (m.kind.clone(), who, m.valence, m.salience, m.day)
+        }).collect()
     }
 
     /// A soul's whole day on `date`: each phase, where they were and what they were about —
@@ -5218,5 +5403,74 @@ mod inquest_tests {
         let q = w.inquest.as_ref().expect("the inquest record persists");
         assert!(q.closed && q.hanged, "a hanging closes the inquest");
         assert!(w.dread < 40, "the town's blood breaks the dread");
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    // A soul carries what happens to them, and acts on it. A bereavement deposits a charged
+    // engram that fades slowly and holds the spirits down for weeks — grief is not shaken off
+    // by the next Sunday — while an ordinary memory wears away in days and is let go.
+    #[test]
+    fn grief_is_carried_and_dampens_recovery() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (mourner, lost) = (grown[0], grown[1]);
+        // make them kin so the death lands as grief, and keep the mourner clear of death's hazard
+        w.agents[mourner].birth_day = -35 * 365;
+        w.agents[mourner].parent = Some(lost);
+        w.agents[lost].birth_day = -55 * 365;
+
+        let date = Date::from_calendar_date(1934, Month::June, 3).unwrap(); // a Sunday in 1934
+        assert_eq!(date.weekday(), Weekday::Sunday);
+
+        // the kin dies; grief is laid down
+        w.agents[lost].death_day = Some(0);
+        for k in 0..w.agents.len() {
+            if w.agents[k].active() && w.agents[k].parent == Some(lost) {
+                nudge_mood(&mut w.agents[k], -35);
+                w.remember(k, "grief", lost as i32, -80, 85, 0);
+            }
+        }
+        let low = w.agents[mourner].mood;
+        assert!(low < -20, "a fresh bereavement sinks the spirits");
+        assert!(w.agents[mourner].memories.iter().any(|m| m.kind == "grief"), "the grief is carried as an engram");
+
+        // a week on, the engram still grips and the spirits have barely lifted (recovery dampened)
+        for day in 1..=7 { let _ = life_tick(&mut w, day, date, 7); }
+        let g = w.agents[mourner].memories.iter().find(|m| m.kind == "grief").map(|m| m.salience).unwrap_or(0);
+        assert!(g >= 70, "a charged grief is still gripping a week on, got salience {g}");
+        assert!(w.agents[mourner].mood < low + 10, "grief holds the spirits down — no bouncing back by Sunday (low {low}, now {})", w.agents[mourner].mood);
+
+        // an ordinary, uncharged memory wears away and is forgotten within a fortnight
+        w.remember(mourner, "errand", -1, -10, 8, 100);
+        for day in 100..114 { let _ = life_tick(&mut w, day, date, 7); }
+        assert!(!w.agents[mourner].memories.iter().any(|m| m.kind == "errand"), "a faint memory is let go");
+    }
+
+    // A repressed engram does not fade and surfaces unbidden: a charged dread with no face to it,
+    // laid down once, still grips long after and keeps pulling the spirits down with no occasion.
+    #[test]
+    fn a_haunting_does_not_fade_and_surfaces() {
+        let mut w = World::seed();
+        let who = (0..w.agents.len()).find(|&i| w.agents[i].active() && w.agents[i].archetype != "child").unwrap();
+        w.agents[who].birth_day = -40 * 365;
+        w.remember(who, "haunt", -1, -90, 90, 0);
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+
+        let mut dipped = false;
+        let mut prev = w.agents[who].mood;
+        for day in 1..40 {
+            let _ = life_tick(&mut w, day, date, 99);
+            if w.agents[who].mood < prev { dipped = true; }
+            prev = w.agents[who].mood;
+        }
+        let h = w.agents[who].memories.iter().find(|m| m.kind == "haunt").map(|m| m.salience).unwrap_or(0);
+        assert_eq!(h, 90, "the buried thing does not fade with time");
+        assert!(dipped, "a repression surfaces unbidden, pulling the spirits down with no occasion");
     }
 }

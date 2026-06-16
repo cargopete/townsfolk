@@ -140,7 +140,8 @@ enum Cmd {
     /// Live monitor (q / Esc to quit).
     Watch,
     /// Play the novelist: inject circumstance the town will react to.
-    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate | inquiry | funeral.
+    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate | inquiry | funeral | haunt.
+    /// haunt lays a buried, faceless dread on --target (a repression: never fades, surfaces unbidden, no public trace; --amount sets its grip 1-100).
     Providence {
         kind: String,
         #[arg(long, default_value = "")]

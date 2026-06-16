@@ -156,6 +156,20 @@ It runs end to end:
   against the evidence — the deepest, most human failure). Shown on each soul's page as **How
   they see themselves** and **What they make of others**; flavour, recorded and injected, never
   folded, so the portrait deepens at no cost to the determinism.
+- **Episodic memory — the occasions a soul carries and acts on** — distinct from the affinity
+  ledger (a running sum that forgets the particulars), each soul holds a handful of **engrams**:
+  *specific dated occasions* that stuck — a bereavement, the day the town named them, a public
+  slight not forgiven, a wedding, the relief of being cleared. Each has an emotional charge and a
+  **salience** that fades by the day — a charged grief or terror far slower (flashbulb), a faint
+  thing forgotten within a fortnight — capped to the few that still grip. This is **fold state, so
+  it is deterministic** — and unlike the flavour tables it **closes the loop**: a fresh grief
+  *dampens a soul's recovery* (a bereavement isn't shaken off by the next Sunday), and a wound with
+  a *particular occasion* behind it **keeps a grudge raw** past the weekly fade. Their reflection
+  and self-reckoning are grounded in it (injected as *what they carry within themselves*), and each
+  soul's page shows **What they carry**. A **repressed engram** (`providence haunt`) is the darkest
+  case: a charged dread with *no face to it*, that **never fades** and **surfaces unbidden** as a
+  mood that dips with no occasion — carried without the kernel ever recording its cause, so neither
+  the parish nor the chronicle can know what sits behind it. (Mrs Clewes carries one.)
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
@@ -260,6 +274,7 @@ thrush providence murder      --target "Mr Quint" --note "found in the lane, his
 thrush providence investigate --target "Major Pringle"   # name who leads the official inquiry
 thrush providence inquiry                                # outcry: the magistrate must question all
 thrush providence appoint --target "Mr Tallin" --note "the bank's business" --amount 8
+thrush providence haunt   --target "Miss Clewes" --amount 90  # lay a buried, faceless dread (never fades, surfaces unbidden, no public trace)
 thrush providence funeral --target "Mr Quint"            # the parish gathers to bury its dead
 thrush interrogate --count 3             # the magistrate takes statements while a murder is open
 
