@@ -170,6 +170,22 @@ It runs end to end:
   case: a charged dread with *no face to it*, that **never fades** and **surfaces unbidden** as a
   mood that dips with no occasion — carried without the kernel ever recording its cause, so neither
   the parish nor the chronicle can know what sits behind it. (Mrs Clewes carries one.)
+- **A predictive self-model — surprise as the engine** — beyond carrying the past, a soul now
+  *expects* things of the future and can be **wrong**. Each holds a few **expectations** with a
+  confidence — how a close friend or rival will go on regarding them, and (under an open killing)
+  the sure hope that the parish will see they are no murderer. Days later the world is read back
+  against each: where it confirms, little stirs; where it **betrays** one held with confidence,
+  the *surprise* (error × confidence) bites. Losses loom larger than gains, so a confident hope
+  betrayed cuts deeper than a like relief. Surprise does three things, all feeding the systems
+  above: it **scales the blow to their spirits** (a betrayal stings far past a thing half-feared),
+  it **stamps a memory the harder** — surprise *sets* salience, the way a flashbulb does — and the
+  expectation is **revised toward what came to pass** (the soul *learns*). New engram kinds carry
+  the residue: *betrayed* / *reprieve* (a friend's regard), *wronged* / *vindicated* (the parish's
+  hold). The standout is emergent and needs no authoring: a soul under a mounting cloud, sure they
+  will be cleared, feels the gap widen into **a wrong they cannot answer** as suspicion climbs —
+  an injustice *felt happening to them*, not just a rising number. (Mr Vane is living it.) Pure
+  deterministic fold; the reflection dossier carries *what they are counting on* so the hour can
+  reckon with whether it is holding.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the

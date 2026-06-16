@@ -495,6 +495,10 @@ fn person(sim: &Sim, idx: usize) -> String {
                 "snub"    => format!("A slight from {whol}, not forgiven"),
                 "wed"     => format!("The joy of their match with {whol}"),
                 "haunt"   => "A dread that rises with no cause they can name — leaving them adrift, floating, strange to themselves".to_string(),
+                "betrayed"   => format!("The sting of {whol} turning cold, where they had been so sure of warmth"),
+                "reprieve"   => format!("Warmth from {whol} where they had given up hoping for it"),
+                "wronged"    => "The parish turning against them for no thing they have done — a wrong they cannot answer".to_string(),
+                "vindicated" => "Having come through the suspicion they so feared".to_string(),
                 other     => esc(other),
             };
             let tone = if valence < 0 { "#7a2e2e" } else { "#3a5a3a" };

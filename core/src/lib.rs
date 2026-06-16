@@ -107,6 +107,12 @@ pub struct Agent {
     //     still grip. This is what makes the relationship ledger *personal and remembered*, and
     //     what a soul's stream of consciousness is grounded in. Pure fold state — deterministic. ---
     pub memories: Vec<Memory>,
+    // --- a predictive self-model: the things a soul expects, held with a confidence, that the
+    //     world then confirms or violates. Surprise — the gap between what they were sure of and
+    //     what came to pass — is the engine: it scales the felt blow (a betrayal stings far past
+    //     a thing half-feared), stamps a memory the harder (flashbulb), and bends what they
+    //     believe. A soul that can be *wrong*, and feel it, and revise — that is the lever. ---
+    pub expectations: Vec<Expectation>,
 }
 
 /// One thing that happened to a soul and stuck — an engram. Distinct from the affinity ledger
@@ -118,10 +124,23 @@ pub struct Agent {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub day: i64,        // when it happened
-    pub kind: String,    // grief | snub | kindness | accused | cleared | wed | haunt | ...
+    pub kind: String,    // grief | snub | kindness | accused | cleared | wed | haunt | betrayed | reprieve | wronged | vindicated | ...
     pub who: i32,        // the other soul concerned, or -1 for a faceless one
     pub valence: i16,    // emotional charge [-100, 100]
     pub salience: i16,   // how much it still grips [0, 100]; decays daily, charged ones slower
+}
+
+/// A held expectation: what a soul predicts of something they have a stake in, and how sure they
+/// are of it. When the world resolves it the other way, the *surprise* (error × confidence) is
+/// what bites — and a confident expectation betrayed bites far harder than a thing half-feared.
+/// `topic` says what is predicted; `predicted` is the value expected on that topic's own scale.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Expectation {
+    pub about: i32,      // the soul it concerns; -1 = the parish/their own standing at large
+    pub topic: u8,       // 0 regard (how `about` will hold them) | 1 standing (how the parish holds them)
+    pub predicted: i16,  // the value they expect, on the topic's scale (an affinity, or a hold 0..100)
+    pub confidence: i16, // [0, 100] how sure they are — scales the surprise when it is wrong
+    pub set_on: i64,     // the day it was last formed or re-held
 }
 
 impl Agent {
@@ -268,6 +287,7 @@ impl World {
             suspicion: 0,
             cleared: false,
             memories: Vec::new(),
+            expectations: Vec::new(),
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1750,6 +1770,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         suspicion: 0,
         cleared: false,
         memories: Vec::new(),
+        expectations: Vec::new(),
     }
 }
 
@@ -1845,7 +1866,31 @@ fn engram_phrase(w: &World, m: &Memory) -> String {
         "snub"    => format!("a slight from {who} they have not forgiven, {grip}"),
         "wed"     => format!("the joy of their match with {who}, {grip}"),
         "haunt"   => "a dread that rises in them with no cause they can name — leaving them adrift, floating, strange to themselves".to_string(),
+        "betrayed"   => format!("the sting of {who} turning cold on them, where they had been so sure of warmth, {grip}"),
+        "reprieve"   => format!("warmth come from {who} where they had given up hoping for it, {grip}"),
+        "wronged"    => format!("the parish turning against them for no thing they have done — a wrong they cannot make answer to, {grip}"),
+        "vindicated" => format!("having come through the parish's suspicion they so feared, {grip}"),
         other     => format!("something of {other}{}, {grip}", if who.is_empty() { String::new() } else { format!(" concerning {who}") }),
+    }
+}
+
+/// Render a held expectation as the thing a soul is counting on, in their own forward-looking
+/// terms — to set in the dossier beside what they carry, so the hour can reckon with whether it
+/// is holding. Confidence becomes a word: a thing they are sure of, or merely hope.
+fn expectation_phrase(w: &World, idx: usize, e: &Expectation) -> String {
+    let sure = if e.confidence >= 75 { "are sure" } else if e.confidence >= 55 { "trust" } else { "half-hope" };
+    match e.topic {
+        0 => {
+            let who = (e.about >= 0).then(|| w.agents.get(e.about as usize).map(|a| a.name.as_str())).flatten().unwrap_or("them");
+            if e.predicted >= 25 { format!("they {sure} of {who}'s good regard") }
+            else if e.predicted <= -25 { format!("they {sure} {who} is set against them, and expect no better") }
+            else { format!("they are uncertain quite where they stand with {who}") }
+        }
+        _ => {
+            let hold = parish_hold(&w.agents[idx]);
+            if hold + 12 < e.predicted { format!("they {sure} the parish will see them clear of the killing — though it is not going as they expected") }
+            else { format!("they {sure} the parish holds them as it should, and will see them clear of the killing") }
+        }
     }
 }
 
@@ -2155,6 +2200,14 @@ const MEMORY_KEEP: usize = 8;
 // A memory is "charged" — flashbulb — past this absolute valence; it fades slower than a plain one.
 const CHARGED: i16 = 50;
 
+// A held expectation is left to stand this many days before the world is read back against it —
+// long enough for gossip and event to actually move things, so the soul is measuring a real arc.
+const EXPECT_AFTER: i64 = 6;
+// Below this, the surprise is noise — a small confirmation, not a felt jolt; nothing is stamped.
+const SURPRISE_FLOOR: i32 = 12;
+// A soul holds only so many live expectations at once — the stakes that most weigh on them.
+const EXPECT_CAP: usize = 6;
+
 /// The parish gathers to bury one of its own — a great occasion the whole town marks together.
 /// It renews grief on the kin and casts a communal pall; a murdered soul's funeral is charged,
 /// the killer somewhere among the mourners, and the burying of the victim sharpens the dread.
@@ -2182,6 +2235,101 @@ fn tend_funerals(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>) 
     world.funerals.retain(|f| f.scheduled > day);
     for f in due {
         hold_funeral(world, f.who, &f.name, f.murdered, day, date, out);
+    }
+}
+
+/// How the parish presently holds a soul, on a 0..100 scale — the value a "standing" expectation
+/// is measured against. A cleared soul stands high; suspicion erodes it sharply (the felt thing a
+/// soul under a cloud is losing). Folds together their face and the shadow over them.
+fn parish_hold(a: &Agent) -> i16 {
+    if a.cleared { return (a.standing + 20).clamp(0, 100) as i16; }
+    (a.standing - a.suspicion).clamp(0, 100) as i16
+}
+
+/// The predictive self-model. Each day a soul reads the world back against what they were sure
+/// of: where it confirms their expectation, little stirs; where it betrays one held with
+/// confidence, the *surprise* bites — scaling the blow to their spirits, stamping a memory the
+/// harder, and teaching them (the expectation is revised toward what actually came to pass). Then
+/// fresh stakes are taken up. Pure arithmetic over folded state — deterministic.
+fn tend_expectations(world: &mut World, day: i64) {
+    let n = world.agents.len();
+    for i in 0..n {
+        if !world.agents[i].active() || world.agents[i].archetype == "child" { continue; }
+
+        // 1. resolve the expectations that have stood long enough to be measured
+        let mut resolved: Vec<(i32, u8)> = Vec::new();
+        let ripe: Vec<Expectation> = world.agents[i].expectations.iter()
+            .filter(|e| day - e.set_on >= EXPECT_AFTER)
+            .cloned().collect();
+        for e in ripe {
+            // what actually came to pass, on this topic's scale
+            let actual: i16 = match e.topic {
+                0 => { // regard: how `about` now holds them
+                    match (e.about >= 0).then(|| world.agents.get(e.about as usize)).flatten() {
+                        Some(o) if o.active() => world.aff(e.about as usize, i),
+                        _ => { resolved.push((e.about, e.topic)); continue; } // the other is gone — the question lapses
+                    }
+                }
+                _ => parish_hold(&world.agents[i]), // standing: how the parish holds them
+            };
+            let error = (actual - e.predicted) as i32;       // + better than hoped, − worse than feared
+            let surprise = error.abs() * e.confidence as i32 / 100;
+            if surprise >= SURPRISE_FLOOR {
+                // losses loom larger than gains — a confident hope betrayed cuts deeper than a like relief
+                let felt = if error < 0 { surprise * 13 / 10 } else { surprise };
+                nudge_mood(&mut world.agents[i], (error.signum() * felt).clamp(-45, 45) as i16);
+                // surprise stamps the memory: the bigger the shock, the deeper it sets
+                let sal = (surprise + 25).clamp(0, 100) as i16;
+                let (kind, who, val): (&str, i32, i16) = match (e.topic, error < 0) {
+                    (0, true)  => ("betrayed", e.about, -(surprise.min(90) as i16)),   // someone they trusted turned cold
+                    (0, false) => ("reprieve", e.about,  (surprise.min(80) as i16)),    // warmth they'd given up on
+                    (_, true)  => ("wronged", -1, -(surprise.min(95) as i16)),          // the parish turning on them, against all they expected
+                    (_, false) => ("vindicated", -1, (surprise.min(85) as i16)),        // believed, after they feared the worst
+                };
+                world.remember(i, kind, who, val, sal, day);
+            }
+            resolved.push((e.about, e.topic));
+            // learn: the expectation is revised toward what came to pass, and held a touch less surely
+            if let Some(slot) = world.agents[i].expectations.iter_mut().find(|x| x.about == e.about && x.topic == e.topic) {
+                slot.predicted = actual;
+                slot.confidence = (e.confidence - (surprise as i16 / 3)).clamp(20, 95);
+                slot.set_on = day;
+            }
+        }
+
+        // 2. take up fresh stakes the soul has none on yet
+        // (a) regard — their single strongest tie, friend or rival: they expect it to hold as it is
+        let strongest: Option<(usize, i16)> = world.ties(i, true, 1).into_iter()
+            .chain(world.ties(i, false, 1))
+            .max_by_key(|&(_, v)| v.abs());
+        if let Some((other, _)) = strongest {
+            if !world.agents[i].expectations.iter().any(|e| e.topic == 0 && e.about == other as i32) {
+                let pred = world.aff(other, i);
+                let conf = (pred.abs() + 20).clamp(0, 90);
+                world.agents[i].expectations.push(Expectation { about: other as i32, topic: 0, predicted: pred, confidence: conf, set_on: day });
+            }
+        }
+        // (b) standing — a soul under an open cloud, not yet cleared or named, expects to come
+        //     through it: they are sure the parish will see they are no murderer. As suspicion
+        //     mounts the world falls ever further below that hope — the felt injustice, emergent.
+        let under_cloud = world.inquest.as_ref().is_some_and(|q| !q.closed)
+            && world.agents[i].suspicion > 0 && !world.agents[i].cleared
+            && world.inquest.as_ref().is_some_and(|q| q.accused != i as i32);
+        if under_cloud && !world.agents[i].expectations.iter().any(|e| e.topic == 1) {
+            // they expect to stand roughly as they did before the shadow — innocence vindicated
+            let pred = (world.agents[i].standing + 5).clamp(0, 100) as i16;
+            world.agents[i].expectations.push(Expectation { about: -1, topic: 1, predicted: pred, confidence: 55, set_on: day });
+        }
+
+        // keep only the stakes that weigh most (highest confidence), and drop any whose subject died
+        let mut exps = std::mem::take(&mut world.agents[i].expectations);
+        exps.retain(|e| e.about < 0 || world.agents.get(e.about as usize).is_some_and(|a| a.active()));
+        world.agents[i].expectations = exps;
+        let _ = resolved;
+        if world.agents[i].expectations.len() > EXPECT_CAP {
+            world.agents[i].expectations.sort_by_key(|e| std::cmp::Reverse(e.confidence));
+            world.agents[i].expectations.truncate(EXPECT_CAP);
+        }
     }
 }
 
@@ -2753,6 +2901,12 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     // --- the funerals whose day has come: the parish gathers to bury its dead ---
     tend_funerals(world, day, date, &mut out);
+
+    // --- the predictive self-model: souls read the world back against what they were sure of,
+    //     and the surprise of being wrong scales the blow, stamps the memory, and teaches them.
+    //     Run after the inquest, so a soul under a mounting cloud feels each day's betrayal of
+    //     their hope to be cleared. ---
+    tend_expectations(world, day);
 
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
@@ -3441,7 +3595,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 31;
+const SNAPSHOT_VERSION: i64 = 32;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4564,6 +4718,20 @@ impl Sim {
                 ));
             }
         }
+        // what they are presently counting on — the expectations they hold with confidence, that
+        // the days may yet confirm or betray. A soul reasons partly from what they are sure of.
+        {
+            let lines: Vec<String> = w.agents[idx].expectations.iter()
+                .filter(|e| e.confidence >= 45)
+                .map(|e| expectation_phrase(&w, idx, e))
+                .collect();
+            if !lines.is_empty() {
+                dossier.push_str(&format!(
+                    "\nWhat they are counting on (what they presently expect — let the hour reckon with whether it is holding):\n{}",
+                    lines.iter().map(|l| format!("  · {l}")).collect::<Vec<_>>().join("\n")
+                ));
+            }
+        }
         // their running inner monologue these recent hours, oldest first — the thread to continue
         if let Ok(mut ts) = self.self_reflections(&ag.name, 6) {
             if !ts.is_empty() {
@@ -5472,5 +5640,68 @@ mod memory_tests {
         let h = w.agents[who].memories.iter().find(|m| m.kind == "haunt").map(|m| m.salience).unwrap_or(0);
         assert_eq!(h, 90, "the buried thing does not fade with time");
         assert!(dipped, "a repression surfaces unbidden, pulling the spirits down with no occasion");
+    }
+}
+
+#[cfg(test)]
+mod expectation_tests {
+    use super::*;
+
+    // A soul under a mounting cloud is sure the parish will see they are no murderer. As suspicion
+    // climbs the world falls ever further below that hope, and the surprise of being so wrong is
+    // carried as a felt *wrong* — an injustice they cannot make answer to anything they have done.
+    #[test]
+    fn a_mounting_cloud_is_felt_as_a_wrong() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (victim, soul) = (grown[0], grown[1]);
+        w.agents[victim].death_day = Some(0);
+        w.inquest = Some(Inquest {
+            victim, victim_name: w.agents[victim].name.clone(), opened: 0, accused: -1,
+            accused_since: 0, hanged: false, closed: false, investigator: -1, public_inquiry: false,
+        });
+        w.agents[soul].standing = 40;
+        w.agents[soul].suspicion = 10;
+        let mood0 = w.agents[soul].mood;
+
+        // day 0: under a cloud, they form the expectation that they will come through it
+        tend_expectations(&mut w, 0);
+        assert!(w.agents[soul].expectations.iter().any(|e| e.topic == 1),
+            "a soul under a cloud expects, with confidence, to be cleared");
+
+        // the cloud mounts day by day — the world falls below the hope
+        for day in 1..=EXPECT_AFTER {
+            w.agents[soul].suspicion += 8;
+            tend_expectations(&mut w, day);
+        }
+        assert!(w.agents[soul].memories.iter().any(|m| m.kind == "wronged"),
+            "the betrayed hope is carried as a felt wrong");
+        assert!(w.agents[soul].mood < mood0,
+            "the injustice sinks their spirits (now {}, was {mood0})", w.agents[soul].mood);
+    }
+
+    // Surprise is scaled by confidence: a soul SURE of a friend's warmth, finding it turned cold,
+    // feels a betrayal — a charged wound — where the same coldness from someone they'd never read
+    // would barely register. A predictive self that can be wrong, and feel the wrongness.
+    #[test]
+    fn a_trusted_friend_turning_cold_is_a_betrayal() {
+        let mut w = World::seed();
+        let g: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (a, b) = (g[0], g[1]);
+        w.nudge_aff(a, b, 70);
+        w.nudge_aff(b, a, 70); // a is sure of b's warmth
+        tend_expectations(&mut w, 0);
+        assert!(w.agents[a].expectations.iter().any(|e| e.topic == 0 && e.about == b as i32),
+            "a holds an expectation about how b regards them");
+        let mood0 = w.agents[a].mood;
+
+        // b turns cold; days pass until the expectation ripens and is read back
+        w.affinity.insert((b as u32, a as u32), -30);
+        for day in 1..=EXPECT_AFTER { tend_expectations(&mut w, day); }
+        assert!(w.agents[a].memories.iter().any(|m| m.kind == "betrayed" && m.who == b as i32),
+            "the friend's turn is carried as a betrayal, with their face on it");
+        assert!(w.agents[a].mood < mood0, "the betrayal sinks their spirits");
     }
 }
