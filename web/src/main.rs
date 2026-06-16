@@ -474,6 +474,21 @@ fn person(sim: &Sim, idx: usize) -> String {
         }
     }
 
+    // what is uppermost in their mind — the global workspace, the single thing that fills it now.
+    // The integration of all the rest: whichever concern won the day's contention for their focus.
+    if a.active() {
+        if let Some((topic, intensity, phrase)) = sim.focus_of(&a.name, t) {
+            match phrase {
+                Some(p) => {
+                    let heavy = matches!(topic.as_str(), "dread" | "grief" | "haunt" | "betrayal" | "wrong");
+                    let tone = if heavy { "#7a2e2e" } else { "#3a4a6a" };
+                    let grip = if intensity >= 55 { " <span class=date>— it fills their mind, and crowds out the rest</span>" } else { "" };
+                    body.push_str(&format!("<h2>Uppermost in their mind</h2><p class=life style='color:{tone}'>{}{}.</p>", esc(&p), grip));
+                }
+                None => body.push_str("<h2>Uppermost in their mind</h2><p class=life><span class=date>Their mind is easy just now, on the day's ordinary work — no one thing crowds it.</span></p>"),
+            }
+        }
+    }
     // how they have come to see themselves — the evolving self-concept they reason from
     if let Ok(Some(sc)) = sim.self_model(&a.name) {
         body.push_str(&format!("<h2>How they see themselves</h2><p class=life>{}</p>", esc(&sc)));

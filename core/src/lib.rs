@@ -120,6 +120,24 @@ pub struct Agent {
     //     believes themselves suspected behaves furtively, which draws the very suspicion they
     //     dread. What I think they think of me, made flesh and turned back on the world. ---
     pub seen_as: i16, // [-100,100]; <0 = "they think ill of me / suspect me", >0 = "i am well thought of"
+    // --- the global workspace: the ONE thing uppermost in their mind right now. The soul's many
+    //     concerns — a grief, the dread of the killing, a courtship, a scheme — contend each day,
+    //     and a single winner is broadcast: their preoccupation. It gates the rest — a mind gripped
+    //     by the murder cannot freely turn to a courtship; the workspace is occupied. This is the
+    //     integration that makes them one mind with a focus, not a heap of parallel ledgers. ---
+    pub focus: Preoccupation,
+}
+
+/// What is uppermost in a soul's mind — the winner of the day's contention among their concerns,
+/// broadcast to gate attention, initiative, and what their reflection turns on. The mechanism a
+/// leading theory of consciousness (the global workspace) puts at the centre — a single focus, not
+/// many parallel processes. (It models *access*, not experience: it does not, and cannot, settle
+/// whether anything is felt. But it is the architecture of a mind that can be *preoccupied*.)
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Preoccupation {
+    pub topic: String,  // dread | grief | haunt | betrayal | wrong | courtship | feud | venture | work
+    pub target: i32,    // the soul it concerns, or -1
+    pub intensity: i16, // 0..100 — how wholly it holds the mind
 }
 
 /// One thing that happened to a soul and stuck — an engram. Distinct from the affinity ledger
@@ -296,6 +314,7 @@ impl World {
             memories: Vec::new(),
             expectations: Vec::new(),
             seen_as: 0,
+            focus: Preoccupation::default(),
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1780,6 +1799,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         memories: Vec::new(),
         expectations: Vec::new(),
         seen_as: 0,
+        focus: Preoccupation::default(),
     }
 }
 
@@ -2236,6 +2256,9 @@ const EXPECT_AFTER: i64 = 6;
 const SURPRISE_FLOOR: i32 = 12;
 // A soul holds only so many live expectations at once — the stakes that most weigh on them.
 const EXPECT_CAP: usize = 6;
+// A preoccupation this strong, and of a heavy kind, fills the mind — the workspace is occupied,
+// and the soul cannot freely take up a new courtship or scheme while it grips them.
+const GRIP: i16 = 55;
 
 /// The parish gathers to bury one of its own — a great occasion the whole town marks together.
 /// It renews grief on the kin and casts a communal pall; a murdered soul's funeral is charged,
@@ -2362,6 +2385,62 @@ fn tend_expectations(world: &mut World, day: i64) {
     }
 }
 
+/// The global workspace, resolved for one soul: their many concerns contend, and the single
+/// strongest is broadcast as their preoccupation — what is uppermost in their mind. The murder's
+/// dread, a fresh grief, a buried haunt, the wound of a betrayal, a courtship, a feud, a scheme:
+/// each presses with a weight, and the winner takes the mind. A settled soul's mind rests on the
+/// day's ordinary work. Pure derived state — recomputed each day from all the rest.
+fn compute_focus(world: &mut World, i: usize) {
+    let a = &world.agents[i];
+    // baseline: an unburdened mind is on the day's work
+    let mut cands: Vec<(&str, i32, i32)> = vec![("work", -1, 18)];
+    // the killing — heaviest when the eye is turning toward them
+    if let Some(q) = &world.inquest {
+        if !q.closed && !a.cleared && i != q.victim {
+            let w = a.suspicion + world.dread as i32 / 2 + (-a.seen_as as i32).max(0) / 2;
+            if w > 8 { cands.push(("dread", -1, w)); }
+        }
+    }
+    // the occasions that grip them, each pressing as its own kind of concern
+    for m in &a.memories {
+        let topic = match m.kind.as_str() {
+            "haunt" => "haunt", "grief" => "grief", "betrayed" => "betrayal",
+            "wronged" => "wrong", "accused" => "dread", _ => continue,
+        };
+        cands.push((topic, m.who, m.salience as i32));
+    }
+    // the live pursuits — a suit, a grudge campaign, a staked scheme
+    if a.courting >= 0 { cands.push(("courtship", a.courting, 40 + a.courtship as i32)); }
+    if a.rival >= 0 { cands.push(("feud", a.rival, 30 + a.feud as i32 * 2)); }
+    if a.intent != 0 { cands.push(("venture", -1, 25 + a.intent_age as i32 / 2)); }
+    let (topic, target, w) = cands.into_iter().max_by_key(|c| c.2).unwrap();
+    world.agents[i].focus = Preoccupation { topic: topic.into(), target, intensity: w.clamp(0, 100) as i16 };
+}
+
+/// Is the soul's mind so taken up by a heavy concern that they cannot freely turn to a new
+/// courtship or scheme? The workspace, occupied — the gate the global focus puts on initiative.
+fn mind_occupied(a: &Agent) -> bool {
+    a.focus.intensity >= GRIP && matches!(a.focus.topic.as_str(), "dread" | "grief" | "haunt" | "betrayal" | "wrong")
+}
+
+/// What is uppermost in a soul's mind, in words — for the dossier they contemplate and the
+/// dashboard. None when their mind is easy, resting on the day's ordinary work.
+fn focus_phrase(w: &World, idx: usize) -> Option<String> {
+    let f = &w.agents[idx].focus;
+    let who = (f.target >= 0).then(|| w.agents.get(f.target as usize)).flatten().map(|a| a.name.as_str()).unwrap_or("");
+    Some(match f.topic.as_str() {
+        "dread"     => "the killing, and the parish's eye turning toward them — it crowds out all else".to_string(),
+        "grief"     => if who.is_empty() { "their grief, sitting over everything".to_string() } else { format!("their grief — the loss of {who} — which sits over everything") },
+        "haunt"     => "a dread they can put no name to nor reach the bottom of, that will not leave them be".to_string(),
+        "betrayal"  => format!("the wound of {who}'s coldness, turned over and over"),
+        "wrong"     => "the injustice of the parish's suspicion, which they cannot make answer to".to_string(),
+        "courtship" => format!("their hopes of {who}"),
+        "feud"      => format!("their reckoning with {who}"),
+        "venture"   => "the scheme they have staked themselves on".to_string(),
+        _ => return None,
+    })
+}
+
 /// The recursive social mirror. Each soul holds a read of how the parish regards them — not their
 /// real standing, but what they *believe* others make of them — and it lags and distorts the truth
 /// by their disposition: the thin-skinned over-read a slight and discount good regard (the anxious
@@ -2406,6 +2485,9 @@ fn form_aims(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     let n = world.agents.len();
     for i in 0..n {
         if !world.agents[i].active() || world.agents[i].archetype == "child" { continue; }
+        // the workspace, occupied: a mind wholly taken up by grief or dread cannot turn to take up
+        // a fresh enmity or scheme — there is no room in it. Initiative waits on an easier mind.
+        if mind_occupied(&world.agents[i]) { continue; }
 
         // (1) a carried grievance hardens into a declared enmity — memory becoming initiative. A
         //     soul with a real wound (a slight, a betrayal) still gripping, and no nemesis yet, may
@@ -2791,6 +2873,10 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         if world.agents[i].courting >= 0 || world.agents[i].spouse.is_some() {
             continue;
         }
+        // a mind filled with grief or the murder's dread does not turn to begin a courtship
+        if mind_occupied(&world.agents[i]) {
+            continue;
+        }
         if !rng.gen_bool((1.6 / 365.0_f64).clamp(0.0, 1.0)) {
             continue;
         }
@@ -3068,6 +3154,16 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             let (g, t) = assess_goal(world, i, day);
             world.agents[i].goal = g;
             world.agents[i].goal_target = t;
+        }
+    }
+
+    // --- the global workspace, resolved: with the day's grief, dread, hopes and schemes all
+    //     settled, each soul's concerns contend and a single one is broadcast as uppermost. This
+    //     is computed last, on the freshest state, and stands until tomorrow — gating what they
+    //     take up next, colouring what their reflection turns on, shown as what fills their mind. ---
+    for i in 0..world.agents.len() {
+        if world.agents[i].active() && world.agents[i].archetype != "child" {
+            compute_focus(world, i);
         }
     }
     out
@@ -3735,7 +3831,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 33;
+const SNAPSHOT_VERSION: i64 = 34;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4861,6 +4957,12 @@ impl Sim {
         // how they imagine the parish regards them — the recursive mirror, which may sit wide of
         // the truth; they reason partly from how they feel themselves seen, not their real standing
         dossier.push_str(&format!("\nHow they feel themselves seen by the parish: {}.", self_regard_phrase(ag.seen_as)));
+        // THE thing uppermost in their mind — the global workspace. Whatever else is true of them,
+        // the hour's thought must be ruled by this; a gripped mind cannot wander freely elsewhere.
+        match focus_phrase(&w, idx) {
+            Some(p) => dossier.push_str(&format!("\nWHAT IS UPPERMOST IN THEIR MIND right now (let this rule the hour — a mind this taken up cannot freely turn elsewhere): {p}.")),
+            None => dossier.push_str("\nTheir mind is tolerably easy just now, resting on the day's ordinary work — no one thing crowds it."),
+        }
         // what they are presently counting on — the expectations they hold with confidence, that
         // the days may yet confirm or betray. A soul reasons partly from what they are sure of.
         {
@@ -4933,6 +5035,9 @@ impl Sim {
             _ => d.push_str("\nThey have never yet sat and reckoned who they truly are; this is the first such hour."),
         }
         d.push_str(&format!("\nHow they feel themselves seen by the parish (reckon with whether this is true, or a thing they only fear): {}.", self_regard_phrase(ag.seen_as)));
+        if let Some(p) = focus_phrase(&w, idx) {
+            d.push_str(&format!("\nWhat has been uppermost in their mind of late: {p} — any honest reckoning of themselves must pass through it."));
+        }
         // the people presently weighing on them — from their recent thread and their ledger of feeling
         let mut onmind: Vec<String> = Vec::new();
         for (j, _) in w.ties(idx, true, 2).into_iter().chain(w.ties(idx, false, 2)) {
@@ -5227,6 +5332,16 @@ impl Sim {
         let idx = world.idx(name)?;
         let sa = world.agents[idx].seen_as;
         Some((sa, self_regard_phrase(sa).to_string()))
+    }
+
+    /// What is uppermost in a soul's mind on `date` (the global workspace) — the topic, its
+    /// intensity, and the phrasing of it. None of the phrasing when their mind rests on the day's
+    /// work. Returns (topic, intensity, phrase_or_none) for the dashboard.
+    pub fn focus_of(&self, name: &str, date: Date) -> Option<(String, i16, Option<String>)> {
+        let world = self.world_on(date);
+        let idx = world.idx(name)?;
+        let f = &world.agents[idx].focus;
+        Some((f.topic.clone(), f.intensity, focus_phrase(&world, idx)))
     }
 
     /// A soul's whole day on `date`: each phase, where they were and what they were about —
@@ -5910,5 +6025,62 @@ mod agency_tests {
         for day in 2..=18 { update_self_regard(&mut w, day); }
         assert!(w.agents[low].seen_as <= -30, "a low, suspected soul comes to feel ill-regarded, got {}", w.agents[low].seen_as);
         assert!(w.agents[high].seen_as >= 20, "a high, well-liked soul comes to feel well thought of, got {}", w.agents[high].seen_as);
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    // The global workspace broadcasts a single uppermost concern: a charged grief outweighs the
+    // day's ordinary work and takes the mind; a soul with nothing pressing rests on their work.
+    #[test]
+    fn the_strongest_concern_takes_the_mind() {
+        let mut w = World::seed();
+        let g: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (grieving, easy) = (g[0], g[1]);
+        w.remember(grieving, "grief", g[2] as i32, -80, 85, 0);
+
+        compute_focus(&mut w, grieving);
+        compute_focus(&mut w, easy);
+        assert_eq!(w.agents[grieving].focus.topic, "grief", "a fresh grief takes the mind");
+        assert!(w.agents[grieving].focus.intensity >= GRIP, "and grips it");
+        assert_eq!(w.agents[easy].focus.topic, "work", "an unburdened soul's mind rests on the day's work");
+        assert!(mind_occupied(&w.agents[grieving]) && !mind_occupied(&w.agents[easy]));
+    }
+
+    // The workspace, occupied: a soul whose mind is filled by grief cannot take up a fresh enmity,
+    // though they carry a sharp grievance — there is no room in the mind for it. An easy mind can.
+    #[test]
+    fn an_occupied_mind_does_not_take_up_new_aims() {
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let setup = |occupied: bool| {
+            let mut w = World::seed();
+            let g: Vec<usize> = (0..w.agents.len())
+                .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+            let (soul, foe) = (g[0], g[1]);
+            w.agents[soul].spouse = None; w.agents[soul].parent = None;
+            w.agents[foe].spouse = None; w.agents[foe].parent = None;
+            w.agents[soul].rival = -1;
+            w.remember(soul, "snub", foe as i32, -60, 75, 0);
+            w.agents[soul].focus = if occupied {
+                Preoccupation { topic: "grief".into(), target: -1, intensity: 90 }
+            } else {
+                Preoccupation { topic: "work".into(), target: -1, intensity: 18 }
+            };
+            let mut declared = false;
+            for day in 0..300 {
+                if !w.agents[soul].memories.iter().any(|m| m.kind == "snub" && m.who == foe as i32) {
+                    w.remember(soul, "snub", foe as i32, -60, 75, day);
+                }
+                // hold the focus fixed (compute_focus isn't run in this isolated loop)
+                let _ = form_aims(&mut w, day, date, 7);
+                if w.agents[soul].rival == foe as i32 { declared = true; break; }
+            }
+            declared
+        };
+        assert!(!setup(true), "a mind filled with grief takes up no new enmity");
+        assert!(setup(false), "an easy mind, carrying the same grievance, does take it up");
     }
 }

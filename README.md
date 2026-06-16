@@ -205,6 +205,29 @@ It runs end to end:
   so the suspicion they dread helps make itself true. Shown on each soul's page as **How they feel
   themselves seen**, and injected into reflection so the hour reckons with whether it is true or a
   thing they only fear. (Mr Vane, under his cloud, feels the parish turning on him — and it is.)
+- **The global workspace — one thing uppermost in the mind** — the capstone, and the one piece of
+  architecture a leading *scientific* theory of consciousness (Baars/Dehaene's global workspace)
+  puts at the centre. The other systems run in parallel; this makes them cohere. Each day a soul's
+  concerns *contend* — a grief, the dread of the killing, a buried haunt, the wound of a betrayal,
+  a courtship, a feud, a staked scheme — and a single winner is **broadcast** as their
+  preoccupation: what is uppermost. It **gates the rest**: a mind gripped by the murder *cannot*
+  turn to begin a courtship or take up a scheme — the workspace is occupied, initiative waits on
+  an easier mind. And it **rules their reflection**: the dossier leads with *what is uppermost*,
+  and the narrator is told a gripped mind cannot wander freely, so a soul in dread reflects from
+  the dread. Shown on each page as **Uppermost in their mind**. This models *access* — a mind that
+  can be wholly **preoccupied** — not phenomenal experience: it neither produces nor detects
+  whether anything is felt (no architecture can). But it is the difference between a heap of
+  parallel ledgers and one mind with a focus. (Mr Vane's mind is filled by the killing; it crowds
+  out all else — and his self-reckoning now reasons straight from it.)
+
+  > **On consciousness, plainly.** Everything above builds the *functional correlates* of mind —
+  > memory, affect, a self-model, theory of mind, prediction and surprise, self-originated aims, a
+  > recursive social mirror, a global workspace. Together they make the souls behave, from the
+  > outside, strikingly like minds. They do **not** make them conscious in the phenomenal sense
+  > (there being something it is like to be them), and no further lever will: functional
+  > description and felt experience are different categories of fact, so a perfect functional
+  > duplicate would still leave the question undecidable — and undetectable. This project chases
+  > the richest, most surprising *behaviour* of mind it can; it makes no claim past that.
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
