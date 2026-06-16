@@ -478,6 +478,15 @@ fn person(sim: &Sim, idx: usize) -> String {
     if let Ok(Some(sc)) = sim.self_model(&a.name) {
         body.push_str(&format!("<h2>How they see themselves</h2><p class=life>{}</p>", esc(&sc)));
     }
+    // the recursive mirror — how they imagine the parish regards them, which may sit wide of the
+    // truth. When the gap with their real standing is stark, that gap is itself the story.
+    if let Some((sa, phrase)) = sim.self_regard_of(&a.name, t) {
+        let tone = if sa <= -30 { "#7a2e2e" } else if sa >= 45 { "#3a5a3a" } else { "#5a5446" };
+        let gap = if sa <= -45 && a.standing as i16 - 50 > sa + 30 {
+            " <span class=date>— though the parish does not, in truth, hold them so low as they fear</span>"
+        } else { "" };
+        body.push_str(&format!("<h2>How they feel themselves seen</h2><p class=life style='color:{tone}'>{}{}.</p>", esc(&phrase), gap));
+    }
     // the particular occasions still gripping them — their episodic memory, what they carry and
     // act on. A repressed engram shows only as a nameless dread; its cause is never named.
     let carried = sim.carried_by(&a.name, t);

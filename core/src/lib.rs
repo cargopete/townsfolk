@@ -113,6 +113,13 @@ pub struct Agent {
     //     a thing half-feared), stamps a memory the harder (flashbulb), and bends what they
     //     believe. A soul that can be *wrong*, and feel it, and revise — that is the lever. ---
     pub expectations: Vec<Expectation>,
+    // --- the recursive social mirror: the soul's own read of how the parish regards them — not
+    //     their actual standing, but what they *believe* others make of them, recursed. It lags
+    //     and distorts the truth (the anxious over-read a slight, the thick-skinned miss it), and
+    //     it drives them: feeling judged sinks the spirits, and — under a killing — a soul who
+    //     believes themselves suspected behaves furtively, which draws the very suspicion they
+    //     dread. What I think they think of me, made flesh and turned back on the world. ---
+    pub seen_as: i16, // [-100,100]; <0 = "they think ill of me / suspect me", >0 = "i am well thought of"
 }
 
 /// One thing that happened to a soul and stuck — an engram. Distinct from the affinity ledger
@@ -288,6 +295,7 @@ impl World {
             cleared: false,
             memories: Vec::new(),
             expectations: Vec::new(),
+            seen_as: 0,
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1771,6 +1779,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         cleared: false,
         memories: Vec::new(),
         expectations: Vec::new(),
+        seen_as: 0,
     }
 }
 
@@ -1891,6 +1900,19 @@ fn expectation_phrase(w: &World, idx: usize, e: &Expectation) -> String {
             if hold + 12 < e.predicted { format!("they {sure} the parish will see them clear of the killing — though it is not going as they expected") }
             else { format!("they {sure} the parish holds them as it should, and will see them clear of the killing") }
         }
+    }
+}
+
+/// How a soul imagines the parish regards them — the recursive mirror in words. This is their
+/// *belief* about others' minds, which may sit well wide of the truth; phrased so a reflection
+/// reasons from how they feel themselves seen, not from their real standing.
+pub fn self_regard_phrase(seen_as: i16) -> &'static str {
+    match seen_as {
+        x if x <= -55 => "they feel the parish has turned against them — that they are watched, doubted, thought the worst of",
+        x if x <= -25 => "they feel themselves under a cloud of late, less well thought of than they were",
+        x if x < 25 => "they feel they stand about as they always have in the parish's eyes",
+        x if x < 55 => "they feel well thought of in the parish",
+        _ => "they feel the parish holds them high, and warm to them",
     }
 }
 
@@ -2109,6 +2131,13 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
             let respectable = matches!(world.agents[i].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner")
                 || world.agents[i].standing >= top_standing - 12;
             if respectable { d -= 3; } else { d += 3; }          // shields his own; presses the labourer and the stranger
+        }
+        // the recursive mirror, turned back on the world: a soul who believes the parish already
+        // takes them for the killer carries themselves furtively — won't meet an eye, starts at a
+        // question, keeps to their cottage — and the parish reads the furtiveness as a guilty
+        // conscience. Believing oneself seen as guilty helps make it so. A tragic little engine.
+        if i as i32 != investigator && world.agents[i].seen_as <= -45 {
+            d += if world.agents[i].seen_as <= -70 { 2 } else { 1 };
         }
         if d == 0 { d = -2; }                                    // suspicion is fickle; unfed, it cools
         world.agents[i].suspicion = (world.agents[i].suspicion + d).clamp(0, 200);
@@ -2331,6 +2360,109 @@ fn tend_expectations(world: &mut World, day: i64) {
             world.agents[i].expectations.truncate(EXPECT_CAP);
         }
     }
+}
+
+/// The recursive social mirror. Each soul holds a read of how the parish regards them — not their
+/// real standing, but what they *believe* others make of them — and it lags and distorts the truth
+/// by their disposition: the thin-skinned over-read a slight and discount good regard (the anxious
+/// self), the thick-skinned barely register either. Feeling ill-thought-of sinks the spirits.
+/// This is "what I think they think of me," carried as state — and (in tend_inquest) turned back
+/// on the world, where a soul who believes themselves suspected acts the part and draws the eye.
+fn update_self_regard(world: &mut World, _day: i64) {
+    let n = world.agents.len();
+    let adults: Vec<usize> = (0..n).filter(|&j| world.agents[j].active() && world.agents[j].archetype != "child").collect();
+    for &i in &adults {
+        // how the parish in truth bears them: their face, the mean of what others feel toward them,
+        // and — heaviest of all under a killing — the suspicion that has settled on them
+        let mut sum = 0i32; let mut cnt = 0i32;
+        for &j in &adults { if j != i { sum += world.aff(j, i) as i32; cnt += 1; } }
+        let mean_aff = if cnt > 0 { sum / cnt } else { 0 };
+        let true_regard = ((world.agents[i].standing - 50) + mean_aff / 2 - world.agents[i].suspicion.min(120)).clamp(-100, 100) as i16;
+        // move toward the truth, but slowly and crookedly. Bad news travels fast for the sensitive
+        // and slow for the stoic; good news the other way — so the anxious live worse-regarded than
+        // they are, and never quite trust the warmth they're shown.
+        let sens = temperament(&world.agents[i].archetype).0 as i32; // ~65 stoic .. ~140 raw
+        let gap = (true_regard - world.agents[i].seen_as) as i32;
+        let toward = if gap < 0 { gap * sens / 100 } else { gap * 100 / sens };
+        let step = (toward / 4).clamp(-12, 12) as i16;
+        world.agents[i].seen_as = (world.agents[i].seen_as + step).clamp(-100, 100);
+        // the felt weight of being judged: believing oneself ill-thought-of is its own slow ache;
+        // believing oneself well-regarded is a quiet warmth. A daily drip, not a shock.
+        let sa = world.agents[i].seen_as;
+        if sa <= -30 { nudge_mood(&mut world.agents[i], (sa / 22).clamp(-4, -1)); }
+        else if sa >= 45 { nudge_mood(&mut world.agents[i], (sa / 45).clamp(1, 2)); }
+    }
+}
+
+/// Endogenous aims — souls taking up intentions nobody handed them, out of their own disposition
+/// and what they carry. Not providence, not an LLM's prompt: the deterministic fold itself lets a
+/// soul *initiate* — turn a remembered wound into a declared enmity, or set themselves a bold
+/// venture because that is the cut of them. Each is then pursued across days by the machinery that
+/// already presses feuds and plans toward a reckoning. Initiative, sprung from within.
+fn form_aims(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "intent".into(), actor: actor.into(), text };
+    let mut rng = rng_for(seed ^ 0xA14E_0000_0000, day);
+    let n = world.agents.len();
+    for i in 0..n {
+        if !world.agents[i].active() || world.agents[i].archetype == "child" { continue; }
+
+        // (1) a carried grievance hardens into a declared enmity — memory becoming initiative. A
+        //     soul with a real wound (a slight, a betrayal) still gripping, and no nemesis yet, may
+        //     resolve to make an enemy of the one who dealt it, and press it toward satisfaction.
+        if world.agents[i].rival < 0 {
+            let grudge = world.agents[i].memories.iter()
+                .filter(|m| matches!(m.kind.as_str(), "snub" | "betrayed") && m.who >= 0 && m.salience >= 45)
+                .filter(|m| {
+                    let w = m.who as usize;
+                    // you do not take up arms against your own hearth — spouse and blood are spared
+                    Some(w) != world.agents[i].spouse
+                        && world.agents[i].parent != Some(w)
+                        && world.agents[w].parent != Some(i)
+                        && world.agents.get(w).is_some_and(|a| a.active() && a.archetype != "child")
+                })
+                .max_by_key(|m| m.salience)
+                .map(|m| m.who as usize);
+            if let Some(foe) = grudge {
+                // the dispositionally proud and mercurial nurse enmity sooner; the placid let it lie
+                let bent = match world.agents[i].archetype.as_str() {
+                    "scheming_improver" | "genteel_status_seeker" => 0.11,
+                    "official" => 0.04,
+                    _ => 0.06,
+                };
+                if rng.gen_bool(bent) {
+                    world.agents[i].rival = foe as i32;
+                    world.agents[i].feud = 0;
+                    world.agents[i].goal = 4;
+                    world.agents[i].goal_target = foe as i32;
+                    let (a, b) = (world.agents[i].name.clone(), world.agents[foe].name.clone());
+                    out.push(mk(&a, format!("{a}, brooding on an old wrong, has come to count {b} an enemy, and means to have satisfaction of it.")));
+                    world.spawn_news(&a, &format!("how {a} has set themselves against {b}"), -1, day, &[b.as_str()]);
+                    world.agents[i].memories.retain(|m| !(matches!(m.kind.as_str(), "snub" | "betrayed") && m.who == foe as i32));
+                    continue; // one aim taken up this day is enough
+                }
+            }
+        }
+
+        // (2) a bold venture set from sheer disposition — the improver and the striving farmer, with
+        //     means enough to stake and spirits to match, set themselves a scheme that may make them
+        //     or ruin them (Crale and his field). No one bid them; it is the cut of them.
+        if world.agents[i].intent == 0 && world.agents[i].rival < 0 {
+            let a = &world.agents[i];
+            let venturer = matches!(a.archetype.as_str(), "scheming_improver" | "hill_farmer")
+                && (20..120).contains(&a.purse) && a.mood >= -25; // the schemer schemes even out of sorts
+            if venturer && rng.gen_bool(if a.archetype == "scheming_improver" { 0.09 } else { 0.045 }) {
+                world.agents[i].intent = 3;
+                world.agents[i].intent_goal = world.agents[i].purse + 70;
+                world.agents[i].intent_age = 0;
+                world.agents[i].goal = 5;
+                let nm = world.agents[i].name.clone();
+                out.push(mk(&nm, format!("{nm} has set themselves a bold scheme of their own devising, to make their fortune or break upon it.")));
+                world.spawn_news(&nm, &format!("the bold scheme {nm} has lately set themselves"), 1, day, &[]);
+            }
+        }
+    }
+    out
 }
 
 /// What the shadow of an open (or freshly-closed) killing means for one soul, in words the
@@ -2907,6 +3039,14 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     //     Run after the inquest, so a soul under a mounting cloud feels each day's betrayal of
     //     their hope to be cleared. ---
     tend_expectations(world, day);
+
+    // --- the recursive social mirror: each soul updates their read of how the parish regards
+    //     them (lagging, distorted by disposition), and feels the weight of being judged. ---
+    update_self_regard(world, day);
+
+    // --- endogenous aims: souls take up intentions of their own — a carried wound hardened into
+    //     enmity, a bold venture set from disposition — then pursued by the feud/plan machinery. ---
+    out.extend(form_aims(world, day, date, seed));
 
     // --- goals: a fulfilled ambition is a triumph; otherwise the odd fresh resolve ---
     let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
@@ -3595,7 +3735,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 32;
+const SNAPSHOT_VERSION: i64 = 33;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4718,6 +4858,9 @@ impl Sim {
                 ));
             }
         }
+        // how they imagine the parish regards them — the recursive mirror, which may sit wide of
+        // the truth; they reason partly from how they feel themselves seen, not their real standing
+        dossier.push_str(&format!("\nHow they feel themselves seen by the parish: {}.", self_regard_phrase(ag.seen_as)));
         // what they are presently counting on — the expectations they hold with confidence, that
         // the days may yet confirm or betray. A soul reasons partly from what they are sure of.
         {
@@ -4789,6 +4932,7 @@ impl Sim {
             Ok(Some(sc)) => d.push_str(&format!("\nWho they have until now taken themselves to be: {sc}")),
             _ => d.push_str("\nThey have never yet sat and reckoned who they truly are; this is the first such hour."),
         }
+        d.push_str(&format!("\nHow they feel themselves seen by the parish (reckon with whether this is true, or a thing they only fear): {}.", self_regard_phrase(ag.seen_as)));
         // the people presently weighing on them — from their recent thread and their ledger of feeling
         let mut onmind: Vec<String> = Vec::new();
         for (j, _) in w.ties(idx, true, 2).into_iter().chain(w.ties(idx, false, 2)) {
@@ -5074,6 +5218,15 @@ impl Sim {
             let who = if m.who >= 0 { world.agents.get(m.who as usize).map(|a| a.name.clone()).unwrap_or_default() } else { String::new() };
             (m.kind.clone(), who, m.valence, m.salience, m.day)
         }).collect()
+    }
+
+    /// How a soul feels themselves seen by the parish on `date` (the recursive mirror), as the raw
+    /// estimate and the phrasing of it — for the dashboard. May sit wide of their real standing.
+    pub fn self_regard_of(&self, name: &str, date: Date) -> Option<(i16, String)> {
+        let world = self.world_on(date);
+        let idx = world.idx(name)?;
+        let sa = world.agents[idx].seen_as;
+        Some((sa, self_regard_phrase(sa).to_string()))
     }
 
     /// A soul's whole day on `date`: each phase, where they were and what they were about —
@@ -5703,5 +5856,59 @@ mod expectation_tests {
         assert!(w.agents[a].memories.iter().any(|m| m.kind == "betrayed" && m.who == b as i32),
             "the friend's turn is carried as a betrayal, with their face on it");
         assert!(w.agents[a].mood < mood0, "the betrayal sinks their spirits");
+    }
+}
+
+#[cfg(test)]
+mod agency_tests {
+    use super::*;
+
+    // Endogenous aim: a carried wound, given time, hardens into a declared enmity — memory becoming
+    // initiative. Nobody hands it to them; the grievance is their own and they take it up.
+    #[test]
+    fn a_carried_wound_hardens_into_enmity() {
+        let mut w = World::seed();
+        let g: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (soul, foe) = (g[0], g[1]);
+        // they must be no kin — one does not take up arms against their own hearth
+        w.agents[soul].spouse = None; w.agents[soul].parent = None;
+        w.agents[foe].spouse = None; w.agents[foe].parent = None;
+        w.agents[soul].rival = -1;
+        w.remember(soul, "snub", foe as i32, -60, 75, 0);
+
+        let mut declared = false;
+        for day in 0..400 {
+            if !w.agents[soul].memories.iter().any(|m| m.kind == "snub" && m.who == foe as i32) {
+                w.remember(soul, "snub", foe as i32, -60, 75, day);
+            }
+            let _ = form_aims(&mut w, day, Date::from_calendar_date(1934, Month::June, 1).unwrap(), 7);
+            if w.agents[soul].rival == foe as i32 { declared = true; break; }
+        }
+        assert!(declared, "a gripping grievance, given time, hardens into a declared enmity");
+        assert_eq!(w.agents[soul].goal, 4, "the enmity becomes their consuming aim");
+    }
+
+    // The recursive mirror reflects a soul's circumstance — a low, suspected soul comes to feel
+    // ill-regarded; a high, well-liked one feels well thought of — and it lags, no single day
+    // snapping them to the truth (so a soul can live a while worse-regarded than they really are).
+    #[test]
+    fn the_mirror_reflects_a_cloud_and_lags() {
+        let mut w = World::seed();
+        let g: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (low, high) = (g[0], g[1]);
+        w.agents[low].standing = 10;
+        w.agents[low].suspicion = 60;
+        w.agents[high].standing = 90;
+        for &j in &g { if j != high { w.nudge_aff(j, high, 45); } }
+
+        // one day's move is bounded — the mirror lags, it does not snap
+        update_self_regard(&mut w, 1);
+        assert!(w.agents[low].seen_as.abs() <= 12, "the mirror lags: one day moves it only so far");
+
+        for day in 2..=18 { update_self_regard(&mut w, day); }
+        assert!(w.agents[low].seen_as <= -30, "a low, suspected soul comes to feel ill-regarded, got {}", w.agents[low].seen_as);
+        assert!(w.agents[high].seen_as >= 20, "a high, well-liked soul comes to feel well thought of, got {}", w.agents[high].seen_as);
     }
 }

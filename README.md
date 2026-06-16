@@ -186,6 +186,25 @@ It runs end to end:
   an injustice *felt happening to them*, not just a rising number. (Mr Vane is living it.) Pure
   deterministic fold; the reflection dossier carries *what they are counting on* so the hour can
   reckon with whether it is holding.
+- **Endogenous aims — souls that initiate** — ambition is no longer only handed to them by
+  circumstance or set by a reflection. In the fold itself a soul may *take up an intention of
+  their own*: a **carried wound** (a slight, a betrayal) still gripping can harden into a
+  **declared enmity** — they come to count the one who dealt it an enemy and press it toward
+  satisfaction (memory becoming initiative) — and a striver of the right cut (the improver, the
+  ambitious farmer) may set themselves a **bold venture** out of sheer disposition, no one bidding
+  them. Each is then pursued across days by the same feud/plan machinery that drives every aim to
+  its public reckoning. They spare their own hearth (no enmity against spouse or blood).
+- **The recursive social mirror — what they think others think of them** — each soul carries a
+  read of *how they imagine the parish regards them* — not their real standing, but their belief
+  about others' minds, recursed. It **lags and distorts** the truth by disposition: the
+  thin-skinned over-read a slight and discount the warmth they're shown (and so live
+  worse-regarded than they are); the thick-skinned barely register either. Feeling ill-thought-of
+  sinks the spirits. And under a killing it turns **self-fulfilling and tragic**: a soul who
+  believes the parish already takes them for the murderer carries themselves furtively — won't
+  meet an eye, starts at a question — and the parish reads the furtiveness as a guilty conscience,
+  so the suspicion they dread helps make itself true. Shown on each soul's page as **How they feel
+  themselves seen**, and injected into reflection so the hour reckons with whether it is true or a
+  thing they only fear. (Mr Vane, under his cloud, feels the parish turning on him — and it is.)
 - **Gossip diffusion** — salient events become news that spreads one hop a day across
   a channelled social graph (the vet fast across farms, the parson across homes, the
   servants' grapevine between drawing-rooms ×market-day, the Pelican among the men, the
