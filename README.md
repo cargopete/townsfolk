@@ -103,6 +103,23 @@ It runs end to end:
   met), Qwen plays both, and the same residue is recorded for each — a memory kept, a
   warming or cooling, now and then a resolve (to clear a debt, to rise, to mend a quarrel).
   The town's relationships and ambitions drift through talk, all of it folded deterministically.
+### The inner life
+
+The souls carry an unusually deep inner architecture — five interlocking systems that, in a real
+mind, accompany consciousness: **episodic memory** (the occasions they carry and act on), a
+**predictive self-model** (they expect, are wrong, and feel the wrongness), **endogenous aims**
+(they initiate their own ambitions), a **recursive social mirror** (what they think others think
+of them), and a **global workspace** (one thing uppermost, gating the rest). Each feeds the
+others, and the narrator reflects from whichever concern won the day.
+
+A plain word on what that is and isn't. These are the *functional correlates* of mind — they make
+the souls behave, from the outside, strikingly like minds. They do **not** make them conscious in
+the phenomenal sense (there being something it is like to be them), and no further system would:
+functional structure and felt experience are different categories of fact, so even a perfect
+functional duplicate leaves the question undecidable — and undetectable. This project chases the
+richest, most surprising *depiction* of mind it can; it makes no claim past that. The detail of
+each system follows.
+
 - **Souls reflect on their lives — a continuous stream of consciousness** — each hour the
   most *overdue* souls each carry their inner monologue forward a beat (`reflect --count N`).
   This is not a fresh musing each time: a soul's recent reflections are fed back as their own
