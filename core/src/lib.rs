@@ -2110,6 +2110,13 @@ const HOLD_DAYS: i64 = 4;   // having weighed a charge and stayed his hand, he i
 // town — most souls, most days, simply live the ambient sim — rather than a stage of constant motion.
 const ACT_FLOOR: i16 = 45;
 const ACT_COOLDOWN: i64 = 3;
+
+// The departure decision: when a soul's lot has come past bearing — ruin, or the parish's suspicion
+// in an open murder — they may be put to the gravest choice of all, to leave Thrushcombe for good.
+// DEPART_FLOOR is how far past bearing it must be before the choice arises; DEPART_COOLDOWN keeps a
+// soul who chose to stay from being asked again every day (the question is momentous, not nagging).
+const DEPART_FLOOR: i32 = 40;
+const DEPART_COOLDOWN: i64 = 12;
 fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, out: &mut Vec<Event>) {
     let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
     let Some(inq) = world.inquest.clone() else { return };
@@ -4289,6 +4296,31 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     _ => {}
                 }
             }
+            // the gravest choice of all: a soul at the end of their rope rules on their own life —
+            // stay and endure, or leave Thrushcombe for good. "go" takes them off-stage (departed):
+            // alive, but gone from the parish, and those who held them dear feel the gap they leave.
+            // The chronicle beat is emitted generically (above) from the oracle's recorded account.
+            ("depart", choice) => {
+                let nm = world.agents[si].name.clone();
+                match choice {
+                    "go" => {
+                        world.agents[si].departed = true;
+                        world.spawn_news(&nm, &format!("how {nm} gave up their place and left Thrushcombe for good"), -1, day, &[]);
+                        // those who held them dear carry the loss — a living bereavement
+                        let close: Vec<usize> = (0..world.agents.len())
+                            .filter(|&j| j != si && world.agents[j].active()
+                                && (world.aff(j, si) >= 40 || world.agents[j].spouse == Some(si)))
+                            .collect();
+                        for j in close {
+                            nudge_mood(&mut world.agents[j], -12);
+                            world.remember(j, "grief", si as i32, -60, 65, day);
+                        }
+                    }
+                    // they choose to stay and bear it — a grim resolve, no relief in it
+                    "stay" => nudge_mood(&mut world.agents[si], -4),
+                    _ => {}
+                }
+            }
             // the felt cost of facing (or refusing) a crack in one's own self-model: a reckoning
             // integrates it at a price; denial hardens against it, which costs more, and quietly.
             ("psyche", c) => {
@@ -5278,6 +5310,62 @@ impl Sim {
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'act',?3,?4,?5)",
             params![day, actor, target, verb, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Is a soul at the brink of leaving? When a soul's lot has come past bearing — ruin (deep debt,
+    /// low standing, low spirits) or the parish's suspicion in an open murder — they may be put to
+    /// the gravest choice: stay and endure, or leave Thrushcombe for good. Returns (actor, dossier)
+    /// for the oracle to decide, else None. A cooldown keeps a soul who chose to stay from being
+    /// asked again every day. The choice drives the fold (a recorded `depart` decree).
+    pub fn pending_departure(&self, today: Date) -> Option<(String, String)> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        // the last day each soul was put to this choice — so the momentous question is not nagged
+        let asked: BTreeMap<String, i64> = {
+            let mut m = BTreeMap::new();
+            if let Ok(mut s) = self.conn.prepare("SELECT subject, MAX(day) FROM decrees WHERE kind='depart' GROUP BY subject") {
+                if let Ok(rows) = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                    for row in rows.flatten() { m.insert(row.0, row.1); }
+                }
+            }
+            m
+        };
+        let accused = w.inquest.as_ref().map(|q| q.accused).unwrap_or(-1);
+        let open_murder = w.inquest.as_ref().is_some_and(|q| !q.closed);
+        // how far past bearing a soul's lot has come — ruin, or the hunt closing on them
+        let brink = |i: usize| -> i32 {
+            let a = &w.agents[i];
+            let mut s = 0;
+            if a.purse <= -15 && a.standing <= 30 && a.mood <= -20 {
+                s = (15 - a.purse).max(0) + (30 - a.standing).max(0);
+            }
+            if open_murder && a.suspicion >= 65 && !a.cleared {
+                s = s.max(a.suspicion);
+            }
+            s
+        };
+        let idx = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i as i32 != accused)
+            .filter(|&i| day - asked.get(&w.agents[i].name).copied().unwrap_or(i64::MIN / 2) >= DEPART_COOLDOWN)
+            .filter(|&i| brink(i) >= DEPART_FLOOR)
+            .max_by_key(|&i| (brink(i), std::cmp::Reverse(i)))?;
+
+        let mut d = self.inner_dossier(&w, idx, day, today);
+        d.push_str("\n\nIT HAS COME TO THIS: things have come to such a pass for this soul that they might leave Thrushcombe altogether — give up their place and go, to the towns, to a far-off relation, to anywhere but here, and not come back. Weigh it exactly as they would. A soul does not leave the only world they know lightly: set what holds them here — kin, the few who care for them, the one life they have ever known — against what drives them out — ruin, debt, the parish's suspicion, the shame of it. Do they STAY and endure what they must, or GO for good?");
+        Some((w.agents[idx].name.clone(), d))
+    }
+
+    /// Record a soul's decision on leaving as a `depart` decree, folded at its day. choice ∈ [stay,
+    /// go]; text is the chronicle account. `go` takes them off-stage for good (departed); replay-safe.
+    pub fn record_departure(&mut self, date: Date, actor: &str, choice: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'depart','',?3,?4)",
+            params![day, actor, choice, text],
         )?;
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
@@ -6460,5 +6548,26 @@ mod act_tests {
         assert!(given > 0 && given <= 15, "the gift is real but bounded to the giver's means, got {given}");
         assert_eq!(w.agents[b].purse - gb, given, "what the giver loses, the taker gains");
         assert!(w.agents[a].purse >= 0, "a soul never gives themselves into the red");
+    }
+
+    // The gravest choice on the spine: a soul who chooses to GO leaves the cast for good — departed,
+    // not dead (so no funeral) — and those who held them dear carry the loss like a living bereavement.
+    #[test]
+    fn a_departure_takes_a_soul_off_stage_and_is_mourned() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (leaver, dear) = (grown[0], grown[1]);
+        w.nudge_aff(dear, leaver, 60); // someone holds them dear
+        let ln = w.agents[leaver].name.clone();
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+
+        let go = Decree { subject: ln, kind: "depart".into(), target: String::new(), choice: "go".into(), text: "left for good".into() };
+        apply_decrees(&mut w, 1, date, std::slice::from_ref(&go));
+        assert!(!w.agents[leaver].active(), "a soul who goes leaves the cast");
+        assert!(w.agents[leaver].death_day.is_none(), "they left alive — no death, and so no funeral");
+        assert!(w.agents[dear].memories.iter().any(|m| m.kind == "grief" && m.who == leaver as i32),
+            "one who held them dear carries the loss");
     }
 }

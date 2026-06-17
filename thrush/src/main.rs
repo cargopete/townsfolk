@@ -150,6 +150,14 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         count: i64,
     },
+    /// Put the gravest choice to a soul at the end of their rope: when ruin or the parish's suspicion
+    /// has driven them past bearing, the oracle decides — in their own character — whether they STAY
+    /// and endure, or GO and leave Thrushcombe for good (off-stage, alive). Recorded and folded.
+    Depart {
+        /// How many souls at the brink to put to the choice this run (each the next most desperate).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -440,6 +448,25 @@ fn parse_act(p: &serde_json::Value, names: &[String]) -> Option<(String, String,
     // a directed act with no real soul to act upon is no act at all — keep the world honest
     if act != "withdraw" && who.is_empty() { act = "withdraw".into(); }
     Some((account, act, who))
+}
+
+// ------------------------------------------------------------------ leaving the parish
+// The gravest decision on the same spine: a soul driven past bearing by ruin or suspicion rules on
+// their own life — stay and endure, or go for good. `go` takes them off-stage (departed). The
+// world never empties a soul out of the parish on a malformed verdict — it defaults to `stay`.
+const DEPART_PROMPT: &str = "You decide, in their own character, whether one soul of Thrushcombe St Mary — a 1934 West-Country market town — leaves the parish for good. Things have come to a hard pass for them: ruin, or the town's suspicion under an open murder. You are given who they are and all that weighs on them. Weigh it exactly as THEY would, by their station, their ties, their temper — a soul does not give up the only world they know lightly, yet ruin or a frightened parish's suspicion has sent many a one to the railway station with a single case and no looking back. There is no right answer — only theirs. \
+Give ONLY a JSON object: {\"account\": a record of what they resolve and why, 1 to 3 sentences, third person, period chronicle voice, no quotation marks and no preamble; \"choice\": EXACTLY one of [stay, go] — stay to remain in Thrushcombe and endure what they must, go to leave it for good}.";
+
+/// Validate a departure verdict: (account, choice∈[stay,go]). Defaults to `stay` if the oracle names
+/// no clear choice — a soul is never turned out of the parish on an ambiguous verdict. None if empty.
+fn parse_departure(p: &serde_json::Value) -> Option<(String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let c = p.get("choice").and_then(|v| v.as_str()).unwrap_or("stay").trim().to_lowercase();
+    let choice = if c.contains("go") && !c.contains("stay") { "go" } else { "stay" }.to_string();
+    Some((account, choice))
 }
 
 const INTROSPECT_PROMPT: &str = "You voice the deepest hour of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the hour they step back from the day's passing thoughts and take stock of their whole self. You are given who they are, who they have so far taken themselves to be, the recent run of their thinking, what has befallen them, and the souls who weigh on them with whatever they have believed of each. Wholly in their period voice and true to their station and schooling (they know only the world of 1934 and their own parish), do three things: \
@@ -927,6 +954,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     None => {
                         eprintln!("oracle unavailable — the soul does not stir this hour.");
+                        break;
+                    }
+                }
+            }
+        }
+        Cmd::Depart { count } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            for _ in 0..count.max(1) {
+                let Some((actor, dossier)) = sim.pending_departure(t) else {
+                    println!("No soul is at the brink of leaving — the parish holds them yet.");
+                    break;
+                };
+                let raw = claude_json(DEPART_PROMPT, &format!("{dossier}\n\nDecide: do they stay, or go?"));
+                match raw.as_ref().and_then(parse_departure) {
+                    Some((account, choice)) => {
+                        sim.record_departure(t, &actor, &choice, &account)?;
+                        sim.catch_up(today(), cur_phase())?; // fold it — a leaving is for good
+                        println!("Departure [{actor} · {choice}]: {account}");
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the soul cannot bring themselves to decide.");
                         break;
                     }
                 }
