@@ -140,6 +140,16 @@ enum Cmd {
     /// want of proof), or WIDEN (refuse the fixation, question the parish anew). The ruling drives the
     /// world: an accusation is a real charge, recorded and folded. No proof exists — only his judgement.
     Judge,
+    /// Let the pressed souls act of their own accord: those whom something grips (a preoccupation
+    /// that fills the mind, or a plan ripe for a move) take ONE plain townsperson's action of the
+    /// oracle's choosing — call, confront, court, offer, reconcile, or withdraw — and it drives the
+    /// world (warming or souring ties, money, a grudge let go), recorded and folded. A cooldown and
+    /// a pressedness floor keep the town calm: most souls, most days, simply live the ordinary sim.
+    Act {
+        /// How many pressed souls to move this run (each the next most-pressed who has not lately acted).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -478,6 +488,62 @@ fn parse_judgment(p: &serde_json::Value) -> Option<(String, String)> {
     let r = p.get("ruling").and_then(|v| v.as_str()).unwrap_or("hold").trim().to_lowercase();
     let ruling = ["accuse", "widen", "hold"].iter().find(|o| r.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "hold".into());
     Some((account, ruling))
+}
+
+// ------------------------------------------------------------------ a soul's own action
+// The general lever: a pressed soul is given their whole inner state and a menu of plain acts, and
+// the oracle chooses — in that soul's own character — what they DO. The choice drives the world
+// (a recorded `act` decree, folded to a bounded consequence). Narrator becomes agent.
+const ACT_PROMPT: &str = "You move one soul of Thrushcombe St Mary, a 1934 West-Country market town. You are given who they are, all that grips and weighs on them, and the souls in their life. Something has moved them today to act. Choose what THIS soul — as they truly are, of their station and temper and present feeling — would actually do: ONE plain action of the sort a townsperson takes, or none at all. Do not make them bold if they are timid, or generous if they are hard, or forgiving if the wound is fresh; let the action follow from the person and what presses on them. \
+Give ONLY a JSON object: {\"account\": a record of what they did and why, 1 to 3 sentences, third person, in the period chronicle voice, no quotation marks and no preamble; \"act\": EXACTLY one of [call, confront, court, offer, reconcile, withdraw]; \"who\": the EXACT name (from those listed in the dossier) of the one soul they act upon, or \"\" if they withdraw}.";
+
+/// One soul's chosen action from the local Qwen oracle — raw JSON {account,act,who}.
+fn act_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
+    let body = serde_json::json!({
+        "model": model, "system": ACT_PROMPT,
+        "prompt": format!("{dossier}\n\nChoose what they do."),
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.9 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+}
+
+/// One soul's chosen action from Claude (Haiku) — sharper voice; tallies token cost. None → Qwen.
+fn act_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
+    let body = serde_json::json!({
+        "model": model, "max_tokens": 512, "system": ACT_PROMPT,
+        "messages": [{ "role": "user", "content": format!("{dossier}\n\nChoose what they do. Respond only with the JSON object.") }],
+    });
+    let resp: serde_json::Value = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
+        .send_json(body).ok()?.into_json().ok()?;
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
+    let text = resp.get("content")?.as_array()?.iter()
+        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
+        .next()?;
+    serde_json::from_str(&extract_json(text)?).ok()
+}
+
+/// Validate an action: (account, act∈menu, who→a living name or ""). A targeted act that names no
+/// valid soul falls back to `withdraw` — the world never acts on a phantom. None if the account is empty.
+fn parse_act(p: &serde_json::Value, names: &[String]) -> Option<(String, String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let a = p.get("act").and_then(|v| v.as_str()).unwrap_or("withdraw").trim().to_lowercase();
+    let mut act = ["confront", "reconcile", "withdraw", "call", "court", "offer"].iter()
+        .find(|o| a.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "withdraw".into());
+    let raw = p.get("who").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let who = if raw.is_empty() { String::new() }
+        else { names.iter().find(|n| n.as_str() == raw || raw.contains(n.as_str()) || n.eq_ignore_ascii_case(&raw)).cloned().unwrap_or_default() };
+    // a directed act with no real soul to act upon is no act at all — keep the world honest
+    if act != "withdraw" && who.is_empty() { act = "withdraw".into(); }
+    Some((account, act, who))
 }
 
 const INTROSPECT_PROMPT: &str = "You voice the deepest hour of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the hour they step back from the day's passing thoughts and take stock of their whole self. You are given who they are, who they have so far taken themselves to be, the recent run of their thinking, what has befallen them, and the souls who weigh on them with whatever they have believed of each. Wholly in their period voice and true to their station and schooling (they know only the world of 1934 and their own parish), do three things: \
@@ -978,6 +1044,43 @@ fn main() -> Result<(), Box<dyn Error>> {
                             println!("Ruling [{mag} · {ruling} · re {suspect}]: {account}");
                         }
                         None => eprintln!("oracle unavailable — the magistrate reserves his judgement this day."),
+                    }
+                }
+            }
+        }
+        Cmd::Act { count } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let names: Vec<String> = sim.world_snapshot(t).agents.iter()
+                .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
+            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+            let spend = spend_file(&cli.db);
+            let today_str = t.to_string();
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            for _ in 0..count.max(1) {
+                let Some((actor, dossier)) = sim.action_subject(t) else {
+                    println!("No soul is pressed to act just now — the town is at its ordinary business.");
+                    break;
+                };
+                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                    .and_then(|key| act_claude(&agent, &key, &dossier, &spend, &today_str))
+                    .or_else(|| {
+                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                        act_qwen(&agent, &host, &model, &dossier)
+                    });
+                match raw.as_ref().and_then(|v| parse_act(v, &names)) {
+                    Some((account, act, who)) => {
+                        sim.record_act(t, &actor, &act, &who, &account)?;
+                        sim.catch_up(today(), cur_phase())?; // fold the act — its real effect, and the next pick differs
+                        let tail = if who.is_empty() { String::new() } else { format!(" → {who}") };
+                        println!("Act [{actor} · {act}{tail}]: {account}");
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the soul does not stir this hour.");
+                        break;
                     }
                 }
             }

@@ -2103,6 +2103,13 @@ fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>)
 /// is the oracle's — recorded as a `judgment` decree and folded like any other. See pending_judgment.
 const JUDGE_AT: i32 = 75;   // the cloud over the lead suspect at which the magistrate is summoned to a ruling
 const HOLD_DAYS: i64 = 4;   // having weighed a charge and stayed his hand, he is not pressed again for this long
+
+// The general act loop: a soul is moved to take an outward action only when something genuinely
+// grips them (a preoccupation that fills the mind, or a plan ripe for a move) past ACT_FLOOR, and
+// only if they have not acted within ACT_COOLDOWN days. Both gates keep the town a quiet market
+// town — most souls, most days, simply live the ambient sim — rather than a stage of constant motion.
+const ACT_FLOOR: i16 = 45;
+const ACT_COOLDOWN: i64 = 3;
 fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, out: &mut Vec<Event>) {
     let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
     let Some(inq) = world.inquest.clone() else { return };
@@ -4216,6 +4223,72 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     world.inquest = Some(inq);
                 }
             }
+            // a plain townsperson's action, chosen by the oracle in the soul's own character: the
+            // general lever by which a pressed soul authors their own next move. subject = the actor;
+            // target = the soul acted upon (none for withdraw); verb = the choice. The *decision* is
+            // the oracle's; each consequence is fixed and small here, so a town of choices stays sound.
+            // The chronicle beat is emitted generically (above) from the oracle's recorded account.
+            // Every act deposits a memory in the OTHER soul too — so an action begets a reaction: the
+            // target now carries it, which may raise their own focus and move them to act in turn.
+            ("act", verb) => {
+                let an = world.agents[si].name.clone();
+                let tn = ti.map(|t| world.agents[t].name.clone()).unwrap_or_default();
+                match verb {
+                    // a friendly call: warmth both ways, and a kindness the other will carry
+                    "call" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                        world.nudge_aff(si, t, 10);
+                        world.nudge_aff(t, si, 8);
+                        nudge_mood(&mut world.agents[si], 6);
+                        nudge_mood(&mut world.agents[t], 8);
+                        world.remember(t, "reprieve", si as i32, 40, 45, day);
+                        world.spawn_news(&an, &format!("{an}'s friendly call on {tn}"), 1, day, &[]);
+                    },
+                    // having it out: the relief of saying it, at the cost of the tie — and a slight the other keeps
+                    "confront" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                        world.nudge_aff(si, t, -8);
+                        world.nudge_aff(t, si, -14);
+                        nudge_mood(&mut world.agents[si], 4);
+                        nudge_mood(&mut world.agents[t], -10);
+                        world.remember(t, "snub", si as i32, -50, 55, day);
+                        world.spawn_news(&an, &format!("the hard words {an} had with {tn}"), -2, day, &[]);
+                    },
+                    // paying court: a strong reaching-out, warmly remembered
+                    "court" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                        world.nudge_aff(si, t, 22);
+                        world.nudge_aff(t, si, 10);
+                        nudge_mood(&mut world.agents[si], 8);
+                        world.remember(t, "reprieve", si as i32, 50, 55, day);
+                        world.spawn_news(&an, &format!("{an}'s attentions to {tn}"), 1, day, &[]);
+                    },
+                    // a material offer within their means: it costs the giver, lifts the taker, raises a name
+                    "offer" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                        let amt = if world.agents[si].purse >= 5 { (world.agents[si].purse / 4).clamp(3, 15) } else { 0 };
+                        world.agents[si].purse -= amt;
+                        world.agents[t].purse += amt;
+                        world.nudge_aff(t, si, 14);
+                        nudge_mood(&mut world.agents[t], 8);
+                        clamp_standing(&mut world.agents[si], 1);
+                        world.remember(t, "reprieve", si as i32, 45, 50, day);
+                        world.spawn_news(&an, &format!("the offer {an} made to {tn}"), 1, day, &[]);
+                    },
+                    // mending: warmth both ways, the grudge let go, the old slights between them released
+                    "reconcile" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                        world.nudge_aff(si, t, 16);
+                        world.nudge_aff(t, si, 14);
+                        nudge_mood(&mut world.agents[si], 10);
+                        nudge_mood(&mut world.agents[t], 10);
+                        if world.agents[si].rival == t as i32 { world.agents[si].rival = -1; }
+                        if world.agents[t].rival == si as i32 { world.agents[t].rival = -1; }
+                        world.agents[si].memories.retain(|m| !(m.kind == "snub" && m.who == t as i32));
+                        world.remember(si, "reprieve", t as i32, 45, 50, day);
+                        world.remember(t, "reprieve", si as i32, 45, 50, day);
+                        world.spawn_news(&an, &format!("the mending between {an} and {tn}"), 1, day, &[]);
+                    },
+                    // keeping to themselves: no outward move, the thing nursed alone a little deeper
+                    "withdraw" => nudge_mood(&mut world.agents[si], -4),
+                    _ => {}
+                }
+            }
             // the felt cost of facing (or refusing) a crack in one's own self-model: a reckoning
             // integrates it at a price; denial hardens against it, which costs more, and quietly.
             ("psyche", c) => {
@@ -5038,6 +5111,16 @@ impl Sim {
                 let jitter = (i as u64 ^ salt).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33;
                 (since, jitter)
             })?;
+        let dossier = self.inner_dossier(&w, idx, day, today);
+        Some(ReflectSubject { name: w.agents[idx].name.clone(), dossier })
+    }
+
+    /// The full inner dossier of a soul — who they are, their ties and grudges, their plan if any,
+    /// the life behind them, the self-model they reason from, their theory of others, what has lately
+    /// befallen them, what they carry as episodic memory, how they feel themselves seen, what is
+    /// uppermost in their mind, what they are counting on, and the thread of their recent thinking.
+    /// Shared by reflection, consolidation, and action — the one place a soul is written out whole.
+    fn inner_dossier(&self, w: &World, idx: usize, day: i64, today: Date) -> String {
         let ag = &w.agents[idx];
         let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
             "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
@@ -5133,7 +5216,72 @@ impl Sim {
             let lines: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
             if !lines.is_empty() { dossier.push_str(&format!(" About the parish lately: {}", lines.join(" "))); }
         }
-        Some(ReflectSubject { name: ag.name.clone(), dossier })
+        dossier
+    }
+
+    /// Pick the soul most *pressed to act*, and lay out what they might do. A soul is moved to act
+    /// when something grips them — a preoccupation that fills the mind, or a plan ripe for a move —
+    /// and they have not lately acted (a cooldown keeps the town from a frenzy). Returns (actor,
+    /// dossier): their whole inner state, the menu of plain townsperson's acts, and the souls they
+    /// might act upon. The oracle chooses what they DO — and that choice drives the fold, recorded as
+    /// an `act` decree. This is the general lever: every pressed soul authoring their own next move.
+    pub fn action_subject(&self, today: Date) -> Option<(String, String)> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let acted = self.last_acted().unwrap_or_default();
+        // how hard a soul is pressed to act: the grip of what fills their mind, or a ripe resolve
+        let imp = |i: usize| -> i16 {
+            let a = &w.agents[i];
+            let focus = if a.focus.topic.is_empty() { 0 } else { a.focus.intensity };
+            let aim = if a.intent != 0 && a.intent_age >= 4 { 50 } else { 0 };
+            focus.max(aim)
+        };
+        let idx = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .filter(|&i| imp(i) >= ACT_FLOOR)
+            .filter(|&i| day - acted.get(&w.agents[i].name).copied().unwrap_or(i64::MIN / 2) >= ACT_COOLDOWN)
+            .max_by_key(|&i| (imp(i), std::cmp::Reverse(i)))?;
+
+        let mut d = self.inner_dossier(&w, idx, day, today);
+
+        // the souls they might act upon — those close, those at odds, their rival, their spouse, and
+        // the one their mind is fixed on. The oracle must choose a target from among these living.
+        let mut cand: Vec<usize> = Vec::new();
+        cand.extend(w.ties(idx, true, 3).into_iter().map(|(j, _)| j));
+        cand.extend(w.ties(idx, false, 3).into_iter().map(|(j, _)| j));
+        if w.agents[idx].rival >= 0 { cand.push(w.agents[idx].rival as usize); }
+        if let Some(s) = w.agents[idx].spouse { cand.push(s); }
+        if w.agents[idx].focus.target >= 0 { cand.push(w.agents[idx].focus.target as usize); }
+        cand.retain(|&j| j != idx && w.agents.get(j).is_some_and(|a| a.active()));
+        cand.sort_unstable(); cand.dedup();
+        let people = cand.iter().map(|&j| w.agents[j].name.clone()).collect::<Vec<_>>().join(", ");
+
+        d.push_str(&format!(
+            "\n\nWHAT DO THEY DO NOW? Being so moved, this soul may take ONE plain action of the sort a townsperson takes — or none at all. Choose only what THIS soul, as they are and feel, would truly do today:\n  · call — pay a friendly call on someone, to warm or keep a tie\n  · confront — have it out with one they are at odds with, and say their piece\n  · court — pay court to one they are drawn to\n  · offer — make a material offer within their means: a gift, a loan, the promise of work, a bargain\n  · reconcile — go to mend a broken tie or put down a grudge\n  · withdraw — do nothing outward; keep to themselves and bear it alone\nThe soul they act upon must be one of the living named here: {people}. If they withdraw, name no one."
+        ));
+        Some((w.agents[idx].name.clone(), d))
+    }
+
+    /// The last day each soul took an outward action — for the cooldown that keeps the town calm.
+    fn last_acted(&self) -> rusqlite::Result<BTreeMap<String, i64>> {
+        let mut stmt = self.conn.prepare("SELECT subject, MAX(day) FROM decrees WHERE kind='act' GROUP BY subject")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect()
+    }
+
+    /// Record a soul's chosen action as an `act` decree, folded at its day. verb ∈ [call, confront,
+    /// court, offer, reconcile, withdraw]; target is the soul acted upon (or "" for withdraw); text
+    /// is the chronicle account, read out as the beat. The fold turns it into a bounded, real
+    /// consequence (see apply_decrees). Replay-safe: the act is recorded, and re-folds read it back.
+    pub fn record_act(&mut self, date: Date, actor: &str, verb: &str, target: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'act',?3,?4,?5)",
+            params![day, actor, target, verb, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
     }
 
     /// Assemble the soul whose inner life is most overdue for consolidation — to step back from
@@ -6249,5 +6397,68 @@ mod workspace_tests {
         };
         assert!(!setup(true), "a mind filled with grief takes up no new enmity");
         assert!(setup(false), "an easy mind, carrying the same grievance, does take it up");
+    }
+}
+
+#[cfg(test)]
+mod act_tests {
+    use super::*;
+
+    // A soul's chosen action is no mere narration: it moves the world by a fixed, bounded amount,
+    // and — crucially — it deposits a memory in the OTHER soul, so an action begets a reaction. A
+    // confront leaves a slight the other now carries; a reconcile mends the tie and lets the grudge go.
+    #[test]
+    fn an_act_moves_the_world_and_is_carried_by_the_other() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (a, b) = (grown[0], grown[1]);
+        let an = w.agents[a].name.clone();
+        let bn = w.agents[b].name.clone();
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+
+        // they are at odds: a declared grudge, a soured tie, a remembered slight
+        w.nudge_aff(a, b, -60);
+        w.nudge_aff(b, a, -60);
+        w.agents[a].rival = b as i32;
+        w.remember(a, "snub", b as i32, -60, 70, 0);
+
+        // a confront leaves a fresh slight the OTHER now carries — the reaction seed that may move them
+        let confront = Decree { subject: an.clone(), kind: "act".into(), target: bn.clone(), choice: "confront".into(), text: "had words".into() };
+        apply_decrees(&mut w, 1, date, std::slice::from_ref(&confront));
+        assert!(w.agents[b].memories.iter().any(|m| m.kind == "snub" && m.who == a as i32),
+            "the one confronted carries the slight — action begets reaction");
+
+        // a reconcile mends the soured tie both ways and lets the grudge go
+        let before = w.aff(a, b);
+        let reconcile = Decree { subject: an.clone(), kind: "act".into(), target: bn.clone(), choice: "reconcile".into(), text: "made peace".into() };
+        apply_decrees(&mut w, 2, date, std::slice::from_ref(&reconcile));
+        assert!(w.aff(a, b) > before, "reconciling warms the soured tie");
+        assert_eq!(w.agents[a].rival, -1, "the grudge is let go");
+        assert!(!w.agents[a].memories.iter().any(|m| m.kind == "snub" && m.who == b as i32),
+            "the old slights between them are released");
+    }
+
+    // An offer moves money within the giver's means — never beyond — and the taker is the better for it.
+    #[test]
+    fn an_offer_moves_money_within_means() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (a, b) = (grown[0], grown[1]);
+        w.agents[a].purse = 40;
+        w.agents[b].purse = 2;
+        let (an, bn) = (w.agents[a].name.clone(), w.agents[b].name.clone());
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let (ga, gb) = (w.agents[a].purse, w.agents[b].purse);
+
+        let offer = Decree { subject: an, kind: "act".into(), target: bn, choice: "offer".into(), text: "a helping hand".into() };
+        apply_decrees(&mut w, 1, date, std::slice::from_ref(&offer));
+        let given = ga - w.agents[a].purse;
+        assert!(given > 0 && given <= 15, "the gift is real but bounded to the giver's means, got {given}");
+        assert_eq!(w.agents[b].purse - gb, given, "what the giver loses, the taker gains");
+        assert!(w.agents[a].purse >= 0, "a soul never gives themselves into the red");
     }
 }
