@@ -72,13 +72,13 @@ It runs end to end:
   wedding after a proper courtship — or comes to nothing when another gets there first
   or the feeling is never returned. Marriages are no longer sudden; they have a throughline.
 - **The LLM at the hinges** — at a soul's genuine turning point (a long feud that might
-  be forgiven, ruin to be faced, a match across the class line) the choice is put to a
-  local Qwen with that soul's whole **dossier** — who they are, their situation, their
+  be forgiven, ruin to be faced, a match across the class line) the choice is put to the
+  oracle (Sonnet) with that soul's whole **dossier** — who they are, their situation, their
   recent history. It chooses from a fixed vocabulary and writes the line; the verdict is
   **recorded and folded** with a bounded effect, so the decision is the model's but the
   world stays exact. The genuine intelligence, only where it matters.
 - **Speak to a soul** — on the dashboard's *A word…* page you adopt one soul's voice and
-  converse with another; Qwen answers in character, mindful of who's addressing them and
+  converse with another; the oracle answers in character, mindful of who's addressing them and
   what they remember. They are **grounded in 1934 and in their station** — a soul knows
   only what their time and schooling allow (ask a farm lad of a "computer" and he takes it
   for some contraption he's not seen), and their warmth follows their regard and their rank:
@@ -90,7 +90,7 @@ It runs end to end:
   recorded effect enters the fold, so souls genuinely learn from talking while the world
   stays exact.
 - **Set two souls talking** — or stand back entirely: pick *two* souls on the *A word…*
-  page and watch them fall into conversation of their own accord, Qwen playing both in
+  page and watch them fall into conversation of their own accord, the oracle playing both in
   their own voices, mindful of what each remembers of the other. A short exchange unfolds
   a line at a time; when it winds up, the oracle judges the residue for **each** of them —
   a memory kept, a warming or cooling, now and then a change of heart — and **the town
@@ -100,17 +100,28 @@ It runs end to end:
   once and folded deterministically.
 - **Souls talk among themselves** — and not only to you: each day two souls fall into
   conversation of their own accord (a courting pair, friends, rivals, or two who simply
-  met), Qwen plays both, and the same residue is recorded for each — a memory kept, a
+  met), the oracle plays both, and the same residue is recorded for each — a memory kept, a
   warming or cooling, now and then a resolve (to clear a debt, to rise, to mend a quarrel).
   The town's relationships and ambitions drift through talk, all of it folded deterministically.
 ### The inner life
 
-The souls carry an unusually deep inner architecture — five interlocking systems that, in a real
-mind, accompany consciousness: **episodic memory** (the occasions they carry and act on), a
-**predictive self-model** (they expect, are wrong, and feel the wrongness), **endogenous aims**
-(they initiate their own ambitions), a **recursive social mirror** (what they think others think
-of them), and a **global workspace** (one thing uppermost, gating the rest). Each feeds the
-others, and the narrator reflects from whichever concern won the day.
+The souls carry an unusually deep inner architecture — interlocking systems that, in a real
+mind, accompany consciousness: **episodic memory** (the occasions they carry and act on) over a
+**lifelong store** (the defining moments of a whole life, kept always), a **predictive self-model**
+(they expect, are wrong, and feel the wrongness), **endogenous aims** (they initiate their own
+ambitions), a **recursive social mirror** (what they think others think of them), a **global
+workspace** (one thing uppermost, gating the rest), and **grounded secrets** (a real private truth
+the kernel holds, fed only to that soul, surfacing consistently and never confessed). Each feeds
+the others, and the narrator reflects from whichever concern won the day.
+
+And the oracle no longer only *narrates* — it **decides**. At the real hinges of a life a soul's
+choice is the model's own, authored in character and folded into the world like any event: the
+magistrate rules whether to charge a man (`judge`), a pressed soul takes a plain action of their
+own accord (`act`), one driven past bearing chooses whether to leave the parish for good (`depart`),
+a courted soul answers a proposal (`betroth`), a farmer gambles on the land or plays it safe
+(`gamble`). The spine is always the same — *gate → dossier → bounded choice → recorded decree →
+fixed consequence* — so the decision is genuinely theirs while the world stays exact and replayable.
+Every voice and every choice runs on the **`claude` CLI (Sonnet)** against the local subscription.
 
 A plain word on what that is and isn't. These are the *functional correlates* of mind — they make
 the souls behave, from the outside, strikingly like minds. They do **not** make them conscious in
@@ -132,10 +143,9 @@ each system follows.
   they'd wish; the rest turns outward, to one soul they can't put from their mind, the town,
   the season's work. The oracle gets their whole dossier — standing, purse, spirits, ties,
   recent days, what they carry of others and of their own past thinking — and answers in
-  their own inward voice, grounded in 1934 and their station. It runs on a **local Qwen by
-  default, or Claude (Haiku) for a sharper inner voice** when an `ANTHROPIC_API_KEY` is set,
-  falling back to Qwen if the key or network is absent — either way the thought is recorded
-  once and replayed, so determinism holds. The thought becomes **self-memory** (carried into
+  their own inward voice, grounded in 1934 and their station. It runs on the **`claude` CLI
+  (Sonnet)** against the local subscription — the thought is recorded once and replayed, so
+  determinism holds. The thought becomes **self-memory** (carried into
   their next talk and next hour, so reflection compounds), and its residue folds in with real
   teeth: a settling of spirits, a turn of ambition, and now and then a *hardened feeling about
   one named soul* — a warmer or colder regard, or a resolve to **pay court**, to **set
@@ -186,7 +196,26 @@ each system follows.
   soul's page shows **What they carry**. A **repressed engram** (`providence haunt`) is the darkest
   case: a charged dread with *no face to it*, that **never fades** and **surfaces unbidden** as a
   mood that dips with no occasion — carried without the kernel ever recording its cause, so neither
-  the parish nor the chronicle can know what sits behind it. (Mrs Clewes carries one.)
+  the parish nor the chronicle can know what sits behind it. (Miss Clewes carries one.)
+- **Lifelong memory — the autobiography a continuous self rests on** — the working store above
+  turns over within weeks, which is right for *what grips them now* but wrong for *who the years
+  made them*. So the **defining** moments — a bereavement, a match, the day one stood accused, a
+  buried thing — are **consolidated the instant they happen into a separate lifelong store**, at
+  full strength, and carried for the whole of the life: it does not fade, only fills (capped to the
+  several dozen most defining). It is **fold state, deterministic** — and it is injected into a
+  soul's reflection and talk as *the shape of their life*, dated by how long ago, so a soul can
+  reach back past the last fortnight to the load-bearing memories of who they are. Each soul's page
+  shows **The shape of their life**. (A passing slight is not so kept — only what truly formed them.)
+- **Grounded secrets — a real, consistent private self** — a soul's hidden depths used to be
+  *confabulated fresh each call* (lovely, but untrue and different every time). Now a soul can carry
+  a **grounded private truth the kernel holds** (`providence secret`) — a real fact fed **only into
+  their own inner life**, so it surfaces the *same* way in every reflection, act and conversation,
+  and is never shown to another soul or any public page. The **murderer carries theirs as a buried
+  truth**: the kernel records who *actually* did it (`Inquest.culprit`, hidden), and that soul's
+  guilt is framed as **repressed** — it leaks as dread and compulsion but is **never plainly
+  confessed**, even pressed. By design the town's evidence (a thread, the statements) is too thin to
+  reach it, so suspicion stays on the scapegoat: *we* know, the parish never can. (Miss Clewes
+  killed Mr Quint; the grey thread on his coat is the one real clue, and it is not enough.)
 - **A predictive self-model — surprise as the engine** — beyond carrying the past, a soul now
   *expects* things of the future and can be **wrong**. Each holds a few **expectations** with a
   confidence — how a close friend or rival will go on regarding them, and (under an open killing)
@@ -307,9 +336,9 @@ each system follows.
   romance are *made* at the market, after church, and over the Pelican's beer:
   courtships, affairs, drink, debt, airs. Each rumour spreads by diffusion and works
   on the relationship ledger.
-- **Narration oracle** — a capped local Qwen renders the salient beats in voice,
-  async and recorded, so replay stays deterministic.
-- **Wildcard happenings** — now and then Qwen *invents* a one-off incident (a fire, a
+- **Narration oracle** — the `claude` CLI (Sonnet) renders the salient beats in voice,
+  recorded, so replay stays deterministic.
+- **Wildcard happenings** — now and then the oracle *invents* a one-off incident (a fire, a
   windfall, a travelling fair, a blight, a scandal, a stranger, a foundling, a wonder)
   and picks an effect-*kind* from a fixed vocabulary; the host applies a bounded,
   deterministic consequence (a fire costs someone, a fair lifts the town, a windfall
@@ -329,12 +358,12 @@ thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wa
 thrush weather                           # record Sofia's real sky for the days ahead
 thrush tick                              # advance the chronicle to the current phase
 thrush jump --days 1                     # jump the town forward N whole days (lived in full)
-thrush narrate                           # render new salient beats in voice (local Qwen)
-thrush wildcard                          # now and then, let Qwen invent a happening
+thrush narrate                           # render new salient beats in voice (Sonnet, via the claude CLI)
+thrush wildcard                          # now and then, let the oracle invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
 thrush reflect --count 6                 # advance several souls' streams of consciousness a beat
 thrush introspect --count 2              # a soul consolidates self-model & theory of mind
-thrush biography --limit 60              # write the lives of souls who lack one (Claude/Qwen)
+thrush biography --limit 60              # write the lives of souls who lack one
 thrush status                            # the town at a glance
 thrush watch                             # detailed live TUI — scroll the cast (↑/↓), q to quit
 
@@ -350,8 +379,16 @@ thrush providence investigate --target "Major Pringle"   # name who leads the of
 thrush providence inquiry                                # outcry: the magistrate must question all
 thrush providence appoint --target "Mr Tallin" --note "the bank's business" --amount 8
 thrush providence haunt   --target "Miss Clewes" --amount 90  # lay a buried, faceless dread (never fades, surfaces unbidden, no public trace)
+thrush providence secret  --target "Miss Clewes" --amount 1 --note "it was your hand…"  # ground a hidden truth; --amount 1 = the true killer
 thrush providence funeral --target "Mr Quint"            # the parish gathers to bury its dead
 thrush interrogate --count 3             # the magistrate takes statements while a murder is open
+
+# the oracle decides, not just narrates — each choice is the model's, in character, folded as a decree:
+thrush judge                             # the magistrate rules: accuse | hold | widen (no proof, only his judgement)
+thrush act --count 2                     # a pressed soul takes a plain action of their own accord
+thrush depart --count 1                  # a soul driven past bearing decides whether to leave for good
+thrush betroth --count 1                 # a courted soul answers a ripe proposal: accept | refuse
+thrush gamble --count 1                  # a farmer weighs a gamble on the land against the sure return
 
 thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717
 ```
@@ -360,13 +397,16 @@ The town can run itself on an **hourly** systemd user timer — see [`ops/`](ops
 beat catches the town up to the current phase, fetches the weather, narrates the new
 events, and lets the town's inner life turn over — a wildcard or a turning point now and
 then, two souls falling into talk, the most-overdue souls taking an hour to reflect and to
-consolidate their sense of self, and — while a murder is open — the magistrate questioning a
-few more souls. Idempotent and self-healing across missed hours. Drop an `ANTHROPIC_API_KEY=…`
-line in `ops/secrets.env` (gitignored, loaded by the timer) to back the **reflect**,
-**introspect** and **interrogate** jobs with Claude instead of the local Qwen; everything else
-stays local. Spend is capped per day
-(`ANTHROPIC_DAILY_USD`, default **$1**) — the job tallies each call's real token cost beside
-the db and falls back to the free local Qwen once the day's cap is reached.
+consolidate their sense of self, the pressed souls taking action and the magistrate ruling
+on an open murder, and — while a murder is open — the questioning of a few more souls.
+Idempotent and self-healing across missed hours.
+
+**The oracle is the [`claude` CLI](https://claude.com/claude-code) running Sonnet** against the
+local Claude subscription — *every* voice and choice goes through one shot of `claude -p --model
+sonnet` (system prompt appended, the dossier piped on stdin). No API key, no local Qwen, no
+per-token ledger; `CLAUDE_MODEL` and `CLAUDE_BIN` override the model and binary path (the beat sets
+the latter so a headless service finds it). Each call is recorded and folded, so the world stays
+deterministic and replayable however rich the language gets.
 
 ## The two engines (native ↔ wasm)
 
@@ -413,7 +453,7 @@ policies/       shared no_std crate: every archetype's policy, compiled native A
 wasm-policies/  the behaviour layer as one wasm guest (built by ops/build-wasm.sh)
 thrush/         CLI + detailed ratatui monitor + the wasmtime-backed engine
 web/            thrush-web — dashboard, legends & kinship browser
-llm/            capped, sandboxed local Qwen for narration (the recorded oracle)
+llm/            the recorded-oracle client (now the claude CLI, Sonnet)
 ops/            the daily timer and the wasm build script
 docs/           the design
 ```

@@ -107,6 +107,11 @@ pub struct Agent {
     //     still grip. This is what makes the relationship ledger *personal and remembered*, and
     //     what a soul's stream of consciousness is grounded in. Pure fold state — deterministic. ---
     pub memories: Vec<Memory>,
+    // The autobiography: the defining moments of the whole life — a bereavement, a wedding, the day
+    // accused, a buried thing — consolidated here at full strength the moment they happen, and carried
+    // for life. The working store above turns over within weeks; this does not fade, only fills. It is
+    // what gives a soul a continuous self across the years, not just a memory of the last fortnight.
+    pub lifelong: Vec<Memory>,
     // --- a predictive self-model: the things a soul expects, held with a confidence, that the
     //     world then confirms or violates. Surprise — the gap between what they were sure of and
     //     what came to pass — is the engine: it scales the felt blow (a betrayal stings far past
@@ -323,6 +328,7 @@ impl World {
             suspicion: 0,
             cleared: false,
             memories: Vec::new(),
+            lifelong: Vec::new(),
             expectations: Vec::new(),
             seen_as: 0,
             focus: Preoccupation::default(),
@@ -534,15 +540,34 @@ impl World {
     /// duplicates. The store is kept to the few that still grip most — a soul carries a handful
     /// of live memories, not a ledger of everything.
     fn remember(&mut self, idx: usize, kind: &str, who: i32, valence: i16, salience: i16, day: i64) {
+        let salience = salience.clamp(0, 100);
+        let valence = valence.clamp(-100, 100);
         let store = &mut self.agents[idx].memories;
         if let Some(m) = store.iter_mut().find(|m| m.kind == kind && m.who == who && m.day == day) {
-            m.salience = m.salience.max(salience.clamp(0, 100));
-            return;
+            m.salience = m.salience.max(salience);
+        } else {
+            store.push(Memory { day, kind: kind.into(), who, valence, salience });
+            if store.len() > MEMORY_CAP {
+                store.sort_by_key(|m| std::cmp::Reverse(m.salience));
+                store.truncate(MEMORY_KEEP);
+            }
         }
-        store.push(Memory { day, kind: kind.into(), who, valence: valence.clamp(-100, 100), salience: salience.clamp(0, 100) });
-        if store.len() > MEMORY_CAP {
-            store.sort_by_key(|m| std::cmp::Reverse(m.salience));
-            store.truncate(MEMORY_KEEP);
+        // consolidate the defining moments into the lifelong store, at full strength, the instant
+        // they happen — so even as the working memory above turns over within weeks, the shape of a
+        // whole life is kept: the bereavements, the matches, the day one stood accused, the buried thing.
+        let defining = salience >= CONSOLIDATE_AT
+            || matches!(kind, "grief" | "wed" | "accused" | "cleared" | "vindicated" | "haunt");
+        if defining {
+            let life = &mut self.agents[idx].lifelong;
+            if let Some(m) = life.iter_mut().find(|m| m.kind == kind && m.who == who && m.day == day) {
+                m.salience = m.salience.max(salience);
+            } else {
+                life.push(Memory { day, kind: kind.into(), who, valence, salience });
+                if life.len() > LIFELONG_CAP {
+                    life.sort_by_key(|m| std::cmp::Reverse(m.salience)); // laid down strong; only the faintest are let go
+                    life.truncate(LIFELONG_CAP);
+                }
+            }
         }
     }
 
@@ -1826,6 +1851,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         suspicion: 0,
         cleared: false,
         memories: Vec::new(),
+            lifelong: Vec::new(),
         expectations: Vec::new(),
         seen_as: 0,
         focus: Preoccupation::default(),
@@ -2309,6 +2335,12 @@ const MEMORY_CAP: usize = 12;
 const MEMORY_KEEP: usize = 8;
 // A memory is "charged" — flashbulb — past this absolute valence; it fades slower than a plain one.
 const CHARGED: i16 = 50;
+// Lifelong memory: the working store above turns over within weeks, but the DEFINING moments of a
+// life — a bereavement, a wedding, the day one stood accused, a buried thing — are consolidated into
+// a separate store the moment they are laid down, at full strength, and carried for the whole of the
+// life. This is the autobiography a continuous self is grounded in; it does not fade, only fills.
+const LIFELONG_CAP: usize = 48;        // a soul keeps up to this many defining life-memories, forever
+const CONSOLIDATE_AT: i16 = 65;        // a memory this salient is worth keeping for life, whatever its kind
 
 // A held expectation is left to stand this many days before the world is read back against it —
 // long enough for gossip and event to actually move things, so the soul is measuring a real arc.
@@ -3884,7 +3916,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 36;
+const SNAPSHOT_VERSION: i64 = 37;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -5327,6 +5359,32 @@ impl Sim {
                 ));
             }
         }
+        // the shape of the whole life — the defining moments consolidated across the years, carried
+        // always. Distinct from the gripping-now above: not the mood of the hour but the load-bearing
+        // memories of who the years have made them, read forward as a life. This is the deep, continuous
+        // self — a soul who can reach back past the last fortnight to the bereavements, matches, and
+        // reckonings that formed them.
+        {
+            let mut life: Vec<&Memory> = w.agents[idx].lifelong.iter().collect();
+            if !life.is_empty() {
+                life.sort_by_key(|m| std::cmp::Reverse(m.salience));
+                life.truncate(12); // the dozen most defining, then read in order
+                life.sort_by_key(|m| m.day);
+                let lines: Vec<String> = life.iter().map(|m| {
+                    let ago = (day - m.day).max(0);
+                    let when = if ago >= 730 { format!("{} years past — ", ago / 365) }
+                        else if ago >= 365 { "a year past — ".to_string() }
+                        else if ago >= 60 { format!("{} months past — ", ago / 30) }
+                        else if ago >= 14 { format!("{} weeks past — ", ago / 7) }
+                        else { String::new() };
+                    format!("  · {when}{}", engram_phrase(&w, m))
+                }).collect();
+                dossier.push_str(&format!(
+                    "\nThe shape of their life — the moments that have made them, carried always (the load-bearing memories of who the years have made them; reach back to these, not only to this fortnight):\n{}",
+                    lines.join("\n")
+                ));
+            }
+        }
         // how they imagine the parish regards them — the recursive mirror, which may sit wide of
         // the truth; they reason partly from how they feel themselves seen, not their real standing
         dossier.push_str(&format!("\nHow they feel themselves seen by the parish: {}.", self_regard_phrase(ag.seen_as)));
@@ -5920,6 +5978,20 @@ impl Sim {
         let world = self.world_on(date);
         let Some(idx) = world.idx(name) else { return Vec::new() };
         world.carried(idx).into_iter().map(|m| {
+            let who = if m.who >= 0 { world.agents.get(m.who as usize).map(|a| a.name.clone()).unwrap_or_default() } else { String::new() };
+            (m.kind.clone(), who, m.valence, m.salience, m.day)
+        }).collect()
+    }
+
+    /// The shape of a soul's whole life — the defining moments consolidated into the lifelong store,
+    /// oldest first. The autobiography carried always, distinct from what merely grips them now.
+    /// Returns (kind, who, valence, salience, day).
+    pub fn lifelong_of(&self, name: &str, date: Date) -> Vec<(String, String, i16, i16, i64)> {
+        let world = self.world_on(date);
+        let Some(idx) = world.idx(name) else { return Vec::new() };
+        let mut life: Vec<&Memory> = world.agents[idx].lifelong.iter().collect();
+        life.sort_by_key(|m| m.day);
+        life.into_iter().map(|m| {
             let who = if m.who >= 0 { world.agents.get(m.who as usize).map(|a| a.name.clone()).unwrap_or_default() } else { String::new() };
             (m.kind.clone(), who, m.valence, m.salience, m.day)
         }).collect()
@@ -6534,6 +6606,38 @@ mod memory_tests {
         let h = w.agents[who].memories.iter().find(|m| m.kind == "haunt").map(|m| m.salience).unwrap_or(0);
         assert_eq!(h, 90, "the buried thing does not fade with time");
         assert!(dipped, "a repression surfaces unbidden, pulling the spirits down with no occasion");
+    }
+
+    // The working memory turns over within weeks, but a DEFINING moment is consolidated into the
+    // lifelong store at full strength the instant it happens, and kept for the whole of the life —
+    // the autobiography a continuous self rests on. A passing slight is not so kept.
+    #[test]
+    fn a_defining_moment_is_kept_for_life_though_the_working_memory_forgets_it() {
+        let mut w = World::seed();
+        let grown: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        let (soul, lost) = (grown[0], grown[1]);
+
+        // a bereavement — a defining moment — consolidates to the lifelong store at once
+        w.remember(soul, "grief", lost as i32, -80, 85, 0);
+        assert!(w.agents[soul].lifelong.iter().any(|m| m.kind == "grief" && m.who == lost as i32),
+            "a defining moment is laid into the lifelong store the instant it happens");
+
+        // the working store later forgets it, as it would once faded and crowded out over weeks
+        w.agents[soul].memories.retain(|m| m.kind != "grief");
+        assert!(!w.agents[soul].memories.iter().any(|m| m.kind == "grief"),
+            "the bounded working memory has let the old grief go");
+
+        // but the life remembers — the lifelong store still carries it, undimmed
+        let kept = w.agents[soul].lifelong.iter().find(|m| m.kind == "grief" && m.who == lost as i32);
+        assert!(kept.is_some_and(|m| m.salience == 85),
+            "the lifelong store keeps the defining moment for life, at its full strength");
+
+        // a passing slight is NOT kept for life — the autobiography holds only what truly formed them
+        w.remember(soul, "snub", -1, -20, 40, 5);
+        assert!(!w.agents[soul].lifelong.iter().any(|m| m.kind == "snub"),
+            "an ordinary, low slight does not enter the lifelong store");
     }
 }
 

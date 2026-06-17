@@ -559,6 +559,35 @@ fn person(sim: &Sim, idx: usize) -> String {
             ));
         }
     }
+    // the shape of their whole life — the defining moments kept always, oldest first. The deep,
+    // continuous self: bereavements, matches, reckonings, the buried thing, carried across the years.
+    let life = sim.lifelong_of(&a.name, t);
+    if !life.is_empty() {
+        body.push_str("<h2>The shape of their life</h2>");
+        for (kind, who, valence, _salience, day) in life {
+            let whol = if who.is_empty() { who.clone() } else {
+                idx_of(&who).map(|i| format!("<a href=/folk/{i} class=who>{}</a>", esc(&who))).unwrap_or_else(|| esc(&who))
+            };
+            let phrase = match kind.as_str() {
+                "grief"   => format!("The loss of {whol}"),
+                "accused" => "The day they stood named for murder before the whole parish".to_string(),
+                "cleared" => "The day they were believed, and cleared".to_string(),
+                "wed"     => format!("Their match with {whol}"),
+                "haunt"   => "A dread with no cause they can name — a thing buried past their own reach".to_string(),
+                "betrayed"   => format!("{whol} turning cold, where they had been sure of warmth"),
+                "reprieve"   => format!("Warmth from {whol} where they had given up hope of it"),
+                "wronged"    => "The parish turning on them for nothing they had done".to_string(),
+                "vindicated" => "Coming through the suspicion they so feared".to_string(),
+                "snub"    => format!("A lasting hurt from {whol}"),
+                other     => esc(other),
+            };
+            let when = sim.day_to_date(day);
+            let tone = if valence < 0 { "#6a4a4a" } else { "#4a5a4a" };
+            body.push_str(&format!(
+                "<div class=entry><span class=date>{when}</span> &nbsp; <span class=think style='color:{tone}'>{phrase}</span></div>"
+            ));
+        }
+    }
     // their theory of the souls who weigh on them — what they privately make of each
     if let Ok(beliefs) = sim.beliefs_held_by(&a.name, 8) {
         if !beliefs.is_empty() {
