@@ -222,6 +222,8 @@ pub struct Inquest {
     pub closed: bool,         // the inquest is over — by a hanging, or given up
     pub investigator: i32,    // -1, or the soul who leads the official inquiry, bending it their way
     pub public_inquiry: bool, // the magistrate is compelled to question every soul and read it out
+    pub held_until: i64,      // 0, or a day through which the magistrate, having weighed a charge and
+                              // stayed his hand, is not pressed to decide again — the LLM ruling's cooldown
 }
 
 /// A death the parish has yet to bury — the funeral is held some days on, a great occasion the
@@ -1600,6 +1602,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             closed: false,
                             investigator: -1,
                             public_inquiry: false,
+                            held_until: 0,
                         });
                     }
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
@@ -2094,6 +2097,12 @@ fn tend_rivalries(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>)
 /// When it settles past bearing on one of them the parish fixes on them, and — doubt failing —
 /// hangs them, guilty or innocent, a thing no living soul will ever truly know. A hanging
 /// breaks the dread; until then it festers, and a case that collapses only deepens the fear.
+///
+/// The one thing the fold does NOT decide on its own is the *charge*: once the cloud over the
+/// lead suspect crosses JUDGE_AT the magistrate must rule (accuse | hold | widen), and that ruling
+/// is the oracle's — recorded as a `judgment` decree and folded like any other. See pending_judgment.
+const JUDGE_AT: i32 = 75;   // the cloud over the lead suspect at which the magistrate is summoned to a ruling
+const HOLD_DAYS: i64 = 4;   // having weighed a charge and stayed his hand, he is not pressed again for this long
 fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, out: &mut Vec<Event>) {
     let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
     let Some(inq) = world.inquest.clone() else { return };
@@ -2186,25 +2195,14 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
         }
     }
 
-    // --- the reckoning: the town fixes on a soul, then hangs them or lets the case fall to doubt ---
-    const ACCUSE_AT: i32 = 90;
+    // --- the reckoning: once the town has FIXED on a soul, the trial runs its course toward a
+    //     hanging or a release. The fixing itself is no longer automatic: when the cloud over the
+    //     lead suspect crosses JUDGE_AT the magistrate is *called to a ruling* (see pending_judgment
+    //     / the `judge` job), and only an LLM-authored `judgment` decree of "accuse" sets inq.accused.
+    //     So whether an innocent is charged at all now turns on a mind weighing it, not a threshold. ---
     const TRIAL_DAYS: i64 = 6;
     let mut inq = inq;
-    if inq.accused < 0 {
-        if let Some(m) = most {
-            if world.agents[m].suspicion >= ACCUSE_AT {
-                inq.accused = m as i32;
-                inq.accused_since = day;
-                let nm = world.agents[m].name.clone();
-                world.agents[m].standing = (world.agents[m].standing - 10).max(0);
-                nudge_mood(&mut world.agents[m], -40);
-                world.remember(m, "accused", inq.victim as i32, -95, 100, day); // the day the town named them — charged, so it grips for weeks
-                out.push(mk(&nm, format!("The parish has fixed on {nm} as the murderer of {vn}, and means to see them answer for it.")));
-                world.spawn_news(&nm, &format!("that {nm} stands named for {vn}'s murder"), -4, day, &[]);
-                world.dread = (world.dread + 8).min(100);
-            }
-        }
-    } else {
+    if inq.accused >= 0 {
         let m = inq.accused as usize;
         if !world.agents[m].active() {
             inq.accused = -1; // gone by some other road — the hunt resets
@@ -2237,6 +2235,20 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
         }
     }
     world.inquest = Some(inq);
+}
+
+/// Who sits in judgement: the soul leading the inquiry if there is one, else the natural justice of
+/// the peace — the highest-standing genteel/official adult the parish would look to. None if the
+/// town has emptied of anyone fit to sit (a degenerate case). Used to address the magistrate's ruling.
+fn magistrate_idx(world: &World) -> Option<usize> {
+    let inq = world.inquest.as_ref()?;
+    if inq.investigator >= 0 && world.agents.get(inq.investigator as usize).is_some_and(|a| a.active()) {
+        return Some(inq.investigator as usize);
+    }
+    (0..world.agents.len())
+        .filter(|&i| world.agents[i].active() && world.agents[i].archetype != "child"
+            && matches!(world.agents[i].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner"))
+        .max_by_key(|&i| world.agents[i].standing)
 }
 
 /// How many days after a death the parish gathers to bury them.
@@ -3831,7 +3843,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 34;
+const SNAPSHOT_VERSION: i64 = 35;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -3899,7 +3911,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
         let ti = world.idx(&d.target);
         // a turning-point verdict is a public beat; a private conversation, a private thought, or a
         // statement to the magistrate (surfaced on its own page + as gossip) is not a chronicle beat
-        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" && d.kind != "psyche" {
+        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" && d.kind != "psyche" && d.kind != "judgment" {
             out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
         }
         match (d.kind.as_str(), d.choice.as_str()) {
@@ -4153,6 +4165,55 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                             if public { world.spawn_news_open(&tn, &format!("how {nm} named {tn} to the magistrate"), -3, day); }
                         }
                     }
+                }
+            }
+            // the magistrate's ruling on the lead suspect, authored by the oracle and folded here.
+            // subject = the magistrate; target = the suspect; choice ∈ accuse | hold | widen. The
+            // *decision* is the oracle's; the consequence is fixed here, so the world stays exact.
+            // d.text is the magistrate's recorded reasoning — read out as the chronicle beat.
+            ("judgment", choice) => {
+                if let Some(mut inq) = world.inquest.clone().filter(|q| !q.closed && q.accused < 0) {
+                    let mag = world.agents[si].name.clone();
+                    let ruling = d.text.trim().to_string(); // the magistrate's recorded reasoning, if any
+                    let say = |text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: mag.clone(), text };
+                    match choice {
+                        // he commits: the parish has its named soul, and the trial clock begins
+                        "accuse" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                            inq.accused = t as i32;
+                            inq.accused_since = day;
+                            let tn = world.agents[t].name.clone();
+                            world.agents[t].standing = (world.agents[t].standing - 10).max(0);
+                            nudge_mood(&mut world.agents[t], -40);
+                            world.remember(t, "accused", inq.victim as i32, -95, 100, day); // charged — grips for weeks
+                            out.push(say(if ruling.is_empty() { format!("{mag} has brought {tn} to formal accusation for the murder of {}, and means to see them answer for it.", inq.victim_name) } else { ruling }));
+                            world.spawn_news(&tn, &format!("that {mag} has named {tn} for {}'s murder", inq.victim_name), -4, day, &[]);
+                            world.dread = (world.dread + 8).min(100);
+                        },
+                        // he stays his hand: not proof enough, and he will not be hurried to a charge
+                        "hold" => {
+                            inq.held_until = day + HOLD_DAYS;
+                            let tn = ti.map(|t| world.agents[t].name.clone()).unwrap_or_else(|| "the suspect".into());
+                            if let Some(t) = ti.filter(|&t| world.agents[t].active()) {
+                                nudge_mood(&mut world.agents[t], 8); // a reprieve, however uneasy
+                                world.remember(t, "reprieve", si as i32, 45, 55, day);
+                            }
+                            out.push(say(if ruling.is_empty() { format!("{mag} stayed his hand: there is not proof enough to charge {tn}, and he will not be hurried to it while the killer may yet be another.") } else { ruling }));
+                            world.dread = (world.dread + 3).min(100); // the town, unsatisfied, frets on
+                        }
+                        // he refuses the fixation: widens the net, and turns the scrutiny off the one soul
+                        "widen" => {
+                            inq.held_until = day + HOLD_DAYS;
+                            inq.public_inquiry = true;
+                            if let Some(t) = ti.filter(|&t| world.agents[t].active()) {
+                                world.agents[t].suspicion = (world.agents[t].suspicion - 20).max(0);
+                                nudge_mood(&mut world.agents[t], 6);
+                            }
+                            out.push(say(if ruling.is_empty() { format!("{mag} would not fix on one soul on so little: he has widened the inquiry, and means to question the whole parish anew.") } else { ruling }));
+                            world.spawn_news_open(&mag, &format!("how {mag} refused to be rushed and widened the inquiry into {}'s murder", inq.victim_name), 0, day);
+                        }
+                        _ => {}
+                    }
+                    world.inquest = Some(inq);
                 }
             }
             // the felt cost of facing (or refusing) a crack in one's own self-model: a reckoning
@@ -4605,6 +4666,86 @@ impl Sim {
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'testimony',?3,?4,?5)",
             params![day, subject, accuses, format!("{alibi}:{}", if public { "pub" } else { "priv" }), text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Is a ruling before the magistrate? When the cloud over the lead suspect has crossed JUDGE_AT
+    /// and he is not within a prior ruling's cooldown, the case waits on his decision — to charge the
+    /// suspect, to stay his hand, or to widen the net. Returns (magistrate, suspect, dossier) for the
+    /// oracle to rule on, else None. The decision drives the fold (an `accuse` ruling sets the charge);
+    /// this is the LLM authoring a world event, not narrating one. Replay-safe: the ruling is recorded.
+    pub fn pending_judgment(&self, today: Date) -> Option<(String, String, String)> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let inq = w.inquest.as_ref().filter(|q| !q.closed && q.accused < 0)?;
+        if day <= inq.held_until { return None; } // within a ruling's cooldown — he is not pressed again yet
+        let mag = magistrate_idx(&w)?;
+        // the soul the cloud sits hardest on — whom the magistrate is being pressed to charge
+        let m = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child"
+                && i != inq.victim && i != mag)
+            .max_by_key(|&i| (w.agents[i].suspicion, std::cmp::Reverse(i)))?;
+        if w.agents[m].suspicion < JUDGE_AT { return None; }
+
+        let ag = &w.agents[m];
+        let mn = w.agents[mag].name.clone();
+        let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
+            "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+            "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
+        }.to_string());
+        let days_open = day - inq.opened;
+        let top = (0..w.agents.len()).filter(|&i| w.agents[i].active()).map(|i| w.agents[i].standing).max().unwrap_or(0);
+        let mut d = format!(
+            "You are {mn}, sitting as magistrate over the murder of {victim}, dead now {days_open} days and the killer still unknown. The parish is in a fright and clamours for an answer. The cloud of suspicion has settled hardest on one soul, and you must now rule what is to be done — for there is NO proof against them, only the town's fear and what it holds against them.\n\nThe soul under the cloud: {name}, {role}, of {seat}, aged {age}. The suspicion upon them stands at {susp} out of 100 — heavy, but it is suspicion, not evidence.",
+            mn = mn, victim = inq.victim_name, name = ag.name, role = role, seat = ag.seat, age = ag.age(day), susp = ag.suspicion,
+        );
+        if let Ok(Some(bio)) = self.biography(&ag.name) {
+            d.push_str(&format!("\nWho they are: {bio}"));
+        }
+        // their station relative to yours — a genteel magistrate is slow to hang his own and quick to hang a labourer
+        let respectable = matches!(ag.archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner");
+        if respectable {
+            d.push_str("\nThey are of standing — of your own sort — and to charge them would shake the parish's order.");
+        } else if matches!(ag.archetype.as_str(), "blunt_hand") || ag.standing <= top - 30 {
+            d.push_str("\nThey are common working folk, low and friendless, and the parish would think little of seeing them hang. The easy course is to give the town its blood.");
+        }
+        // what account they have given, if any
+        match self.testimony_of(&ag.name) {
+            Ok(Some((alibi, _, _))) if alibi == "strong" => d.push_str("\nThey have given the magistrate a strong, witnessed account of themselves the night of the killing — their alibi largely holds."),
+            Ok(Some((alibi, _, _))) if alibi == "weak" => d.push_str("\nThe account they gave you was thin and unsupported — no one outside their own household can vouch for them."),
+            Ok(Some(_)) => d.push_str("\nThey could give you no account of themselves at all for the night of the killing."),
+            _ => d.push_str("\nThey have not yet been brought before you to give any account of themselves."),
+        }
+        // who would stand by them, who they are at odds with (the magistrate weighs both)
+        let defenders = (0..w.agents.len()).filter(|&j| j != m && w.agents[j].active() && w.aff(j, m) >= 40).count();
+        d.push_str(&match defenders {
+            0 => "\nThey have no one of weight to speak for them.".to_string(),
+            1 => "\nOne soul of the parish would speak in their defence.".to_string(),
+            k => format!("\n{k} souls would stand and speak in their defence — to charge them would not pass quietly."),
+        });
+        let odds: Vec<String> = w.ties(m, false, 3).into_iter().map(|(j, _)| w.agents[j].name.clone()).collect();
+        if !odds.is_empty() {
+            d.push_str(&format!("\nThe killer might as easily be another: there is bad blood in the parish between the dead and {}.", odds.join(", ")));
+        }
+        d.push_str(&format!("\nThe town's dread stands at {} out of 100.", w.dread));
+        if inq.public_inquiry {
+            d.push_str(" You have already questioned the whole parish in open inquiry.");
+        }
+        d.push_str("\n\nYOUR RULING. You may: ACCUSE — bring them to formal trial for the murder (the town will likely hang them, guilty or not); HOLD — stay your hand for want of proof, and wait, though the parish will fret; or WIDEN — refuse to fix on this one soul, and turn the inquiry back upon the whole parish. Rule as the man you are — your station, your conscience, your fear of the mob or your contempt for it.");
+        Some((mn, ag.name.clone(), d))
+    }
+
+    /// Record the magistrate's ruling as a `judgment` decree, to be folded at its day. ruling ∈
+    /// [accuse, hold, widen]; text is his recorded reasoning, read out as the chronicle beat. The
+    /// fold turns an `accuse` into the charge, a `hold`/`widen` into a stay. Replay reads it back.
+    pub fn record_judgment(&mut self, date: Date, magistrate: &str, suspect: &str, ruling: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'judgment',?3,?4,?5)",
+            params![day, magistrate, suspect, ruling, text],
         )?;
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
@@ -5780,8 +5921,12 @@ mod inquest_tests {
     use super::*;
 
     // An open killing hunts itself. With no recorded culprit, suspicion accretes onto the soul
-    // the town already mistrusts — bad blood with the dead, an outsider's face, a desperate purse —
-    // and a friendless soul it settles on hangs, the dread breaking only when the town has its blood.
+    // the town already mistrusts — bad blood with the dead, an outsider's face, a desperate purse.
+    // But the fold no longer CHARGES on its own: it presses the cloud past JUDGE_AT and there it
+    // waits — the accusation is a ruling the magistrate (the oracle) must make. Here we make that
+    // ruling "accuse" and confirm the downstream reckoning still hangs a friendless soul, the dread
+    // breaking only when the town has its blood. The point: whether an innocent is charged at all
+    // now turns on a mind weighing it, not a threshold.
     #[test]
     fn an_open_murder_presses_to_a_hanging() {
         let mut w = World::seed();
@@ -5804,6 +5949,7 @@ mod inquest_tests {
             closed: false,
             investigator: -1,
             public_inquiry: false,
+            held_until: 0,
         });
         // the suspect is everything the parish fears: bad blood with the dead, an incomer, cornered,
         // and friendless and low — so doubt will not save them when the reckoning comes
@@ -5814,13 +5960,32 @@ mod inquest_tests {
         w.agents[suspect].standing = 12;
 
         let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+        let mut reached: Option<i64> = None;   // the day the cloud crossed the magistrate's threshold
+        let mut charged = false;               // the day a ruling fixed the charge
         let mut accused_on: Option<i64> = None;
         let mut hanged: Option<(i64, String)> = None;
         for day in 1..60i64 {
-            let evs = life_tick(&mut w, day, date, 42);
+            let mut evs = life_tick(&mut w, day, date, 42);
             // while the killer is unfound, the dread must not fade to calm
             if w.inquest.as_ref().is_some_and(|q| !q.closed) {
                 assert!(w.dread >= 40, "dread should fester while the killing is unsolved (day {day}, dread {})", w.dread);
+            }
+            // the fold presses suspicion past bearing — but it must NOT charge of its own accord
+            if reached.is_none() && w.agents[suspect].suspicion >= JUDGE_AT {
+                reached = Some(day);
+                assert!(w.inquest.as_ref().is_some_and(|q| q.accused < 0),
+                    "the fold must not charge on its own — the accusation waits on the magistrate's ruling");
+            }
+            // once the cloud is past bearing, the magistrate rules to accuse (the oracle's role in
+            // life): a `judgment` decree folds the charge in, exactly as the live `judge` job does
+            if !charged && reached.is_some() {
+                let mag = magistrate_idx(&w).expect("a magistrate sits over the inquiry");
+                let ruling = Decree {
+                    subject: w.agents[mag].name.clone(), kind: "judgment".into(),
+                    target: w.agents[suspect].name.clone(), choice: "accuse".into(), text: String::new(),
+                };
+                evs.extend(apply_decrees(&mut w, day, date, std::slice::from_ref(&ruling)));
+                charged = true;
             }
             if accused_on.is_none() && w.inquest.as_ref().is_some_and(|q| q.accused == suspect as i32) {
                 accused_on = Some(day);
@@ -5831,8 +5996,9 @@ mod inquest_tests {
             }
         }
 
-        let acc = accused_on.expect("the town should fix on the most-suspected soul");
-        let (day, text) = hanged.expect("a friendless suspect should hang within the window");
+        assert!(reached.is_some(), "suspicion should mount past the magistrate's threshold");
+        let acc = accused_on.expect("an `accuse` ruling should fix the charge on the suspect");
+        let (day, text) = hanged.expect("a friendless charged suspect should hang within the window");
         assert!(day > acc, "the hanging follows the accusation, not precedes it");
         assert!(text.contains(&w.agents[suspect].name), "the suspect is the one hanged, got: {text}");
         assert!(!w.agents[suspect].active(), "the hanged soul leaves the cast");
@@ -5928,6 +6094,7 @@ mod expectation_tests {
         w.inquest = Some(Inquest {
             victim, victim_name: w.agents[victim].name.clone(), opened: 0, accused: -1,
             accused_since: 0, hanged: false, closed: false, investigator: -1, public_inquiry: false,
+            held_until: 0,
         });
         w.agents[soul].standing = 40;
         w.agents[soul].suspicion = 10;

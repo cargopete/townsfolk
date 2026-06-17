@@ -135,6 +135,11 @@ enum Cmd {
         #[arg(long, default_value = "")]
         target: String,
     },
+    /// Put the open murder's reckoning to the magistrate: when suspicion has settled past bearing on
+    /// one soul, the oracle rules in his voice — to ACCUSE (formal trial), HOLD (stay his hand for
+    /// want of proof), or WIDEN (refuse the fixation, question the parish anew). The ruling drives the
+    /// world: an accusation is a real charge, recorded and folded. No proof exists — only his judgement.
+    Judge,
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -423,6 +428,56 @@ fn parse_testimony(p: &serde_json::Value, names: &[String]) -> Option<(String, S
     let accuses = if raw.is_empty() { String::new() }
         else { names.iter().find(|n| n.as_str() == raw || raw.contains(n.as_str()) || n.eq_ignore_ascii_case(&raw)).cloned().unwrap_or_default() };
     Some((statement, alibi, accuses))
+}
+
+// ------------------------------------------------------------------ the magistrate's ruling
+// The oracle stops being a narrator here and becomes a decision-maker: it rules, in the magistrate's
+// own character, what is to be done with the soul suspicion has settled on — and that ruling drives
+// the world (an `accuse` is a real charge). Recorded as a `judgment` decree, so replay holds exact.
+const JUDGMENT_PROMPT: &str = "You rule as a magistrate of Thrushcombe St Mary, a 1934 West-Country market town, sitting over an unsolved murder while a frightened parish clamours for an answer. Suspicion has settled hardest on one soul — but there is NO proof against them, only the town's fear and its grudges. You are given who you are, who they are, and how things stand. Rule as THAT MAN truly would — by his station, his conscience, and whether he fears the mob or scorns it. A proud genteel magistrate may shield one of his own kind, or may give the town a friendless labourer to hang and be done with it; a careful or a just man may stay his hand, or widen the net, for want of proof. There is no right answer — only his. \
+Give ONLY a JSON object: {\"account\": a record of his ruling and the reason for it, 1 to 3 sentences, third person, in the period chronicle voice, no quotation marks and no preamble; \"ruling\": EXACTLY one of [accuse, hold, widen] — accuse to bring them to formal trial (the town will likely hang them, guilty or not), hold to stay his hand for want of proof and wait, widen to refuse to fix on the one soul and turn the inquiry on the whole parish; \"reason\": a few plain words on why}.";
+
+/// The magistrate's ruling from the local Qwen oracle — raw JSON {account,ruling,reason}.
+fn judgment_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
+    let body = serde_json::json!({
+        "model": model, "system": JUDGMENT_PROMPT,
+        "prompt": format!("{dossier}\n\nRule on the matter before you."),
+        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.85 },
+    });
+    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
+    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+}
+
+/// The magistrate's ruling from Claude (Haiku) — sharper voice; tallies token cost. None → Qwen.
+fn judgment_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
+    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
+    let body = serde_json::json!({
+        "model": model, "max_tokens": 512, "system": JUDGMENT_PROMPT,
+        "messages": [{ "role": "user", "content": format!("{dossier}\n\nRule on the matter before you. Respond only with the JSON object.") }],
+    });
+    let resp: serde_json::Value = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
+        .send_json(body).ok()?.into_json().ok()?;
+    let usage = resp.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
+    let text = resp.get("content")?.as_array()?.iter()
+        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
+        .next()?;
+    serde_json::from_str(&extract_json(text)?).ok()
+}
+
+/// Validate a ruling: (account, ruling∈[accuse,hold,widen]). Defaults to the cautious `hold` if the
+/// oracle names no clear ruling — the world never charges a soul on a malformed or ambiguous verdict.
+fn parse_judgment(p: &serde_json::Value) -> Option<(String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let r = p.get("ruling").and_then(|v| v.as_str()).unwrap_or("hold").trim().to_lowercase();
+    let ruling = ["accuse", "widen", "hold"].iter().find(|o| r.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "hold".into());
+    Some((account, ruling))
 }
 
 const INTROSPECT_PROMPT: &str = "You voice the deepest hour of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the hour they step back from the day's passing thoughts and take stock of their whole self. You are given who they are, who they have so far taken themselves to be, the recent run of their thinking, what has befallen them, and the souls who weigh on them with whatever they have believed of each. Wholly in their period voice and true to their station and schooling (they know only the world of 1934 and their own parish), do three things: \
@@ -893,6 +948,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                         eprintln!("oracle unavailable — the questioning halts.");
                         break;
+                    }
+                }
+            }
+        }
+        Cmd::Judge => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            match sim.pending_judgment(t) {
+                None => println!("No ruling is before the magistrate — either the cloud has not settled past bearing on any one soul, the bench is in a cooling after a recent ruling, or the case is already decided."),
+                Some((mag, suspect, dossier)) => {
+                    let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
+                    let spend = spend_file(&cli.db);
+                    let today_str = t.to_string();
+                    let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+                    let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
+                    let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
+                        .and_then(|key| judgment_claude(&agent, &key, &dossier, &spend, &today_str))
+                        .or_else(|| {
+                            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+                            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+                            judgment_qwen(&agent, &host, &model, &dossier)
+                        });
+                    match raw.as_ref().and_then(parse_judgment) {
+                        Some((account, ruling)) => {
+                            sim.record_judgment(t, &mag, &suspect, &ruling, &account)?;
+                            sim.catch_up(today(), cur_phase())?; // fold the ruling — a charge, or a stay
+                            println!("Ruling [{mag} · {ruling} · re {suspect}]: {account}");
+                        }
+                        None => eprintln!("oracle unavailable — the magistrate reserves his judgement this day."),
                     }
                 }
             }
