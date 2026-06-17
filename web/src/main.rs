@@ -461,6 +461,13 @@ fn person(sim: &Sim, idx: usize) -> String {
         "<div class=card>standing <span class=bars>{}</span> {} &middot; purse £{}",
         bar(a.standing), a.standing, a.purse
     ));
+    // the body — embodiment: how worn or hale they are, and whether they ail
+    {
+        let vig = if a.vigour <= 22 { "worn to the bone" } else if a.vigour <= 42 { "tired" }
+            else if a.vigour >= 82 { "hale and rested" } else { "middling in body" };
+        let ail = if a.health <= 38 { ", and ill" } else if a.health <= 64 { ", a little poorly" } else { "" };
+        body.push_str(&format!(" &middot; <span class=doing>{vig}{ail}</span>"));
+    }
     // live placement/doings and ties for the present cast
     let mut ties_html = String::new();
     if a.active() {

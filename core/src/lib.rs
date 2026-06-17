@@ -85,6 +85,12 @@ pub struct Agent {
     pub goal: u8,                 // 0 Thrive · 1 ClearDebt · 2 Rise · 3 MarryOff · 4 Outdo · 5 Prosper
     pub goal_target: i32,         // a child/rival index for MarryOff/Outdo, else -1
     pub mood: i16,               // [-100,100] transient spirits; <0 low/grieving, >0 high/triumphant
+    // --- the body: a soul is not a disembodied mind. Their flesh has states that shape the spirits
+    //     and bias the day's choices — a soul worked to the bone, or ill with the damp, is short of
+    //     temper and slow to generosity; a rested, well one moves easier. Drained by labour and the
+    //     hard seasons, restored by rest and the Sabbath; the old tire sooner and mend slower. ---
+    pub vigour: i16,             // [0,100] bodily energy; drained by the day's work, restored by rest
+    pub health: i16,             // [0,100] physical wellness; the aged carry a lower ceiling, illness lowers it
     // --- planning: a multi-day intention with a throughline ---
     pub courting: i32,            // index of the soul they are courting, else -1
     pub courtship: i16,           // how far the courtship has come along
@@ -317,6 +323,8 @@ impl World {
             goal: 0,
             goal_target: -1,
             mood: 0,
+            vigour: 78,
+            health: 88,
             courting: -1,
             courtship: 0,
             acted_day: -1,
@@ -1890,6 +1898,8 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         goal: 0,
         goal_target: -1,
         mood: temperament(arch).1,
+        vigour: 78,
+        health: 88,
         courting: -1,
         courtship: 0,
         acted_day: -1,
@@ -2807,6 +2817,68 @@ fn goal_triumph(world: &World, i: usize) -> String {
     }
 }
 
+/// The body, day by day. A soul is not a disembodied mind: the day's labour drains their vigour
+/// (the hard trades and the hay/harvest seasons hardest, the old soonest), a night's rest and the
+/// Sabbath restore it, and health drifts with age and the odd ailment. And the flesh tells on the
+/// spirits — a soul worked to the bone or ill with the damp sinks; a rested, well one is eased.
+/// This is what gives the inner life a body under it. Deterministic, on its own RNG stream.
+fn tend_body(world: &mut World, day: i64, date: Date, seed: u64) {
+    let mut rng = rng_for(seed ^ 0xB0D4_0000_0000, day);
+    let season = Season::of(date);
+    let sunday = date.weekday() == Weekday::Sunday;
+    for a in world.agents.iter_mut() {
+        if !a.active() { continue; }
+        let age = a.age(day);
+        // the day's exertion, by trade — the working folk spend themselves hardest
+        let labour: i16 = match a.archetype.as_str() {
+            "blunt_hand" | "hill_farmer" => 18,
+            "scheming_improver" | "practitioner" => 12,
+            "official" => 8,
+            "genteel_status_seeker" => 5,
+            "child" => 8,
+            _ => 12,
+        };
+        // the hay and the harvest break the backs of the working folk
+        let season_toll: i16 = if matches!(season, Season::Hay | Season::Harvest)
+            && matches!(a.archetype.as_str(), "blunt_hand" | "hill_farmer") { 8 } else { 0 };
+        let age_toll: i16 = if age >= 60 { 6 } else if age >= 45 { 3 } else { 0 };
+        let rest: i16 = if sunday { 32 } else { 23 }; // a night's sleep, and the day of rest the more
+        a.vigour = (a.vigour - labour - season_toll - age_toll + rest).clamp(0, 100);
+
+        // health: the aged carry a lower ceiling, and an ailment comes now and then (a chill, a
+        // fever going round, the damp in old bones); otherwise the body mends itself, slowly.
+        let ceiling: i16 = if age >= 65 { 70 } else if age >= 50 { 84 } else { 100 };
+        if a.health > ceiling {
+            a.health -= 1;
+        } else if rng.gen_bool(if age >= 55 { 0.020 } else { 0.012 }) {
+            a.health = (a.health - rng.gen_range(8..22)).max(0); // an ailment takes them
+        } else if a.health < ceiling {
+            a.health = (a.health + 2).min(ceiling); // mending
+        }
+
+        // the flesh tells on the spirits — centred so an ordinary day is net-neutral, the spent and
+        // the ill sink, the rested and well are eased a little
+        let body_mood = ((a.vigour as i32 - 72) + (a.health as i32 - 82)) / 24;
+        if body_mood != 0 { nudge_mood(a, body_mood as i16); }
+    }
+}
+
+/// How a soul's body feels to them tonight — for their inner life to reason from. Embodiment in words.
+fn body_phrase(a: &Agent, day: i64) -> String {
+    let age = a.age(day);
+    let mut s = if a.vigour <= 22 { "worn to the bone, every limb heavy, fit only to fall into bed" }
+        else if a.vigour <= 42 { "tired, the day's work still aching in you" }
+        else if a.vigour >= 82 { "rested and easy in your body, your strength your own" }
+        else { "neither fresh nor spent — an ordinary tiredness" }.to_string();
+    if a.health <= 38 {
+        s.push_str("; and you are unwell — ill, or ailing badly, and it drags at everything");
+    } else if a.health <= 64 {
+        s.push_str(if age >= 55 { "; and your old complaints nag at you, the damp deep in your bones" }
+                   else { "; and you are a little under the weather, not your best self" });
+    }
+    s
+}
+
 /// Birth, marriage, ageing, death, succession — the slow turn of the cast that makes a
 /// run *history* rather than a loop. Runs once a day on its own RNG stream.
 fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
@@ -2822,6 +2894,9 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
         actor: actor.into(),
         text,
     };
+
+    // --- the body: the day's labour and the season tell on the flesh, and the flesh on the spirits ---
+    tend_body(world, day, date, seed);
 
     // --- memory fades ---
     // Every soul lets the day's edge come off what they carry. A plain memory loses a point a
@@ -3966,7 +4041,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 38;
+const SNAPSHOT_VERSION: i64 = 39;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -5599,6 +5674,9 @@ impl Sim {
                 ));
             }
         }
+        // the body under the mind — a soul reasons and chooses partly from the flesh: bone-weary,
+        // or ill, or rested and well. Embodiment: the day's labour and the season are in the thought.
+        dossier.push_str(&format!("\nYour body, tonight: you are {}.", body_phrase(ag, day)));
         // how they imagine the parish regards them — the recursive mirror, which may sit wide of
         // the truth; they reason partly from how they feel themselves seen, not their real standing
         dossier.push_str(&format!("\nHow they feel themselves seen by the parish: {}.", self_regard_phrase(ag.seen_as)));
@@ -5674,7 +5752,9 @@ impl Sim {
             let a = &w.agents[i];
             let focus = if a.focus.topic.is_empty() { 0 } else { a.focus.intensity };
             let aim = if a.intent != 0 && a.intent_age >= 4 { 50 } else { 0 };
-            focus.max(aim)
+            // a soul worn to the bone or ill is slow to go out and act — the body holds them back
+            let spent = if a.vigour <= 22 { 18 } else if a.vigour <= 40 || a.health <= 40 { 8 } else { 0 };
+            (focus.max(aim) - spent).max(0)
         };
         let idx = (0..w.agents.len())
             .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
@@ -7171,5 +7251,35 @@ mod act_tests {
         apply_decrees(&mut w, 2, date, std::slice::from_ref(&gamble));
         let d = w.agents[f].purse - p1;
         assert!(d == 30 || d == -22, "a gamble makes the year or sets them back, got {d}");
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+
+    // A soul is not a disembodied mind: the day's labour tells on the flesh, the working folk
+    // hardest, and the flesh tells on the spirits — a worn, ill body drags the mood down.
+    #[test]
+    fn the_body_tires_with_labour_and_the_flesh_tells_on_the_spirits() {
+        let mut w = World::seed();
+        let hand = (0..w.agents.len()).find(|&i| w.agents[i].active() && w.agents[i].archetype == "blunt_hand").unwrap();
+        let gent = (0..w.agents.len()).find(|&i| w.agents[i].active() && w.agents[i].archetype == "genteel_status_seeker").unwrap();
+        w.agents[hand].vigour = 60;
+        w.agents[gent].vigour = 60;
+        let date = Date::from_calendar_date(1934, Month::July, 2).unwrap(); // the Hay season, the backs broken
+
+        for d in 1..15 { tend_body(&mut w, d, date, 7); }
+        assert!(w.agents[hand].vigour < w.agents[gent].vigour,
+            "a labouring hand in hay tires harder than the genteel ({} vs {})", w.agents[hand].vigour, w.agents[gent].vigour);
+        assert!((0..=100).contains(&w.agents[hand].vigour), "vigour stays in its bounds");
+
+        // a spent, ill body drags the spirits down
+        let s = gent;
+        w.agents[s].vigour = 6;
+        w.agents[s].health = 20;
+        let before = w.agents[s].mood;
+        tend_body(&mut w, 200, date, 7);
+        assert!(w.agents[s].mood <= before, "a worn, ailing body sinks the spirits");
     }
 }
