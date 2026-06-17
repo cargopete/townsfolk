@@ -1676,6 +1676,26 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "bond" => {
+                // One soul takes another into their household — a stray, a lodger, an orphan. --target
+                // is the one taken in; --note names the host; --amount sets the warmth of the new tie
+                // (default 35). The taken-in moves to the host's seat, and a warm bond forms both ways —
+                // the sheltered the more grateful — with a kindness the taken-in carries.
+                let host_name = iv.note.trim();
+                if let (Some(taken), Some(host)) = (world.idx(t), world.idx(host_name)) {
+                    if taken != host {
+                        let warmth: i16 = if iv.amount > 0 { iv.amount.clamp(1, 100) as i16 } else { 35 };
+                        let seat = world.agents[host].seat.clone();
+                        world.agents[taken].seat = seat.clone();
+                        world.nudge_aff(host, taken, warmth);
+                        world.nudge_aff(taken, host, (warmth + 15).min(100));
+                        world.remember(taken, "reprieve", host as i32, 55, 60, day);
+                        let hn = world.agents[host].name.clone();
+                        out.push(mk("providence", &hn, format!("{hn} took {t} in — a roof and a place at {seat} where there had been none.")));
+                        world.spawn_news(&hn, &format!("how {hn} took {t} in"), 1, day, &[]);
+                    }
+                }
+            }
             other => {
                 out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
             }
@@ -3922,7 +3942,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 37;
+const SNAPSHOT_VERSION: i64 = 38;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
