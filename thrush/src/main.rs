@@ -112,6 +112,9 @@ enum Cmd {
         /// How many souls' streams to advance this run (each the next most overdue).
         #[arg(long, default_value_t = 1)]
         count: i64,
+        /// Advance EVERY active adult's stream once — a full-town heartbeat, the most overdue first.
+        #[arg(long)]
+        all: bool,
     },
     /// Write the life the parish would tell of each soul — backstory, character, a defining turn.
     /// Works through those who lack one; injected into talk and reflection so souls know each other.
@@ -851,12 +854,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => eprintln!("oracle unavailable ({host}) — conversation unrecorded."),
             }
         }
-        Cmd::Reflect { count } => {
+        Cmd::Reflect { count, all } => {
             let mut sim = Sim::open(&cli.db)?;
             sim.catch_up(today(), cur_phase())?;
             let t = today();
             let names: Vec<String> = sim.world_snapshot(t).agents.iter()
                 .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
+            // --all is a full-town heartbeat: every active adult advances their thread once
+            let count = if all { names.len() as i64 } else { count };
             // prefer Claude (Haiku) for a sharper inner voice — but never past the day's Anthropic
             // cap (default $1; set ANTHROPIC_DAILY_USD). Beyond it, reflect on the free local Qwen.
             let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);

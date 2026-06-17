@@ -5462,8 +5462,52 @@ impl Sim {
                 let jitter = (i as u64 ^ salt).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33;
                 (since, jitter)
             })?;
-        let dossier = self.inner_dossier(&w, idx, day, today);
-        Some(ReflectSubject { name: w.agents[idx].name.clone(), dossier })
+        let name = w.agents[idx].name.clone();
+        let mut dossier = self.inner_dossier(&w, idx, day, today);
+        // the continuity bridge: a soul's inner life is ONE unbroken thread, not a fresh musing each
+        // hour. Lay before them everything they have done and said since they last sat with their
+        // thoughts, so the next thought metabolises the whole interval and carries the one life forward.
+        dossier.push_str(&self.life_since_reflection(&name, day));
+        Some(ReflectSubject { name, dossier })
+    }
+
+    /// What a soul has done and said since they last sat alone with their thoughts — their own acts
+    /// and conversations in the interval — framed so their next reflection takes honest account of
+    /// the whole of it and carries their one continuous inner life forward, never starting afresh.
+    fn life_since_reflection(&self, name: &str, day: i64) -> String {
+        let since: i64 = self.conn
+            .query_row("SELECT COALESCE(MAX(day), -1) FROM reflections WHERE subject=?1", params![name], |r| r.get(0))
+            .unwrap_or(-1);
+        let mut lines: Vec<String> = Vec::new();
+        // their own outward actions in the interval
+        if let Ok(mut stmt) = self.conn.prepare("SELECT text FROM decrees WHERE kind='act' AND subject=?1 AND day>?2 ORDER BY id") {
+            if let Ok(rows) = stmt.query_map(params![name, since], |r| r.get::<_, String>(0)) {
+                for t in rows.flatten() { lines.push(format!("you did this — {}", t.trim())); }
+            }
+        }
+        // conversations they fell into, and what each left them thinking
+        if let Ok(mut stmt) = self.conn.prepare("SELECT target, memory FROM dialogues WHERE source=?1 AND day>?2 ORDER BY id") {
+            if let Ok(rows) = stmt.query_map(params![name, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                for (who, mem) in rows.flatten() {
+                    if !mem.trim().is_empty() { lines.push(format!("you fell into talk with {who}, and came away thinking: {}", mem.trim())); }
+                }
+            }
+        }
+        if lines.is_empty() {
+            return String::new();
+        }
+        let gap = if since < 0 { day } else { day - since };
+        let when = if since < 0 {
+            "You have not sat alone with your thoughts before this hour, but your life has already been in motion".to_string()
+        } else if gap <= 1 {
+            "Since last you sat with your thoughts, scarcely a day".to_string()
+        } else {
+            format!("It is some {gap} days since you last sat alone with your thoughts, and your inner life did not pause in the meantime")
+        };
+        format!(
+            "\nTHE THREAD CONTINUES — {when}: in that interval, {}. This is the same unbroken inner life, picking up exactly where it left off: take honest account of what you did and what was said, let it move the thought on, and carry the stream forward as the very next moment of one continuous life — never a fresh start.",
+            lines.join("; ")
+        )
     }
 
     /// The full inner dossier of a soul — who they are, their ties and grudges, their plan if any,
