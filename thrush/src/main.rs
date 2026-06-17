@@ -99,6 +99,12 @@ enum Cmd {
         /// Stage one even if the town has already talked today.
         #[arg(long)]
         force: bool,
+        /// Force a specific pair, by their two names piped: --between "Bee|Mr Tranter".
+        #[arg(long, default_value = "")]
+        between: String,
+        /// Set the scene the talk happens in: --setting "a busy evening at the Pelican…".
+        #[arg(long, default_value = "")]
+        setting: String,
     },
     /// Advance the inner life: the most-overdue souls each take a quiet hour and carry their
     /// stream of consciousness forward a beat — recording the thought (self-memory) and its residue.
@@ -787,16 +793,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => eprintln!("oracle unavailable ({host}) — the decision waits."),
             }
         }
-        Cmd::Converse { force } => {
+        Cmd::Converse { force, between, setting } => {
             let mut sim = Sim::open(&cli.db)?;
             sim.catch_up(today(), cur_phase())?;
             let t = today();
             let day = sim.target_day(t).max(0);
-            // the town has at most one conversation of its own accord a day
-            if !force && sim.last_dialogue_day()?.is_some_and(|last| last >= day) {
+            // a forced pair (--between "A|B") always stages, bypassing the once-a-day cooldown
+            let forced = (!between.is_empty()).then(|| between.split_once('|')).flatten();
+            if forced.is_none() && !force && sim.last_dialogue_day()?.is_some_and(|last| last >= day) {
                 return Ok(());
             }
-            let Some(p) = sim.converse_pair(t) else { return Ok(()) };
+            let pair = match forced {
+                Some((a, b)) => sim.converse_pair_between(t, a.trim(), b.trim(), setting.trim()),
+                None => sim.converse_pair(t),
+            };
+            let Some(p) = pair else {
+                eprintln!("no such pair to set talking.");
+                return Ok(());
+            };
             let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
             let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
             let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();

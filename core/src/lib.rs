@@ -4808,6 +4808,23 @@ impl Sim {
             (a != b).then_some((a, b))
         })?;
 
+        Some(self.build_pair(&w, a, b, day, today, ""))
+    }
+
+    /// Force a conversation between two NAMED souls, with an optional scene — for staging a meeting
+    /// the auto-picker would not have made (a busy evening at the Pelican, say). None if either is absent.
+    pub fn converse_pair_between(&self, today: Date, a_name: &str, b_name: &str, setting: &str) -> Option<ConversePair> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let a = w.agents.iter().position(|x| x.name == a_name && x.active())?;
+        let b = w.agents.iter().position(|x| x.name == b_name && x.active())?;
+        (a != b).then(|| self.build_pair(&w, a, b, day, today, setting))
+    }
+
+    /// Assemble the conversation brief for a chosen pair — their briefs and the rich `relation`
+    /// (history, recalls, present thoughts, biographies, the murder's pall, the season, recent news),
+    /// optionally framed by a `setting` (where and when the talk happens). Shared by both pickers.
+    fn build_pair(&self, w: &World, a: usize, b: usize, day: i64, today: Date, setting: &str) -> ConversePair {
         let brief = |i: usize| {
             let ag = &w.agents[i];
             let role = ag.trade.clone().unwrap_or_else(|| match ag.archetype.as_str() {
@@ -4815,7 +4832,7 @@ impl Sim {
                 "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
             }.to_string());
             format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}.",
-                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_word(ag.mood), goal_label(&w, ag.goal, ag.goal_target))
+                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_word(ag.mood), goal_label(w, ag.goal, ag.goal_target))
         };
         let mut relation = if w.agents[a].spouse == Some(b) {
             "They are man and wife.".to_string()
@@ -4828,6 +4845,9 @@ impl Sim {
             else if af > 0 { "They are on friendly enough terms.".into() }
             else { "They are barely acquainted.".into() }
         };
+        if !setting.is_empty() {
+            relation = format!("The scene, here and now: {setting}. Let the talk arise naturally out of the occasion. {relation}");
+        }
         // what each already carries of the other, so the talk has a history behind it
         let recall = |from: &str, of: &str| -> String {
             self.memories_of(from, 6).ok().into_iter().flatten()
@@ -4852,8 +4872,8 @@ impl Sim {
         relation.push_str(&life(&w.agents[a].name));
         relation.push_str(&life(&w.agents[b].name));
         // a killing in the parish colours everything — they cannot but speak of it, and of whom they fear
-        if let Some(brief) = inquest_brief(&w, a).or_else(|| inquest_brief(&w, b)) {
-            relation.push_str(&format!(" {brief}"));
+        if let Some(ib) = inquest_brief(w, a).or_else(|| inquest_brief(w, b)) {
+            relation.push_str(&format!(" {ib}"));
         }
         // the parish as it actually stands, so they have real matter to talk of
         relation.push_str(&format!(" The season is {}.", Season::of(today).name()));
@@ -4863,11 +4883,11 @@ impl Sim {
                 relation.push_str(&format!(" Lately about the parish: {}", lines.join(" ")));
             }
         }
-        Some(ConversePair {
+        ConversePair {
             a, a_name: w.agents[a].name.clone(), a_brief: brief(a),
             b, b_name: w.agents[b].name.clone(), b_brief: brief(b),
             relation,
-        })
+        }
     }
 
     /// The day-index of the most recent conversation, to keep the town from chattering nonstop.
