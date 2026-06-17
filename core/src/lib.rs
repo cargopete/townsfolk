@@ -2117,6 +2117,14 @@ const ACT_COOLDOWN: i64 = 3;
 // soul who chose to stay from being asked again every day (the question is momentous, not nagging).
 const DEPART_FLOOR: i32 = 40;
 const DEPART_COOLDOWN: i64 = 12;
+
+// The betrothal decision: a long, mutual courtship is no longer joined by the fold of its own accord
+// — when it has ripened (BETROTH_AT steps, mutual warmth) the COURTED soul is put to the proposal and
+// rules accept|refuse. The first two-sided decision: a suitor's pursuit, the other's answer.
+const BETROTH_AT: i16 = 30;
+// The crop-gamble decision: a farmer, in a growing season, weighs a bold risk on the land against
+// the small sure return of honest husbandry. GAMBLE_COOLDOWN keeps it to about once a season.
+const GAMBLE_COOLDOWN: i64 = 60;
 fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, out: &mut Vec<Event>) {
     let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
     let Some(inq) = world.inquest.clone() else { return };
@@ -2864,24 +2872,12 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
             };
             out.push(mk("courtship", &ni, line));
         }
+        // A ripe, mutual courtship is no longer joined by the fold of its own accord: when it has come
+        // far enough (BETROTH_AT, mutual warmth) the COURTED soul is put to the proposal and answers
+        // accept|refuse (pending_betrothal → a `betroth` decree). The joining of two lives turns on the
+        // answer, not a counter. The fold here only lets a suit that is never returned wither away.
         let mutual = world.aff(i, tj) >= 30 && world.aff(tj, i) >= 28;
-        if world.agents[i].courtship >= 30 && mutual {
-            world.agents[i].spouse = Some(tj);
-            world.agents[tj].spouse = Some(i);
-            world.agents[i].courting = -1;
-            world.agents[i].courtship = 0;
-            world.agents[tj].courting = -1;
-            world.agents[tj].courtship = 0;
-            nudge_mood(&mut world.agents[i], 22);
-            nudge_mood(&mut world.agents[tj], 22);
-            world.remember(i, "wed", tj as i32, 80, 80, day);
-            world.remember(tj, "wed", i as i32, 80, 80, day);
-            let (ni, nj) = (world.agents[i].name.clone(), world.agents[tj].name.clone());
-            let cross = stratum_archetype(&world.agents[i].archetype) != stratum_archetype(&world.agents[tj].archetype);
-            let note = if cross { " — a match that set tongues wagging across the class line" } else { "" };
-            out.push(mk("marriage", &ni, format!("{ni} and {nj} are to be married{note}, after a long and proper courtship.")));
-            world.spawn_news(&ni, &format!("the engagement of {ni} and {nj}"), if cross { -2 } else { 1 }, day, &[]);
-        } else if world.agents[i].courtship >= 75 && !mutual {
+        if world.agents[i].courtship >= 75 && !mutual {
             world.agents[i].courting = -1;
             world.agents[i].courtship = 0;
             nudge_mood(&mut world.agents[i], -10);
@@ -4321,6 +4317,75 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     _ => {}
                 }
             }
+            // the first TWO-SIDED decision: a ripe courtship comes to its question. si = the COURTED
+            // soul, who answers; ti = the suitor who has paid the long court. The proposal is the
+            // suitor's pursuit (ripened in the fold); the answer is si's, and it joins or breaks two
+            // lives. The decider's own reasoning is the generic chronicle beat (above).
+            ("betroth", choice) => {
+                if let Some(suitor) = ti.filter(|&t| world.agents[t].active() && t != si) {
+                    let (dn, sn) = (world.agents[si].name.clone(), world.agents[suitor].name.clone());
+                    match choice {
+                        // she takes him: two lives joined, the long courtship come to its end
+                        "accept" => if world.agents[si].spouse.is_none() && world.agents[suitor].spouse.is_none() {
+                            world.agents[si].spouse = Some(suitor);
+                            world.agents[suitor].spouse = Some(si);
+                            world.agents[si].courting = -1; world.agents[si].courtship = 0;
+                            world.agents[suitor].courting = -1; world.agents[suitor].courtship = 0;
+                            nudge_mood(&mut world.agents[si], 22);
+                            nudge_mood(&mut world.agents[suitor], 24);
+                            world.remember(si, "wed", suitor as i32, 80, 80, day);
+                            world.remember(suitor, "wed", si as i32, 80, 80, day);
+                            let cross = stratum_archetype(&world.agents[si].archetype) != stratum_archetype(&world.agents[suitor].archetype);
+                            let note = if cross { " — a match that set tongues wagging across the class line" } else { "" };
+                            out.push(Event { day, date: date.to_string(), kind: "marriage".into(), actor: sn.clone(),
+                                text: format!("{sn} and {dn} are to be married{note}, the long courtship come at last to its end.") });
+                            world.spawn_news(&sn, &format!("the engagement of {sn} and {dn}"), if cross { -2 } else { 1 }, day, &[]);
+                        },
+                        // she will not have him: the suit broken, the suitor carrying the sting of it
+                        "refuse" => {
+                            world.agents[suitor].courting = -1;
+                            world.agents[suitor].courtship = 0;
+                            nudge_mood(&mut world.agents[suitor], -16);
+                            world.nudge_aff(si, suitor, -8);
+                            world.remember(suitor, "snub", si as i32, -45, 55, day);
+                            world.spawn_news(&sn, &format!("how {dn} would not have {sn} after all his courting"), -1, day, &[]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // a farmer's gamble on the land this season: the decision is the oracle's, the season's
+            // fortune a fixed, replay-safe roll. `gamble` may make their year or set them back; `safe`
+            // takes the small sure return. The decision prose is the generic beat (above); the arm
+            // pushes the outcome beat that follows from it.
+            ("gamble", choice) => {
+                let nm = world.agents[si].name.clone();
+                match choice {
+                    "gamble" => {
+                        let roll = ((day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (si as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)) % 100;
+                        if roll < 55 {
+                            world.agents[si].purse += 30;
+                            clamp_standing(&mut world.agents[si], 1);
+                            nudge_mood(&mut world.agents[si], 16);
+                            out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: nm.clone(),
+                                text: format!("And the gamble came good: the season turned {nm}'s way, and the money with it.") });
+                            world.spawn_news(&nm, &format!("how {nm}'s bold gamble on the land paid off"), 2, day, &[]);
+                        } else {
+                            world.agents[si].purse -= 22;
+                            nudge_mood(&mut world.agents[si], -18);
+                            out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: nm.clone(),
+                                text: format!("And the gamble failed: the season went against {nm}, and they are the poorer for it.") });
+                            world.spawn_news(&nm, &format!("how {nm}'s gamble on the land came to grief"), -2, day, &[]);
+                        }
+                    }
+                    // the small, sure return of honest husbandry — no glory, no ruin
+                    "safe" => {
+                        world.agents[si].purse += 6;
+                        nudge_mood(&mut world.agents[si], 3);
+                    }
+                    _ => {}
+                }
+            }
             // the felt cost of facing (or refusing) a crack in one's own self-model: a reckoning
             // integrates it at a price; denial hardens against it, which costs more, and quietly.
             ("psyche", c) => {
@@ -5366,6 +5431,93 @@ impl Sim {
         self.conn.execute(
             "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'depart','',?3,?4)",
             params![day, actor, choice, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Is a proposal before a soul? When a courtship has ripened — the suitor has paid long court,
+    /// both are free, the warmth is mutual — the COURTED soul is put to the question. Returns
+    /// (courted, suitor, dossier) for the oracle to answer, else None. The first two-sided decision:
+    /// the suit is the suitor's pursuit (built in the fold); the answer is the courted soul's, and a
+    /// recorded `betroth` decree joins or breaks the two. (The fold no longer marries of its own accord.)
+    pub fn pending_betrothal(&self, today: Date) -> Option<(String, String, String)> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        // the ripest courtship that has come to its question — long-paid, free on both sides, mutual
+        let mut best: Option<(usize, usize, i16)> = None; // (suitor, courted, courtship-progress)
+        for i in 0..w.agents.len() {
+            if !w.agents[i].active() || w.agents[i].spouse.is_some() { continue; }
+            let tj = w.agents[i].courting;
+            if tj < 0 { continue; }
+            let tj = tj as usize;
+            if tj >= w.agents.len() || !w.agents[tj].active() || w.agents[tj].spouse.is_some() { continue; }
+            if w.agents[i].courtship < BETROTH_AT { continue; }
+            if !(w.aff(i, tj) >= 30 && w.aff(tj, i) >= 28) { continue; } // mutual enough to be a real proposal
+            if best.is_none_or(|(_, _, c)| w.agents[i].courtship > c) {
+                best = Some((i, tj, w.agents[i].courtship));
+            }
+        }
+        let (suitor, courted, _) = best?;
+        let role = w.agents[suitor].trade.clone().unwrap_or_else(|| match w.agents[suitor].archetype.as_str() {
+            "genteel_status_seeker" => "of the gentry", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+            "scheming_improver" => "an improver", "blunt_hand" => "a working man", "official" => "of the parish", _ => "of the town",
+        }.to_string());
+        let sn = w.agents[suitor].name.clone();
+        let (seat, age) = (w.agents[suitor].seat.clone(), w.agents[suitor].age(day));
+        let mut d = self.inner_dossier(&w, courted, day, today);
+        d.push_str(&format!("\n\nA PROPOSAL BEFORE THEM: {sn} — {role}, of {seat}, aged {age} — has paid them long and faithful court, and it is come at last to the asking: will they marry? Weigh it exactly as THIS soul would, by their own heart and their station and what such a match would make of their life — his place and prospects set against their own, whether the warmth is truly returned or merely borne, what their kin and the parish would say of it. Do they ACCEPT {sn}, or REFUSE?"));
+        Some((w.agents[courted].name.clone(), sn, d))
+    }
+
+    /// Record the courted soul's answer as a `betroth` decree. choice ∈ [accept, refuse]; subject =
+    /// the one who answers, target = the suitor. `accept` weds them; `refuse` breaks the suit. Replay-safe.
+    pub fn record_betrothal(&mut self, date: Date, courted: &str, suitor: &str, choice: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'betroth',?3,?4,?5)",
+            params![day, courted, suitor, choice, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// Is a gamble on the land before a farmer? In a growing season, a farmer who has not lately
+    /// weighed one is offered the choice: a bold, risky venture that may make their year or set them
+    /// back, or the small sure return of honest husbandry. Returns (farmer, dossier), else None. The
+    /// decision is the oracle's; the season's fortune is a fixed, replay-safe roll in the fold.
+    pub fn pending_gamble(&self, today: Date) -> Option<(String, String)> {
+        if matches!(Season::of(today), Season::Winter) { return None; } // no gambling on the land in the dead season
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let asked: BTreeMap<String, i64> = {
+            let mut m = BTreeMap::new();
+            if let Ok(mut s) = self.conn.prepare("SELECT subject, MAX(day) FROM decrees WHERE kind='gamble' GROUP BY subject") {
+                if let Ok(rows) = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                    for row in rows.flatten() { m.insert(row.0, row.1); }
+                }
+            }
+            m
+        };
+        // the hungriest eligible farmer first — the one with the most reason to chance it
+        let idx = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && matches!(w.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver"))
+            .filter(|&i| day - asked.get(&w.agents[i].name).copied().unwrap_or(i64::MIN / 2) >= GAMBLE_COOLDOWN)
+            .min_by_key(|&i| (w.agents[i].purse, i as i64))?;
+        let mut d = self.inner_dossier(&w, idx, day, today);
+        d.push_str(&format!("\n\nTHE LAND, THIS {} SEASON: a chance has come to gamble on the land — to sink what they have into a bold, risky venture (a speculative cash crop, a costly beast, a scheme of improvement) that may make their year or ruin it; OR to play it safe and take the small, sure return of honest husbandry. Weigh it exactly as THIS farmer would, by their temper, their debts, their nerve, what they can bear to lose. Do they GAMBLE, or play it SAFE?", Season::of(today).name().to_uppercase()));
+        Some((w.agents[idx].name.clone(), d))
+    }
+
+    /// Record a farmer's decision on the land as a `gamble` decree. choice ∈ [gamble, safe]; the
+    /// fold resolves the season's fortune deterministically. Replay-safe.
+    pub fn record_gamble(&mut self, date: Date, farmer: &str, choice: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'gamble','',?3,?4)",
+            params![day, farmer, choice, text],
         )?;
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
@@ -6569,5 +6721,65 @@ mod act_tests {
         assert!(w.agents[leaver].death_day.is_none(), "they left alive — no death, and so no funeral");
         assert!(w.agents[dear].memories.iter().any(|m| m.kind == "grief" && m.who == leaver as i32),
             "one who held them dear carries the loss");
+    }
+
+    // The first two-sided decision: a ripe courtship comes to its question. An ACCEPT weds the two
+    // (the answer joins their lives); a REFUSE breaks the suit and leaves the suitor stung.
+    #[test]
+    fn a_betrothal_accepted_weds_refused_breaks_the_suit() {
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+
+        // accept: subject = the courted (who answers), target = the suitor
+        let mut w = World::seed();
+        let g: Vec<usize> = (0..w.agents.len()).filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        let (suitor, courted) = (g[0], g[1]);
+        w.agents[suitor].spouse = None; w.agents[courted].spouse = None;
+        w.agents[suitor].courting = courted as i32;
+        w.agents[suitor].courtship = 40;
+        w.nudge_aff(suitor, courted, 50);
+        w.nudge_aff(courted, suitor, 40);
+        let (sn, cn) = (w.agents[suitor].name.clone(), w.agents[courted].name.clone());
+        let accept = Decree { subject: cn, kind: "betroth".into(), target: sn, choice: "accept".into(), text: "she took him".into() };
+        apply_decrees(&mut w, 1, date, std::slice::from_ref(&accept));
+        assert_eq!(w.agents[suitor].spouse, Some(courted), "the suitor is wed to the one who accepted");
+        assert_eq!(w.agents[courted].spouse, Some(suitor), "and she to him");
+        assert!(w.agents[courted].memories.iter().any(|m| m.kind == "wed" && m.who == suitor as i32),
+            "the match is laid down as a charged memory");
+
+        // refuse: a fresh pair — the suit is broken, no one wed
+        let mut w2 = World::seed();
+        let g2: Vec<usize> = (0..w2.agents.len()).filter(|&i| w2.agents[i].active() && w2.agents[i].archetype != "child").collect();
+        let (s2, c2) = (g2[0], g2[1]);
+        w2.agents[s2].spouse = None; w2.agents[c2].spouse = None;
+        w2.agents[s2].courting = c2 as i32;
+        w2.agents[s2].courtship = 40;
+        let (sn2, cn2) = (w2.agents[s2].name.clone(), w2.agents[c2].name.clone());
+        let refuse = Decree { subject: cn2, kind: "betroth".into(), target: sn2, choice: "refuse".into(), text: "she would not".into() };
+        apply_decrees(&mut w2, 1, date, std::slice::from_ref(&refuse));
+        assert_eq!(w2.agents[s2].spouse, None, "a refusal weds no one");
+        assert_eq!(w2.agents[s2].courting, -1, "the broken suit is given up");
+    }
+
+    // A farmer's gamble on the land: `safe` is a sure small gain; `gamble` is a real swing — it
+    // makes the year or sets them back — and the outcome is a fixed, replay-safe roll, never nothing.
+    #[test]
+    fn a_gamble_swings_the_purse_safe_is_a_sure_small_gain() {
+        let mut w = World::seed();
+        let f = (0..w.agents.len())
+            .find(|&i| w.agents[i].active() && matches!(w.agents[i].archetype.as_str(), "hill_farmer" | "scheming_improver"))
+            .expect("the parish has farmers");
+        let nm = w.agents[f].name.clone();
+        let date = Date::from_calendar_date(1934, Month::June, 1).unwrap();
+
+        let p0 = w.agents[f].purse;
+        let safe = Decree { subject: nm.clone(), kind: "gamble".into(), target: String::new(), choice: "safe".into(), text: "played it safe".into() };
+        apply_decrees(&mut w, 1, date, std::slice::from_ref(&safe));
+        assert_eq!(w.agents[f].purse - p0, 6, "the safe course is a sure small gain");
+
+        let p1 = w.agents[f].purse;
+        let gamble = Decree { subject: nm, kind: "gamble".into(), target: String::new(), choice: "gamble".into(), text: "chanced it".into() };
+        apply_decrees(&mut w, 2, date, std::slice::from_ref(&gamble));
+        let d = w.agents[f].purse - p1;
+        assert!(d == 30 || d == -22, "a gamble makes the year or sets them back, got {d}");
     }
 }

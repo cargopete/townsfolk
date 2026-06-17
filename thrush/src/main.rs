@@ -158,6 +158,22 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         count: i64,
     },
+    /// Put a ripe courtship to its question: when a suit has been long and faithfully paid and the
+    /// warmth is mutual, the COURTED soul rules — in their own heart and station — whether to ACCEPT
+    /// the proposal or REFUSE it. The first two-sided decision; an acceptance weds them. Recorded, folded.
+    Betroth {
+        /// How many ripe courtships to put to the question this run (each the next most advanced).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+    },
+    /// Put a gamble on the land to a farmer: in a growing season the oracle decides — by that
+    /// farmer's nerve and need — whether they GAMBLE on a bold, risky venture or play it SAFE. The
+    /// season's fortune is a fixed, replay-safe roll. Recorded and folded.
+    Gamble {
+        /// How many farmers to put to the choice this run (each the next hungriest, once a season).
+        #[arg(long, default_value_t = 1)]
+        count: i64,
+    },
     /// Print the town at a glance.
     Status,
     /// Live monitor (q / Esc to quit).
@@ -466,6 +482,41 @@ fn parse_departure(p: &serde_json::Value) -> Option<(String, String)> {
     }
     let c = p.get("choice").and_then(|v| v.as_str()).unwrap_or("stay").trim().to_lowercase();
     let choice = if c.contains("go") && !c.contains("stay") { "go" } else { "stay" }.to_string();
+    Some((account, choice))
+}
+
+// ------------------------------------------------------------------ a proposal answered
+// The first two-sided decision: a suitor's long pursuit (built in the fold) comes to its question,
+// and the COURTED soul answers. accept weds them; refuse breaks the suit. Defaults to refuse — a
+// soul is never married off on an ambiguous verdict.
+const BETROTH_PROMPT: &str = "You answer, in the courted soul's own heart and character, a proposal of marriage in Thrushcombe St Mary — a 1934 West-Country market town. A suitor has paid them long and faithful court, and now asks for their hand. You are given who the courted soul is, all that weighs on them, and who the suitor is. Weigh it exactly as THEY would, by their own feeling, their station, their prospects, what their kin and the parish would say — a match is not made on warmth alone, nor refused lightly when a life hangs on it; yet a soul may refuse a suit they cannot return, or one their family would never countenance. There is no right answer — only theirs. \
+Give ONLY a JSON object: {\"account\": a record of how they answer and why, 1 to 3 sentences, third person, period chronicle voice, no quotation marks and no preamble; \"choice\": EXACTLY one of [accept, refuse] — accept to take the suitor and be married, refuse to decline the suit}.";
+
+/// Validate a betrothal answer: (account, choice∈[accept,refuse]). Defaults to refuse on ambiguity.
+fn parse_betrothal(p: &serde_json::Value) -> Option<(String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let c = p.get("choice").and_then(|v| v.as_str()).unwrap_or("refuse").trim().to_lowercase();
+    let choice = if c.contains("accept") && !c.contains("refuse") { "accept" } else { "refuse" }.to_string();
+    Some((account, choice))
+}
+
+// ------------------------------------------------------------------ a gamble on the land
+// A farmer weighs a bold risk on the land against the sure return of honest husbandry. The decision
+// is the oracle's; the season's fortune is a fixed roll in the fold. Defaults to the cautious `safe`.
+const GAMBLE_PROMPT: &str = "You decide, in a farmer's own character, whether they gamble on the land this season in Thrushcombe St Mary — a 1934 West-Country market town. A chance has come to sink what they have into a bold, risky venture that may make their year or ruin it, or to play it safe and take the small, sure return. You are given who they are and how they stand. Weigh it exactly as THIS farmer would — by their nerve, their debts, their need, what they can bear to lose; a desperate man may chance everything, a careful one never will. There is no right answer — only theirs. \
+Give ONLY a JSON object: {\"account\": a record of what they resolve and why, 1 to 3 sentences, third person, period chronicle voice, no quotation marks and no preamble; \"choice\": EXACTLY one of [gamble, safe] — gamble to chance the risky venture, safe to take the sure return}.";
+
+/// Validate a gamble verdict: (account, choice∈[gamble,safe]). Defaults to safe on ambiguity.
+fn parse_gamble(p: &serde_json::Value) -> Option<(String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let c = p.get("choice").and_then(|v| v.as_str()).unwrap_or("safe").trim().to_lowercase();
+    let choice = if c.contains("gamble") && !c.contains("safe") { "gamble" } else { "safe" }.to_string();
     Some((account, choice))
 }
 
@@ -977,6 +1028,52 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     None => {
                         eprintln!("oracle unavailable — the soul cannot bring themselves to decide.");
+                        break;
+                    }
+                }
+            }
+        }
+        Cmd::Betroth { count } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            for _ in 0..count.max(1) {
+                let Some((courted, suitor, dossier)) = sim.pending_betrothal(t) else {
+                    println!("No courtship has yet ripened to its question.");
+                    break;
+                };
+                let raw = claude_json(BETROTH_PROMPT, &format!("{dossier}\n\nThe suitor is {suitor}. How do they answer?"));
+                match raw.as_ref().and_then(parse_betrothal) {
+                    Some((account, choice)) => {
+                        sim.record_betrothal(t, &courted, &suitor, &choice, &account)?;
+                        sim.catch_up(today(), cur_phase())?; // fold it — an acceptance weds them
+                        println!("Betrothal [{courted} · {choice} · {suitor}]: {account}");
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the answer is not given this day.");
+                        break;
+                    }
+                }
+            }
+        }
+        Cmd::Gamble { count } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            for _ in 0..count.max(1) {
+                let Some((farmer, dossier)) = sim.pending_gamble(t) else {
+                    println!("No farmer is at a gamble on the land just now.");
+                    break;
+                };
+                let raw = claude_json(GAMBLE_PROMPT, &format!("{dossier}\n\nDo they gamble, or play it safe?"));
+                match raw.as_ref().and_then(parse_gamble) {
+                    Some((account, choice)) => {
+                        sim.record_gamble(t, &farmer, &choice, &account)?;
+                        sim.catch_up(today(), cur_phase())?; // fold it — the season's fortune is rolled
+                        println!("Gamble [{farmer} · {choice}]: {account}");
+                    }
+                    None => {
+                        eprintln!("oracle unavailable — the farmer holds off deciding.");
                         break;
                     }
                 }

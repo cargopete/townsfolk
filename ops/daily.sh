@@ -28,4 +28,6 @@ export PATH="$HOME/.local/bin:$PATH"
 "$BIN" --db "$DB" introspect --count 1 || true  # let a soul consolidate self-model + theory of mind
 "$BIN" --db "$DB" act --count 2 || true  # let a pressed soul or two take an action of their own accord — the town drives itself
 "$BIN" --db "$DB" depart --count 1 || true  # a soul driven past bearing may choose to leave Thrushcombe for good
+"$BIN" --db "$DB" betroth --count 1 || true  # a ripe courtship comes to its question — the courted soul answers
+"$BIN" --db "$DB" gamble --count 1 || true  # in a growing season, a farmer weighs a gamble on the land
 "$BIN" --db "$DB" biography --limit 1 || true  # write the life of a soul still lacking one
