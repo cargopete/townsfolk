@@ -379,6 +379,34 @@ fn inquiry(sim: &Sim) -> String {
         Ok(_) => body.push_str("<p class=sub>The magistrate has read out no statements yet.</p>"),
         Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
     }
+    // the full case file — every statement taken, whether read out or given in private
+    match sim.all_testimony(200) {
+        Ok(ts) if !ts.is_empty() => {
+            body.push_str(&format!(
+                "<h2 style='margin-top:2.4rem'>All statements taken <span class=sub style='font-weight:normal'>&middot; {} in all</span></h2>\
+                 <div class=sub>Every soul's account to the magistrate, newest first — those read out in the open, and those taken in private.</div>",
+                ts.len()
+            ));
+            for (day, who, alibi, accuses, public, text) in ts {
+                let badge = match alibi.as_str() {
+                    "strong" => "<span class=tag style='color:#2f6b3f;border-color:#2f6b3f'>alibi holds</span>",
+                    "none" => "<span class=tag style='color:#9a3b2b;border-color:#9a3b2b'>no account</span>",
+                    _ => "<span class=tag>thin account</span>",
+                };
+                let heard = if public { "<span class=tag style='color:#7a5a2e;border-color:#7a5a2e'>read out</span>" }
+                    else { "<span class=tag style='color:#777;border-color:#aaa'>in private</span>" };
+                let named = if accuses.is_empty() { String::new() }
+                    else { format!(" <span class=suspect>points at {}</span>", link(&accuses)) };
+                body.push_str(&format!(
+                    "<div class=card><div>{} {} {} <span class=date>&middot; {}</span>{}</div>\
+                     <div class=think style='margin-top:.4rem'>{}</div></div>",
+                    link(&who), badge, heard, esc(&sim.day_to_date(day)), named, esc(&text)
+                ));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
+    }
     body.push_str("<p style='margin-top:2rem'><a href=/>&larr; Dashboard</a></p>");
     page("Thrushcombe — the inquiry", &format!("{}{}", fear_banner(sim), body))
 }
@@ -703,13 +731,6 @@ fn day(sim: &Sim, url: &str) -> String {
 // and non-deterministic; only its recorded residue (a warming or cooling, a memory kept)
 // enters the fold, so the world stays exact.
 
-fn ollama() -> (String, String) {
-    (
-        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into()),
-        std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into()),
-    )
-}
-
 /// Build the in-character system prompt for `target` speaking with `source`.
 /// A short hint at how an archetype speaks, so a vet does not sound like a vicar.
 fn voice_of(arch: &str) -> &'static str {
@@ -833,28 +854,70 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     Some(p)
 }
 
-/// One turn of conversation via Ollama's chat API. `history` is prior (role, content) turns.
-fn chat_reply(system: &str, history: &[(String, String)], message: &str) -> Option<String> {
-    let (host, model) = ollama();
-    let mut messages = vec![serde_json::json!({"role": "system", "content": system})];
-    for (role, content) in history {
-        messages.push(serde_json::json!({"role": role, "content": content}));
+/// Resolve the `claude` CLI binary: CLAUDE_BIN if set, else the usual ~/.local/bin path (so a
+/// headless --user service finds it without a full PATH), else bare "claude" on PATH.
+fn claude_bin() -> String {
+    if let Ok(b) = std::env::var("CLAUDE_BIN") {
+        if !b.is_empty() { return b; }
     }
-    messages.push(serde_json::json!({"role": "user", "content": message}));
-    let body = serde_json::json!({
-        "model": model, "messages": messages, "think": false, "stream": false,
-        "options": { "num_ctx": 8192, "temperature": 0.85 },
-    });
-    let agent = ureq::AgentBuilder::new().timeout_read(std::time::Duration::from_secs(240)).build();
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/chat")).send_json(body).ok()?.into_json().ok()?;
-    let s = resp.get("message")?.get("content")?.as_str()?.trim().to_string();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let p = format!("{home}/.local/bin/claude");
+    if std::path::Path::new(&p).exists() { return p; }
+    "claude".into()
+}
+
+/// The web's oracle, same as the town's: one shot through `claude -p --model sonnet` (the local
+/// subscription). System prompt appended, the conversation piped on stdin; the reply is its text.
+fn claude_text(system: &str, user: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let model = std::env::var("CLAUDE_MODEL").unwrap_or_else(|_| "sonnet".into());
+    let mut child = Command::new(claude_bin())
+        .arg("-p").arg("--model").arg(&model).arg("--append-system-prompt").arg(system)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().ok()?;
+    { let mut si = child.stdin.take()?; si.write_all(user.as_bytes()).ok()?; }
+    let out = child.wait_with_output().ok()?;
+    out.status.success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// As `claude_text`, but pulling the first JSON object out of the reply.
+fn claude_json(system: &str, user: &str) -> Option<serde_json::Value> {
+    let t = claude_text(system, user)?;
+    let (start, end) = (t.find('{')?, t.rfind('}')?);
+    (end > start).then(|| serde_json::from_str::<serde_json::Value>(&t[start..=end]).ok()).flatten()
+}
+
+/// One turn of conversation through the oracle (the `claude` CLI, Sonnet). `history` is the prior
+/// (role, content) turns — assistant = this speaker, user = the other — laid out as a transcript so
+/// the reply builds on the talk and never loops. The system prompt carries voice + the anti-repeat rules.
+fn chat_reply(system: &str, history: &[(String, String)], message: &str) -> Option<String> {
+    let mut convo = String::new();
+    for (role, content) in history {
+        let who = if role == "assistant" { "You" } else { "They" };
+        convo.push_str(&format!("{who}: {content}\n"));
+    }
+    let user = if convo.is_empty() {
+        message.to_string() // the opener: a seed stage-direction, answered fresh
+    } else {
+        format!("{convo}They: {message}\n\nYour reply — your next turn only, in your own voice, advancing the talk and never repeating anything already said above:")
+    };
+    chat_reply_raw(system, &user)
+}
+
+/// The bare CLI call behind a turn, with the filler tic stripped per line.
+fn chat_reply_raw(system: &str, user: &str) -> Option<String> {
+    let s = claude_text(system, user)?;
+    // a reply may come back with a leading "You:"/"Name:" label the model echoes from the transcript
+    let s = s.strip_prefix("You:").unwrap_or(&s).trim().to_string();
     (!s.is_empty()).then_some(s)
 }
 
 /// At the end of a conversation, have the oracle judge its residue: did the target warm or
 /// cool toward the source, and what one line do they keep of it?
 fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Option<(String, String, String)> {
-    let (host, model) = ollama();
     let sys = format!(
         "You judge how a conversation has left {target}, a soul of a 1934 West-Country town, feeling about {source}. \
          Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence in {target}'s own voice of what they now think of {source}, \"sway\": one of [none, debt, rise, prosper, content, reconcile]}}. \
@@ -864,13 +927,7 @@ fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Op
         target = target_name, source = source_name,
     );
     let prompt = format!("The conversation:\n{transcript}\n\nHow has it left {target_name} toward {source_name}?");
-    let body = serde_json::json!({
-        "model": model, "system": sys, "prompt": prompt, "think": false, "stream": false, "format": "json",
-        "options": { "num_ctx": 8192, "temperature": 0.5 },
-    });
-    let agent = ureq::AgentBuilder::new().timeout_read(std::time::Duration::from_secs(180)).build();
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let parsed = claude_json(&sys, &prompt)?;
     let warmth = parsed.get("warmth")?.as_str()?.trim().to_lowercase();
     let warmth = ["warmer", "colder", "unchanged"].into_iter().find(|w| warmth.contains(w)).unwrap_or("unchanged").to_string();
     let sway = parsed.get("sway").and_then(|s| s.as_str()).unwrap_or("none").trim().to_lowercase();

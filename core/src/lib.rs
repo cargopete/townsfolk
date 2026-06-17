@@ -4953,6 +4953,18 @@ impl Sim {
         rows.collect()
     }
 
+    /// Every statement taken in the inquiry, read-out or not — for the full case file, newest first.
+    /// Returns (day, subject, alibi, accuses, public, text); `public` marks what was read out aloud.
+    pub fn all_testimony(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String, String, bool, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, subject, alibi, accuses, public, text FROM testimony ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)? != 0, r.get(5)?))
+        })?;
+        rows.collect()
+    }
+
     /// Assemble the soul the magistrate questions next — a named one, or the most-suspected of
     /// those not yet questioned — with the dossier their statement should be drawn from. None when
     /// the town is at peace or everyone has been heard.
