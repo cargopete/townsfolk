@@ -179,8 +179,9 @@ enum Cmd {
     /// Live monitor (q / Esc to quit).
     Watch,
     /// Play the novelist: inject circumstance the town will react to.
-    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate | inquiry | funeral | haunt.
+    /// KIND = letter | loan | legacy | scandal | stranger | murder | appoint | investigate | inquiry | funeral | haunt | secret.
     /// haunt lays a buried, faceless dread on --target (a repression: never fades, surfaces unbidden, no public trace; --amount sets its grip 1-100).
+    /// secret grounds a hidden private truth on --target via --note, fed only into their own inner life (never public). --amount 1 marks them the TRUE killer of the open murder.
     Providence {
         kind: String,
         #[arg(long, default_value = "")]

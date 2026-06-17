@@ -126,6 +126,11 @@ pub struct Agent {
     //     by the murder cannot freely turn to a courtship; the workspace is occupied. This is the
     //     integration that makes them one mind with a focus, not a heap of parallel ledgers. ---
     pub focus: Preoccupation,
+    // A grounded private truth this soul carries and will not tell — a real fact the kernel holds
+    // (a hidden guilt, a thing they did, a thing they know), fed ONLY into their own inner life so
+    // it surfaces consistently and never contradicts itself. Empty for most. The murderer carries
+    // theirs here as a buried truth; it leaks as dread and compulsion but is never plainly confessed.
+    pub secret: String,
 }
 
 /// What is uppermost in a soul's mind — the winner of the day's contention among their concerns,
@@ -224,6 +229,10 @@ pub struct Inquest {
     pub public_inquiry: bool, // the magistrate is compelled to question every soul and read it out
     pub held_until: i64,      // 0, or a day through which the magistrate, having weighed a charge and
                               // stayed his hand, is not pressed to decide again — the LLM ruling's cooldown
+    pub culprit: i32,         // -1 by design (an unsolved killing), or the index of who ACTUALLY did it —
+                              // the buried truth. Hidden: never surfaced to the town or other souls; it
+                              // only grounds the real killer's own inner life. The thread the parish has
+                              // is too thin to reach it, and the eye stays on the scapegoat regardless.
 }
 
 /// A death the parish has yet to bury — the funeral is held some days on, a great occasion the
@@ -317,6 +326,7 @@ impl World {
             expectations: Vec::new(),
             seen_as: 0,
             focus: Preoccupation::default(),
+            secret: String::new(),
         };
         let mut agents = vec![
             // The Laurels (Provincial Lady)            idx
@@ -1603,6 +1613,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             investigator: -1,
                             public_inquiry: false,
                             held_until: 0,
+                            culprit: -1,
                         });
                     }
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
@@ -1617,6 +1628,21 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 if let Some(s) = world.idx(t) {
                     let sal = if iv.amount > 0 { iv.amount.clamp(1, 100) as i16 } else { 90 };
                     world.remember(s, "haunt", -1, -90, sal, day);
+                }
+            }
+            "secret" => {
+                // A grounded private truth laid on a soul: a real fact the kernel now holds, fed ONLY
+                // into their own inner life so it surfaces consistently and never contradicts itself.
+                // Private — it touches no public chronicle, spreads no gossip, and is never shown to
+                // any other soul. amount = 1 marks them the TRUE killer of the open murder: the buried
+                // truth the town cannot reach. The kernel knows; the parish, by design, never will.
+                if let Some(s) = world.idx(t) {
+                    world.agents[s].secret = iv.note.clone();
+                    if iv.amount == 1 {
+                        if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) {
+                            q.culprit = s as i32;
+                        }
+                    }
                 }
             }
             other => {
@@ -1803,6 +1829,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         expectations: Vec::new(),
         seen_as: 0,
         focus: Preoccupation::default(),
+        secret: String::new(),
     }
 }
 
@@ -3857,7 +3884,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 35;
+const SNAPSHOT_VERSION: i64 = 36;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -5323,6 +5350,25 @@ impl Sim {
                 ));
             }
         }
+        // a grounded private truth they carry — fed ONLY to themselves, so it surfaces consistently
+        // and never contradicts itself. The true killer's is REPRESSED: it leaks as dread and
+        // compulsion, never a plain confession (so the town never learns it from them); an ordinary
+        // secret is simply kept close. This is what makes their hidden depths real rather than invented.
+        if !w.agents[idx].secret.is_empty() {
+            let repressed = w.inquest.as_ref().is_some_and(|q| q.culprit == idx as i32)
+                || w.carried(idx).iter().any(|m| m.kind == "haunt");
+            if repressed {
+                dossier.push_str(&format!(
+                    "\nTHE THING YOU HAVE BURIED (you can scarcely let yourself know it for what it is, and you will NEVER say it plainly — not to another soul, not even to yourself in words; it surfaces only as the nameless dread, as a compulsion you cannot account for, as something you flinch from and cannot look at directly): {}. Do not confess it. Do not name it. Let it press on you only as an unease whose cause you cannot reach.",
+                    w.agents[idx].secret
+                ));
+            } else {
+                dossier.push_str(&format!(
+                    "\nA PRIVATE TRUTH you carry and will tell no one (it colours how you move through the parish, but you keep it close and turn the talk aside from it): {}.",
+                    w.agents[idx].secret
+                ));
+            }
+        }
         // their running inner monologue these recent hours, oldest first — the thread to continue
         if let Ok(mut ts) = self.self_reflections(&ag.name, 6) {
             if !ts.is_empty() {
@@ -6363,6 +6409,7 @@ mod inquest_tests {
             investigator: -1,
             public_inquiry: false,
             held_until: 0,
+            culprit: -1,
         });
         // the suspect is everything the parish fears: bad blood with the dead, an incomer, cornered,
         // and friendless and low — so doubt will not save them when the reckoning comes
@@ -6507,7 +6554,7 @@ mod expectation_tests {
         w.inquest = Some(Inquest {
             victim, victim_name: w.agents[victim].name.clone(), opened: 0, accused: -1,
             accused_since: 0, hanged: false, closed: false, investigator: -1, public_inquiry: false,
-            held_until: 0,
+            held_until: 0, culprit: -1,
         });
         w.agents[soul].standing = 40;
         w.agents[soul].suspicion = 10;

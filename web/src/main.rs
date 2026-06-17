@@ -849,6 +849,24 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     if let Some(brief) = sim.murder_brief(today(), &t.name) {
         p.push_str(&format!(" {brief}"));
     }
+    // a grounded private truth you carry — fed only to YOU, kept consistent. The true killer's is
+    // repressed and must NEVER be confessed, even here, even pressed; it leaks only as unease. An
+    // ordinary secret is simply kept close and the talk turned aside from it.
+    if !t.secret.is_empty() {
+        let repressed = w.inquest.as_ref().is_some_and(|q| q.culprit == target as i32)
+            || t.memories.iter().any(|m| m.kind == "haunt");
+        if repressed {
+            p.push_str(&format!(
+                " There is a thing you have buried so deep you can scarcely know it for what it is, and you will NEVER speak it — not pressed, not cornered, not to save another: {}. Should the talk come near it you grow vague, you flinch, you turn it aside; it shows only as an unease you cannot account for, never as a word.",
+                t.secret
+            ));
+        } else {
+            p.push_str(&format!(
+                " You carry a private truth you will tell no one, and you keep the talk away from it: {}.",
+                t.secret
+            ));
+        }
+    }
     // the town as it actually stands, so the talk can touch real goings-on
     p.push_str(&format!(" The season is {}.", thrush_core::Season::of(today()).name()));
     if let Ok(recent) = sim.chronicle(5) {
