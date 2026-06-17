@@ -175,27 +175,8 @@ Do not escalate into farce, do not pile embellishment upon embellishment, do not
 
 /// One call to the recorded oracle. Returns the rendered prose, or None on failure
 /// (container down, timeout) so a batch degrades gracefully instead of dying.
-fn narrate_one(agent: &ureq::Agent, host: &str, model: &str, _date: &str, text: &str) -> Option<String> {
-    let body = serde_json::json!({
-        "model": model,
-        "system": SYSTEM_PROMPT,
-        "prompt": text,
-        "think": false,
-        "stream": false,
-        "options": { "num_ctx": 4096, "temperature": 0.6 },
-    });
-    let resp: serde_json::Value = agent
-        .post(&format!("{host}/api/generate"))
-        .send_json(body)
-        .ok()?
-        .into_json()
-        .ok()?;
-    let s = resp.get("response")?.as_str()?.trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+fn narrate_one(_agent: &ureq::Agent, _host: &str, _model: &str, _date: &str, text: &str) -> Option<String> {
+    claude_text(SYSTEM_PROMPT, text)
 }
 
 /// The town's calendar shift (days), loaded from the world at startup. Lets a `jump` carry the
@@ -216,14 +197,9 @@ const WILDCARD_PROMPT: &str = "You invent ONE surprising in-world incident for t
 
 /// Ask Qwen to invent a wildcard: an effect-kind (from the fixed vocabulary), a target, and
 /// the prose. Returns (kind, target, text), or None on failure.
-fn wildcard_one(agent: &ureq::Agent, host: &str, model: &str, date: &str, season: &str, names: &[&str]) -> Option<(String, String, String)> {
+fn wildcard_one(_agent: &ureq::Agent, _host: &str, _model: &str, date: &str, season: &str, names: &[&str]) -> Option<(String, String, String)> {
     let prompt = format!("It is {date}, in the season of {season}. The townsfolk include: {}. Invent the incident.", names.join(", "));
-    let body = serde_json::json!({
-        "model": model, "system": WILDCARD_PROMPT, "prompt": prompt,
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 4096, "temperature": 0.95 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let parsed = claude_json(WILDCARD_PROMPT, &prompt)?;
     let kind = parsed.get("kind")?.as_str()?.trim().to_lowercase();
     let kind = if WILDCARD_KINDS.contains(&kind.as_str()) { kind } else { "wonder".to_string() };
     let target = parsed.get("target").and_then(|v| v.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("the town").to_string();
@@ -239,14 +215,9 @@ const HINGE_PROMPT: &str = "You decide, in character, what a soul of Thrushcombe
 
 const CONVERSE_PROMPT: &str = "You write a short, natural conversation between two souls of Thrushcombe St Mary, a 1934 West-Country market town, as they fall into talk. Stay wholly in period voice and in character, each in a distinct voice true to their station and feeling. Neither knows anything of the world beyond 1934 — no machines that think, no modern notions, nothing past their own time; they speak only of the world they live in, and the lettered among them know the wider news while the labouring folk keep to the parish. At most a brief greeting, then get to something real — the season's work, money owed, a marriage, a grievance, a piece of news, a scheme, a sly dig. They must NOT merely echo or restate each other; each line should answer in earnest — ask after something, share news, agree and build on it, reminisce, confide, tease, or, only where there is real cause, press or disagree — so the talk goes somewhere without straining to top the last line. Let warmth follow their regard: warm where they are fond, dry or barbed where there is a real grudge (never open abuse), civil where they feel little either way. Let rank tell, but in register not insult — the lesser defers and does not openly affront a clear superior, the greater is gracious or coolly condescending, not a brawler. Vary the phrasing and do not lean on stock fillers — avoid starting lines with 'I daresay' or 'I warrant'. Write 4 to 6 short lines in all, alternating, each one or two sentences, prefixed with the speaker's name and a colon. No narration, no stage directions, no preamble.";
 
-fn converse_scene(agent: &ureq::Agent, host: &str, model: &str, a_brief: &str, b_brief: &str, relation: &str) -> Option<String> {
+fn converse_scene(_agent: &ureq::Agent, _host: &str, _model: &str, a_brief: &str, b_brief: &str, relation: &str) -> Option<String> {
     let prompt = format!("{a_brief}\n{b_brief}\n{relation}\nThey meet and fall into conversation. Write it.");
-    let body = serde_json::json!({
-        "model": model, "system": CONVERSE_PROMPT, "prompt": prompt, "think": false, "stream": false,
-        "options": { "num_ctx": 8192, "temperature": 0.9 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let s = resp.get("response")?.as_str()?.trim().to_string();
+    let s = claude_text(CONVERSE_PROMPT, &prompt)?;
     // strip the filler tic per line, keeping each "Name:" prefix intact
     let s = s
         .lines()
@@ -262,19 +233,14 @@ fn converse_scene(agent: &ureq::Agent, host: &str, model: &str, a_brief: &str, b
 /// Judge how a conversation left each of the two souls. Returns ((warmth,memory,sway) for a,
 /// then for b), each validated to the vocabulary.
 #[allow(clippy::type_complexity)]
-fn assess_pair(agent: &ureq::Agent, host: &str, model: &str, a: &str, b: &str, transcript: &str) -> Option<((String, String, String), (String, String, String))> {
+fn assess_pair(_agent: &ureq::Agent, _host: &str, _model: &str, a: &str, b: &str, transcript: &str) -> Option<((String, String, String), (String, String, String))> {
     let sys = format!(
         "You judge how a conversation has affected each of two souls of a 1934 West-Country town. Respond ONLY as JSON: \
          {{\"a\":{{\"warmth\":one of [warmer,colder,unchanged],\"memory\":one short sentence in {a}'s own voice of what they now think of {b},\"sway\":one of [none,debt,rise,prosper,content,reconcile]}},\"b\":{{\"warmth\":...,\"memory\":in {b}'s voice of {a},\"sway\":...}}}}. \
          sway is whether the talk changed what the soul wants: debt=resolved to clear their debts, rise=spurred to rise in the world, prosper=talked into making a fortune, content=talked down to rest content, reconcile=moved to mend a quarrel, none=unchanged.",
     );
     let prompt = format!("The conversation:\n{transcript}\n\nHow did it leave {a}, and how {b}?");
-    let body = serde_json::json!({
-        "model": model, "system": sys, "prompt": prompt, "think": false, "stream": false, "format": "json",
-        "options": { "num_ctx": 8192, "temperature": 0.5 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let parsed = claude_json(&sys, &prompt)?;
     let one = |o: &serde_json::Value| -> Option<(String, String, String)> {
         let warmth = o.get("warmth")?.as_str()?.trim().to_lowercase();
         let warmth = ["warmer", "colder", "unchanged"].into_iter().find(|w| warmth.contains(w)).unwrap_or("unchanged").to_string();
@@ -301,6 +267,31 @@ fn extract_json(s: &str) -> Option<String> {
     (end > start).then(|| s[start..=end].to_string())
 }
 
+/// The town's one oracle. Every voice and every choice now runs through the `claude` CLI on this
+/// machine (Sonnet by default, override with CLAUDE_MODEL), against the local Claude subscription —
+/// no API key, no Qwen, no per-token ledger. The system prompt is appended; the dossier/instruction
+/// is piped on stdin. A failed call returns None and the job simply no-ops (best-effort, as before).
+fn claude_text(system: &str, user: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let model = std::env::var("CLAUDE_MODEL").unwrap_or_else(|_| "sonnet".into());
+    let bin = std::env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".into()); // absolute path for headless/cron
+    let mut child = Command::new(bin)
+        .arg("-p").arg("--model").arg(&model).arg("--append-system-prompt").arg(system)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().ok()?;
+    { let mut si = child.stdin.take()?; si.write_all(user.as_bytes()).ok()?; } // drop closes stdin → claude runs
+    let out = child.wait_with_output().ok()?;
+    out.status.success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// As `claude_text`, but pulling the first JSON object out of the reply.
+fn claude_json(system: &str, user: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(&extract_json(&claude_text(system, user)?)?).ok()
+}
+
 /// The day's Anthropic spend ledger — a "DATE\tUSD" sidecar beside the world db. Host-side ops
 /// state, never folded into the world; it only governs whether to call Claude or fall to Qwen.
 fn spend_file(db: &str) -> std::path::PathBuf {
@@ -317,46 +308,14 @@ fn spent_today(path: &std::path::Path, today: &str) -> f64 {
     }).unwrap_or(0.0)
 }
 
-/// Add a call's cost to today's ledger, carrying forward (or resetting on a new day).
-fn add_spend(path: &std::path::Path, today: &str, cost: f64) {
-    let total = spent_today(path, today) + cost;
-    let _ = std::fs::write(path, format!("{today}\t{total:.6}"));
-}
-
 /// One reflection from the local Qwen oracle — returns the raw JSON verdict object.
-fn reflect_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": model, "system": REFLECT_PROMPT,
-        "prompt": format!("{dossier}\n\nWrite their reflection."),
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.9 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+fn reflect_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
+    claude_json(REFLECT_PROMPT, &format!("{dossier}\n\nWrite their reflection."))
 }
 
-/// One reflection from Claude (Haiku by default) over raw HTTP — a sharper inner voice. Records
-/// the call's real token cost to the daily ledger. Returns the raw JSON verdict object; None on
-/// any failure, so the caller can fall back to local Qwen.
-fn reflect_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 512, "system": REFLECT_PROMPT,
-        "messages": [{ "role": "user", "content": format!("{dossier}\n\nWrite their reflection. Respond only with the JSON object.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key)
-        .set("anthropic-version", "2023-06-01")
-        .set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    // tally the spend — Haiku 4.5 rates ($1/MTok in, $5/MTok out); a costlier override under-counts.
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?;
-    serde_json::from_str(&extract_json(text)?).ok()
+/// One reflection via the oracle (now the `claude` CLI). Returns the raw JSON verdict object.
+fn reflect_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
+    claude_json(REFLECT_PROMPT, &format!("{dossier}\n\nWrite their reflection."))
 }
 
 type Verdict = (String, String, String, String, String, String, String, String);
@@ -396,34 +355,13 @@ const TESTIMONY_PROMPT: &str = "You voice one soul of Thrushcombe St Mary, a 193
 Then judge it ONLY as JSON: {\"statement\": what they said to the magistrate, \"alibi\": one of [none, weak, strong] — strong ONLY if they were genuinely witnessed by someone OUTSIDE their own household, or it is otherwise proven; a spouse or a servant of their own house vouching alone is merely weak; weak if unsupported or only their own family can speak for them; none if they can give no account of themselves at all, \"accuses\": the EXACT name (from the dossier) of the one soul they cast suspicion on, else \"\"}.";
 
 /// One statement to the magistrate from the local Qwen oracle — raw JSON {statement,alibi,accuses}.
-fn testimony_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": model, "system": TESTIMONY_PROMPT,
-        "prompt": format!("{dossier}\n\nGive their statement to the magistrate."),
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.9 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+fn testimony_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
+    claude_json(TESTIMONY_PROMPT, &format!("{dossier}\n\nGive their statement to the magistrate."))
 }
 
-/// One statement from Claude (Haiku) — sharper voice; tallies token cost. None on failure → Qwen.
-fn testimony_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 512, "system": TESTIMONY_PROMPT,
-        "messages": [{ "role": "user", "content": format!("{dossier}\n\nGive their statement to the magistrate. Respond only with the JSON object.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?;
-    serde_json::from_str(&extract_json(text)?).ok()
+/// One statement to the magistrate via the oracle (the `claude` CLI). Raw JSON {statement,alibi,accuses}.
+fn testimony_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
+    claude_json(TESTIMONY_PROMPT, &format!("{dossier}\n\nGive their statement to the magistrate."))
 }
 
 /// Validate a statement: (statement, alibi∈[none,weak,strong], accuses→a living name or ""). None if empty.
@@ -448,34 +386,13 @@ const JUDGMENT_PROMPT: &str = "You rule as a magistrate of Thrushcombe St Mary, 
 Give ONLY a JSON object: {\"account\": a record of his ruling and the reason for it, 1 to 3 sentences, third person, in the period chronicle voice, no quotation marks and no preamble; \"ruling\": EXACTLY one of [accuse, hold, widen] — accuse to bring them to formal trial (the town will likely hang them, guilty or not), hold to stay his hand for want of proof and wait, widen to refuse to fix on the one soul and turn the inquiry on the whole parish; \"reason\": a few plain words on why}.";
 
 /// The magistrate's ruling from the local Qwen oracle — raw JSON {account,ruling,reason}.
-fn judgment_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": model, "system": JUDGMENT_PROMPT,
-        "prompt": format!("{dossier}\n\nRule on the matter before you."),
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.85 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+fn judgment_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
+    claude_json(JUDGMENT_PROMPT, &format!("{dossier}\n\nRule on the matter before you."))
 }
 
-/// The magistrate's ruling from Claude (Haiku) — sharper voice; tallies token cost. None → Qwen.
-fn judgment_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 512, "system": JUDGMENT_PROMPT,
-        "messages": [{ "role": "user", "content": format!("{dossier}\n\nRule on the matter before you. Respond only with the JSON object.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?;
-    serde_json::from_str(&extract_json(text)?).ok()
+/// The magistrate's ruling via the oracle (the `claude` CLI). Raw JSON {account,ruling,reason}.
+fn judgment_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
+    claude_json(JUDGMENT_PROMPT, &format!("{dossier}\n\nRule on the matter before you."))
 }
 
 /// Validate a ruling: (account, ruling∈[accuse,hold,widen]). Defaults to the cautious `hold` if the
@@ -498,34 +415,13 @@ const ACT_PROMPT: &str = "You move one soul of Thrushcombe St Mary, a 1934 West-
 Give ONLY a JSON object: {\"account\": a record of what they did and why, 1 to 3 sentences, third person, in the period chronicle voice, no quotation marks and no preamble; \"act\": EXACTLY one of [call, confront, court, offer, reconcile, withdraw]; \"who\": the EXACT name (from those listed in the dossier) of the one soul they act upon, or \"\" if they withdraw}.";
 
 /// One soul's chosen action from the local Qwen oracle — raw JSON {account,act,who}.
-fn act_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": model, "system": ACT_PROMPT,
-        "prompt": format!("{dossier}\n\nChoose what they do."),
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.9 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+fn act_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
+    claude_json(ACT_PROMPT, &format!("{dossier}\n\nChoose what they do."))
 }
 
-/// One soul's chosen action from Claude (Haiku) — sharper voice; tallies token cost. None → Qwen.
-fn act_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 512, "system": ACT_PROMPT,
-        "messages": [{ "role": "user", "content": format!("{dossier}\n\nChoose what they do. Respond only with the JSON object.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?;
-    serde_json::from_str(&extract_json(text)?).ok()
+/// One soul's chosen action via the oracle (the `claude` CLI). Raw JSON {account,act,who}.
+fn act_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
+    claude_json(ACT_PROMPT, &format!("{dossier}\n\nChoose what they do."))
 }
 
 /// Validate an action: (account, act∈menu, who→a living name or ""). A targeted act that names no
@@ -553,34 +449,13 @@ const INTROSPECT_PROMPT: &str = "You voice the deepest hour of one soul of Thrus
 Respond ONLY as JSON: {\"self\": the revised self-concept in the first person, \"beliefs\": [{\"about\": EXACT name from the dossier, \"belief\": what they now believe of that soul}], \"fracture\": one of [none, reckoning, denial]}. No preamble, no quotation marks inside the strings.";
 
 /// One consolidation of the inner life from the local Qwen oracle — raw JSON {self,beliefs,fracture}.
-fn introspect_qwen(agent: &ureq::Agent, host: &str, model: &str, dossier: &str) -> Option<serde_json::Value> {
-    let body = serde_json::json!({
-        "model": model, "system": INTROSPECT_PROMPT,
-        "prompt": format!("{dossier}\n\nTake stock of themselves."),
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.85 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    serde_json::from_str(resp.get("response")?.as_str()?).ok()
+fn introspect_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
+    claude_json(INTROSPECT_PROMPT, &format!("{dossier}\n\nTake stock of themselves."))
 }
 
-/// One consolidation from Claude (Haiku) — sharper; tallies token cost. None on failure → Qwen.
-fn introspect_claude(agent: &ureq::Agent, key: &str, dossier: &str, spend: &std::path::Path, today: &str) -> Option<serde_json::Value> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 700, "system": INTROSPECT_PROMPT,
-        "messages": [{ "role": "user", "content": format!("{dossier}\n\nTake stock of themselves. Respond only with the JSON object.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key).set("anthropic-version", "2023-06-01").set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?;
-    serde_json::from_str(&extract_json(text)?).ok()
+/// One consolidation of the inner life via the oracle (the `claude` CLI). Raw JSON {self,beliefs,fracture}.
+fn introspect_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
+    claude_json(INTROSPECT_PROMPT, &format!("{dossier}\n\nTake stock of themselves."))
 }
 
 /// Validate a consolidation: (self_concept, beliefs as (name,text) for living adults, fracture∈
@@ -606,25 +481,8 @@ fn parse_introspect(p: &serde_json::Value, names: &[String]) -> Option<(String, 
 const BIO_PROMPT: &str = "You write the biography of one soul of Thrushcombe St Mary, a 1934 West-Country market town — the life the parish would tell of them. You are given their settled facts: name, station, household, age, family, where they came from. Invent a warm, particular life that fits those facts exactly: where they were born and how they came to their place in the town, the shape of their character, a defining turn or two of their life, what they are known (or whispered) for in the parish, and a private hope or an old wound. Stay wholly in period and in keeping with their station — a labourer's life is not a gentlewoman's, and the lettered and the unlettered came to their lot by different roads. Three to five sentences, plain and vivid, in the third person, no quotation marks, no preamble, no lists. This is the story the parish tells of them.";
 
 /// Write one soul's biography via Claude (records token cost). None on failure → Qwen fallback.
-fn bio_claude(agent: &ureq::Agent, key: &str, facts: &str, spend: &std::path::Path, today: &str) -> Option<String> {
-    let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-haiku-4-5".into());
-    let body = serde_json::json!({
-        "model": model, "max_tokens": 400, "system": BIO_PROMPT,
-        "messages": [{ "role": "user", "content": format!("The facts: {facts}\n\nWrite their biography.") }],
-    });
-    let resp: serde_json::Value = agent
-        .post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", key)
-        .set("anthropic-version", "2023-06-01")
-        .set("content-type", "application/json")
-        .send_json(body).ok()?.into_json().ok()?;
-    let usage = resp.get("usage");
-    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    add_spend(spend, today, tok("input_tokens") / 1_000_000.0 + tok("output_tokens") * 5.0 / 1_000_000.0);
-    let text = resp.get("content")?.as_array()?.iter()
-        .filter_map(|b| (b.get("type").and_then(|t| t.as_str()) == Some("text")).then(|| b.get("text").and_then(|t| t.as_str())).flatten())
-        .next()?.trim().to_string();
-    (!text.is_empty()).then_some(text)
+fn bio_claude(_agent: &ureq::Agent, _key: &str, facts: &str, _spend: &std::path::Path, _today: &str) -> Option<String> {
+    claude_text(BIO_PROMPT, &format!("The facts: {facts}\n\nWrite their biography."))
 }
 
 /// Tidy a biography: drop a leading markdown heading line the model sometimes prepends
@@ -638,25 +496,14 @@ fn clean_bio(s: &str) -> String {
 }
 
 /// Write one soul's biography via the local Qwen oracle. None on failure.
-fn bio_qwen(agent: &ureq::Agent, host: &str, model: &str, facts: &str) -> Option<String> {
-    let body = serde_json::json!({
-        "model": model, "system": BIO_PROMPT, "prompt": format!("The facts: {facts}\n\nWrite their biography."),
-        "think": false, "stream": false, "options": { "num_ctx": 4096, "temperature": 0.9 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let s = resp.get("response")?.as_str()?.trim().to_string();
-    (!s.is_empty()).then_some(s)
+fn bio_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, facts: &str) -> Option<String> {
+    claude_text(BIO_PROMPT, &format!("The facts: {facts}\n\nWrite their biography."))
 }
 
-/// Put a soul's dilemma to Qwen. Returns (choice, prose), choice validated to the options.
-fn hinge_one(agent: &ureq::Agent, host: &str, model: &str, dossier: &str, options: &[String]) -> Option<(String, String)> {
+/// Put a soul's dilemma to the oracle (the `claude` CLI). Returns (choice, prose), choice validated.
+fn hinge_one(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str, options: &[String]) -> Option<(String, String)> {
     let prompt = format!("{dossier}\n\nAllowed choices: {}. Decide, in character.", options.join(", "));
-    let body = serde_json::json!({
-        "model": model, "system": HINGE_PROMPT, "prompt": prompt,
-        "think": false, "stream": false, "format": "json", "options": { "num_ctx": 8192, "temperature": 0.8 },
-    });
-    let resp: serde_json::Value = agent.post(&format!("{host}/api/generate")).send_json(body).ok()?.into_json().ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(resp.get("response")?.as_str()?).ok()?;
+    let parsed = claude_json(HINGE_PROMPT, &prompt)?;
     let choice = parsed.get("choice")?.as_str()?.trim().to_lowercase();
     let choice = options.iter().find(|o| choice.contains(o.as_str())).cloned()?;
     let reason = parsed.get("reason")?.as_str()?.trim().to_string();

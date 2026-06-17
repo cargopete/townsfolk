@@ -9,15 +9,22 @@ REPO=/home/pepe/townsfolk
 DB="$REPO/world.db"
 BIN="$REPO/target/release/thrush"
 
+# The oracle is the `claude` CLI (Sonnet, local subscription). A headless --user systemd service
+# has a minimal PATH, so make the CLI findable both ways: on PATH and via CLAUDE_BIN as a fallback.
+export PATH="$HOME/.local/bin:$PATH"
+[ -x "$HOME/.local/bin/claude" ] && export CLAUDE_BIN="$HOME/.local/bin/claude"
+
+# Counts are tuned for Sonnet-via-CLI (~40s/call): fewer, richer beats per hour, kept well inside
+# the hourly window and gentle on the subscription. The inner-life jobs are gated internally anyway.
 "$BIN" --db "$DB" weather  || true   # record Sofia's sky ahead of today (best-effort)
 "$BIN" --db "$DB" tick
-"$BIN" --db "$DB" narrate --limit 50
+"$BIN" --db "$DB" narrate --limit 14
 "$BIN" --db "$DB" wildcard || true   # now and then, an LLM-invented happening (throttled)
 "$BIN" --db "$DB" hinge    || true   # now and then, a soul faces a turning point
 "$BIN" --db "$DB" converse || true   # let two souls fall into talk of their own accord
-"$BIN" --db "$DB" interrogate --count 3 || true  # the magistrate questions a few more souls, if a murder is open
+"$BIN" --db "$DB" interrogate --count 2 || true  # the magistrate questions a couple more souls, if a murder is open
 "$BIN" --db "$DB" judge     || true  # if a murder's cloud has settled past bearing, the magistrate rules: accuse | hold | widen
-"$BIN" --db "$DB" reflect --count 6 || true  # advance several souls' streams of consciousness a beat
-"$BIN" --db "$DB" introspect --count 2 || true  # let a couple of souls consolidate self-model + theory of mind
+"$BIN" --db "$DB" reflect --count 4 || true  # advance several souls' streams of consciousness a beat
+"$BIN" --db "$DB" introspect --count 1 || true  # let a soul consolidate self-model + theory of mind
 "$BIN" --db "$DB" act --count 2 || true  # let a pressed soul or two take an action of their own accord — the town drives itself
-"$BIN" --db "$DB" biography --limit 2 || true  # write the lives of any souls still lacking one
+"$BIN" --db "$DB" biography --limit 1 || true  # write the life of a soul still lacking one
