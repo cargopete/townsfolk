@@ -5,3 +5,7 @@ world.db-*
 *.db
 ops/secrets.env
 .anthropic_spend.tsv
+
+# macOS
+.DS_Store
+**/.DS_Store
