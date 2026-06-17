@@ -2623,6 +2623,10 @@ fn inquest_brief(w: &World, idx: usize) -> Option<String> {
                 s.push_str(" And being of his own rank, they know the inquiry will not trouble people like them, whatever the truth of it.");
             }
         }
+    } else if inq.investigator == idx as i32 {
+        // they ARE the magistrate: the unsolved killing is theirs to answer for, and it is NOT closed
+        // while the killer walks free — whatever ruling they have made, a murderer is still at large.
+        s.push_str(" And it is THEY who sit as magistrate over it — the parish looks to them for an answer they have not got. Whatever they have done on the bench, the matter is not closed while the killer walks free among the very souls they must face each day: a murderer is still at large in Thrushcombe, unnamed and unpunished, and that weighs on them however they carry it.");
     }
     if inq.public_inquiry {
         s.push_str(" Every soul is being questioned now, and the statements read out in the open — so the whole parish weighs each neighbour's account, and who named whom.");
@@ -4951,6 +4955,15 @@ impl Sim {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?;
         rows.collect()
+    }
+
+    /// The murder as a given soul truly knows and feels it — for injecting their real awareness into
+    /// a conversation, so they speak of it in character (and the magistrate knows it is not closed
+    /// while the killer walks free). None when there is no killing weighing on the town.
+    pub fn murder_brief(&self, today: Date, name: &str) -> Option<String> {
+        let w = self.world_snapshot(today);
+        let idx = w.agents.iter().position(|a| a.name == name && a.active())?;
+        inquest_brief(&w, idx)
     }
 
     /// Every statement taken in the inquiry, read-out or not — for the full case file, newest first.

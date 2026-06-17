@@ -843,6 +843,12 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             p.push_str(&format!(" Of late you have been turning over in your mind: {}.", thoughts.join("; ")));
         }
     }
+    // the killing hanging over the town, as THIS soul truly knows and feels it — so they speak of
+    // it in character, and an open murder is never mistaken for a closed one (the magistrate above
+    // all: a hold or a widening is not a conclusion while the killer walks free)
+    if let Some(brief) = sim.murder_brief(today(), &t.name) {
+        p.push_str(&format!(" {brief}"));
+    }
     // the town as it actually stands, so the talk can touch real goings-on
     p.push_str(&format!(" The season is {}.", thrush_core::Season::of(today()).name()));
     if let Ok(recent) = sim.chronicle(5) {
