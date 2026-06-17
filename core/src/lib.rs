@@ -1518,17 +1518,23 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
             "stranger" => {
                 // --target is the newcomer's name. --note is either plain flavour, or a structured
                 // "archetype|trade|seat|age|standing|purse|blurb" to drop in a fully-formed incomer.
+                // An 8-field form "archetype|trade|seat|age|standing|purse|sex|blurb" sets the sex too
+                // (0 = woman, 1 = man); the 7-field form defaults to a man, as before.
                 let name = if t.is_empty() { "A stranger".to_string() } else { t.clone() };
                 let known = ["genteel_status_seeker", "hill_farmer", "practitioner", "scheming_improver", "blunt_hand", "official"];
                 let p: Vec<&str> = iv.note.split('|').collect();
-                let (arch, trade, seat, age, standing, purse, blurb): (&str, &str, &str, i64, i32, i32, &str) = if p.len() >= 7 {
+                let (arch, trade, seat, age, standing, purse, sex, blurb): (&str, &str, &str, i64, i32, i32, u8, &str) = if p.len() >= 8 {
                     let a = if known.contains(&p[0].trim()) { p[0].trim() } else { "blunt_hand" };
                     let seat = if p[2].trim().is_empty() { "the empty cottage" } else { p[2].trim() };
-                    (a, p[1].trim(), seat, p[3].trim().parse().unwrap_or(33), p[4].trim().parse().unwrap_or(25), p[5].trim().parse().unwrap_or(12), p[6].trim())
+                    (a, p[1].trim(), seat, p[3].trim().parse().unwrap_or(33), p[4].trim().parse().unwrap_or(25), p[5].trim().parse().unwrap_or(12), p[6].trim().parse::<u8>().unwrap_or(1).min(1), p[7].trim())
+                } else if p.len() >= 7 {
+                    let a = if known.contains(&p[0].trim()) { p[0].trim() } else { "blunt_hand" };
+                    let seat = if p[2].trim().is_empty() { "the empty cottage" } else { p[2].trim() };
+                    (a, p[1].trim(), seat, p[3].trim().parse().unwrap_or(33), p[4].trim().parse().unwrap_or(25), p[5].trim().parse().unwrap_or(12), 1, p[6].trim())
                 } else {
-                    ("blunt_hand", "", "the empty cottage", 33, 25, 12, iv.note.as_str())
+                    ("blunt_hand", "", "the empty cottage", 33, 25, 12, 1, iv.note.as_str())
                 };
-                let mut agent = make_agent(&name, arch, seat, standing, purse, 1, age, day);
+                let mut agent = make_agent(&name, arch, seat, standing, purse, sex, age, day);
                 agent.origin = Some("parts unknown".into());
                 if !trade.is_empty() {
                     agent.trade = Some(trade.to_string());
