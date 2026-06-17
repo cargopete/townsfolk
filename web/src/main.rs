@@ -1189,7 +1189,9 @@ fn map_page(sim: &Sim) -> String {
     let style = "<style>\
       .mapwrap{position:relative;width:100%;aspect-ratio:3/2;margin:.5rem 0 1rem;border:1px solid #cdbf9d;border-radius:10px;\
         background:radial-gradient(circle at 50% 45%,#f4ecd6,#e6dabb 70%,#dccfa9);\
-        background-size:cover;background-position:center;box-shadow:inset 0 0 60px rgba(120,95,55,.18);overflow:hidden}\
+        box-shadow:inset 0 0 60px rgba(120,95,55,.18);overflow:hidden;touch-action:none;user-select:none}\
+      .mapinner{position:absolute;inset:0;transform-origin:0 0;background-size:cover;background-position:center;cursor:grab}\
+      .mapinner.drag{cursor:grabbing}\
       .church{position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);font:italic 13px Georgia;color:#5b4d39;text-align:center;opacity:.8;pointer-events:none}\
       .church:before{content:'\\271D';display:block;font-size:20px;line-height:1}\
       .loc{position:absolute;transform:translate(-50%,-50%);text-align:center;width:130px}\
@@ -1200,19 +1202,52 @@ fn map_page(sim: &Sim) -> String {
       .av:hover{transform:scale(1.3);z-index:5;position:relative}\
       .av.m{background-color:#6f86a6}.av.w{background-color:#b07f8e}\
       .more{font:600 11px Georgia;color:#7a6a4e;align-self:center;margin-left:2px}\
+      .mapctl{position:absolute;right:8px;bottom:8px;display:flex;gap:4px;z-index:10}\
+      .mapctl button{width:30px;height:30px;border:1px solid #b8a888;background:rgba(247,240,220,.94);color:#5b4d39;border-radius:6px;font:600 17px Georgia;cursor:pointer;line-height:1;padding:0}\
+      .mapctl button:hover{background:#fff}\
     </style>";
 
-    let body = format!(
+    let mut body = format!(
         "{style}<h1>Thrushcombe St Mary</h1>\
          <div class=sub>The parish, place by place - every living soul a face at their own door. \
-         <span style='color:#6f86a6'>&#9679;</span> a man, <span style='color:#b07f8e'>&#9679;</span> a woman; hover to lift them, click to their page. \
+         <span style='color:#6f86a6'>&#9679;</span> a man, <span style='color:#b07f8e'>&#9679;</span> a woman; \
+         scroll to zoom, drag to pan, click a soul for their page. \
          (A drawn map slots in behind once one is placed at <code>portraits/map.jpg</code>.)</div>\
-         <div class=mapwrap style=\"background-image:url(/portraits/map)\"><div class=church>St Mary's</div>{markers}</div>\
+         <div class=mapwrap id=mw>\
+           <div class=mapinner id=mi style=\"background-image:url(/portraits/map)\"><div class=church>St Mary's</div>{markers}</div>\
+           <div class=mapctl><button id=zin title='zoom in'>+</button><button id=zout title='zoom out'>&minus;</button><button id=zre title='reset'>&#8635;</button></div>\
+         </div>\
          {stray_html}\
          <p style='margin-top:1rem'><a href=/folk>&larr; the cast in full</a></p>"
     );
+    body.push_str(MAP_SCRIPT);
     page("Thrushcombe - the map", &body)
 }
+
+/// Pan/zoom for the map: wheel zooms toward the cursor, drag pans, the buttons step and reset, and
+/// touch gives one-finger pan and two-finger pinch. Plain JS, no library.
+const MAP_SCRIPT: &str = "<script>(function(){\
+  var mi=document.getElementById('mi'),mw=document.getElementById('mw');if(!mi||!mw)return;\
+  var s=1,tx=0,ty=0,drag=false,lx=0,ly=0;\
+  function cl(v,a,b){return v<a?a:(v>b?b:v);}\
+  function ap(){mi.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')';}\
+  function zoomAt(cx,cy,f){var ns=cl(s*f,0.6,9),k=ns/s;tx=cx-(cx-tx)*k;ty=cy-(cy-ty)*k;s=ns;ap();}\
+  mw.addEventListener('wheel',function(e){e.preventDefault();var r=mw.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.15:1/1.15);},{passive:false});\
+  mw.addEventListener('mousedown',function(e){if(e.target.closest('.mapctl'))return;drag=true;lx=e.clientX;ly=e.clientY;mi.classList.add('drag');});\
+  window.addEventListener('mousemove',function(e){if(!drag)return;tx+=e.clientX-lx;ty+=e.clientY-ly;lx=e.clientX;ly=e.clientY;ap();});\
+  window.addEventListener('mouseup',function(){drag=false;mi.classList.remove('drag');});\
+  function ctr(f){var r=mw.getBoundingClientRect();zoomAt(r.width/2,r.height/2,f);}\
+  document.getElementById('zin').onclick=function(){ctr(1.3);};\
+  document.getElementById('zout').onclick=function(){ctr(1/1.3);};\
+  document.getElementById('zre').onclick=function(){s=1;tx=0;ty=0;ap();};\
+  var pts={},pd=0;\
+  mw.addEventListener('touchstart',function(e){for(var i=0;i<e.changedTouches.length;i++){var t=e.changedTouches[i];pts[t.identifier]={x:t.clientX,y:t.clientY};}},{passive:false});\
+  mw.addEventListener('touchmove',function(e){e.preventDefault();var ids=Object.keys(pts);\
+    if(ids.length===1){var t=e.changedTouches[0],p=pts[t.identifier];if(p){tx+=t.clientX-p.x;ty+=t.clientY-p.y;p.x=t.clientX;p.y=t.clientY;ap();}}\
+    else if(ids.length>=2){for(var i=0;i<e.changedTouches.length;i++){var u=e.changedTouches[i];if(pts[u.identifier]){pts[u.identifier].x=u.clientX;pts[u.identifier].y=u.clientY;}}\
+      var a=pts[ids[0]],b=pts[ids[1]],nd=Math.hypot(a.x-b.x,a.y-b.y);if(pd){var r=mw.getBoundingClientRect();zoomAt((a.x+b.x)/2-r.left,(a.y+b.y)/2-r.top,nd/pd);}pd=nd;}},{passive:false});\
+  mw.addEventListener('touchend',function(e){for(var i=0;i<e.changedTouches.length;i++){delete pts[e.changedTouches[i].identifier];}pd=0;});\
+})();</script>";
 
 /// A filename-safe slug of a name: lowercase, runs of non-alphanumerics become single hyphens.
 fn slugify(s: &str) -> String {
