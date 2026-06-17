@@ -119,8 +119,10 @@ choice is the model's own, authored in character and folded into the world like 
 magistrate rules whether to charge a man (`judge`), a pressed soul takes a plain action of their
 own accord (`act`), one driven past bearing chooses whether to leave the parish for good (`depart`),
 a courted soul answers a proposal (`betroth`), a farmer gambles on the land or plays it safe
-(`gamble`). The spine is always the same — *gate → dossier → bounded choice → recorded decree →
-fixed consequence* — so the decision is genuinely theirs while the world stays exact and replayable.
+(`gamble`), and a frightened parish, called to an emergency meeting over an unsolved murder, comes
+away calmed or inflamed toward a scapegoat (`town-hall`). The spine is always the same — *gate →
+dossier → bounded choice → recorded decree → fixed consequence* — so the decision is genuinely
+theirs while the world stays exact and replayable.
 Every voice and every choice runs on the **`claude` CLI (Sonnet)** against the local subscription.
 
 A plain word on what that is and isn't. These are the *functional correlates* of mind — they make
@@ -361,6 +363,7 @@ thrush jump --days 1                     # jump the town forward N whole days (l
 thrush narrate                           # render new salient beats in voice (Sonnet, via the claude CLI)
 thrush wildcard                          # now and then, let the oracle invent a happening
 thrush converse                          # let two souls fall into talk of their own accord
+thrush converse --between "Bee|Mr Tranter" --setting "a busy evening at the Pelican…"  # …or stage a chosen pair in a chosen scene
 thrush reflect --count 6                 # advance several souls' streams of consciousness a beat
 thrush introspect --count 2              # a soul consolidates self-model & theory of mind
 thrush biography --limit 60              # write the lives of souls who lack one
@@ -371,7 +374,9 @@ thrush watch                             # detailed live TUI — scroll the cast
 thrush providence loan    --target "Mr Rupert Crale" --amount 50
 thrush providence legacy  --target "Mrs Cynthia Pelham" --amount 80
 thrush providence scandal --target "Major Pringle" --note "a matter at the bank in town"
-thrush providence stranger --note "Mr Silas Vane"
+thrush providence stranger --target "Bee" --note "blunt_hand||the empty cottage|30|6|0|0|found in the wood by the children"  # an incomer; 8 fields set sex (0=woman)
+thrush providence bond     --target "Bee" --note "Mr Garth" --amount 35   # one soul takes another into their household
+thrush providence proclaim --target "Major Pringle" --note "he will call the parish together again in a week…"  # a town-wide announcement
 
 # …and the murder arc:
 thrush providence murder      --target "Mr Quint" --note "found in the lane, his head stove in"
@@ -389,6 +394,7 @@ thrush act --count 2                     # a pressed soul takes a plain action o
 thrush depart --count 1                  # a soul driven past bearing decides whether to leave for good
 thrush betroth --count 1                 # a courted soul answers a ripe proposal: accept | refuse
 thrush gamble --count 1                  # a farmer weighs a gamble on the land against the sure return
+thrush town-hall                         # an emergency assembly over the murder: the parish comes away calmed | inflamed | divided
 
 thrush-web world.db                      # dashboard, legends & kinship at http://127.0.0.1:8717
 ```
@@ -431,8 +437,9 @@ A read-only, period-styled web view over the SQLite log and the folded world:
   consciousness and biography, where they stand in any open **inquiry**, and their whole record.
 - **`/thoughts`** — the town's inner life: the 20 most recent reflections, or one soul's whole
   running stream of consciousness (dropdown, up to 50 thoughts back).
-- **`/inquiry`** — while a murder is open, the magistrate's released transcripts: each
-  questioned soul's statement, their alibi, and any name they cast the blame upon.
+- **`/inquiry`** — while a murder is open: the statements **read out in the open** (the telling
+  ones), then **all statements taken** (the full case file, each marked *read out* or *in private*),
+  and **the town meetings** — the full account of each emergency assembly and how the parish came away.
 - **`/graph`** — the kinship network (marriages dashed, descent arrowed; click through).
 - **`/day`** — time-travel the chronicle by date, phase by phase, with prev/next.
 - **`/talk`** — *A word…*: adopt one soul's voice and speak to another, each soul's
