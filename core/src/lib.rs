@@ -1696,6 +1696,30 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "proclaim" => {
+                // A town-wide proclamation from one in authority — pinned to the church door, read out
+                // in the square, carried into every parlour. --target is who proclaims it, --note the
+                // words. A public beat that the whole parish hears; --amount is its temper: positive
+                // eases the dread and lifts the spirits a little (direction, hope), negative deepens them.
+                if let Some(s) = world.idx(t) {
+                    let msg = iv.note.trim();
+                    let nm = world.agents[s].name.clone();
+                    let text = if msg.is_empty() {
+                        format!("{nm} put out a proclamation to the whole parish.")
+                    } else {
+                        format!("{nm} had it put about the parish — pinned to the church door and read out in the square: {msg}")
+                    };
+                    out.push(mk("providence", &nm, text));
+                    world.spawn_news(&nm, &format!("{nm}'s proclamation to the parish"), 1, day, &[]);
+                    let ease: i16 = iv.amount.clamp(-20, 20) as i16;
+                    if ease != 0 {
+                        world.dread = (world.dread - ease).clamp(0, 100);
+                        for a in world.agents.iter_mut().filter(|a| a.active()) {
+                            nudge_mood(a, ease / 2);
+                        }
+                    }
+                }
+            }
             other => {
                 out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
             }
