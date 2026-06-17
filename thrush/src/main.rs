@@ -146,6 +146,11 @@ enum Cmd {
     /// want of proof), or WIDEN (refuse the fixation, question the parish anew). The ruling drives the
     /// world: an accusation is a real charge, recorded and folded. No proof exists — only his judgement.
     Judge,
+    /// Call an emergency town meeting over the open murder: the magistrate gives his account before
+    /// a frightened parish and hears its fears voiced, and the oracle judges how the room comes away
+    /// — CALMED (the dread breaks), INFLAMED (the mob demands a scapegoat NOW), or DIVIDED. The
+    /// outcome drives the town's dread and the cloud over the hunted; the full account is kept.
+    TownHall,
     /// Let the pressed souls act of their own accord: those whom something grips (a preoccupation
     /// that fills the mind, or a plan ripe for a move) take ONE plain townsperson's action of the
     /// oracle's choosing — call, confront, court, offer, reconcile, or withdraw — and it drives the
@@ -436,6 +441,23 @@ fn parse_judgment(p: &serde_json::Value) -> Option<(String, String)> {
     let r = p.get("ruling").and_then(|v| v.as_str()).unwrap_or("hold").trim().to_lowercase();
     let ruling = ["accuse", "widen", "hold"].iter().find(|o| r.contains(*o)).map(|s| s.to_string()).unwrap_or_else(|| "hold".into());
     Some((account, ruling))
+}
+
+// ------------------------------------------------------------------ the town meeting
+// A set-piece: the magistrate before a frightened parish over an unsolved murder. The oracle renders
+// the whole meeting and judges how the room turns — calmer, or inflamed toward a scapegoat, or split.
+const TOWNHALL_PROMPT: &str = "You render an emergency town meeting in Thrushcombe St Mary, a 1934 West-Country market town, called by the magistrate over an unsolved murder that has the parish in terror. You are given who the magistrate is, where the inquiry truly stands, whom the fear has fixed on, and who is in the room. Render the meeting as it would ACTUALLY unfold — the magistrate's address to the assembled parish, the voices raised from the floor (name them where the dossier names them), the temper of the room and how it shifts as men speak. Stay wholly in the period chronicle voice, vivid and particular, true to a frightened 1934 market town where the gentlefolk and the labouring poor do not fear alike and do not trust the same men, and where a terrified parish wants a name to hang. \
+Give ONLY a JSON object: {\"account\": the full rendered meeting, 6 to 12 sentences, third person, period chronicle voice, no quotation marks and no preamble; \"outcome\": EXACTLY one of [calmed, inflamed, divided] — calmed if the magistrate steadies them and they will let justice be done right and slow, inflamed if they come away more afraid and demanding a scapegoat be charged and hanged now, divided if the room splits with no common mind; \"reason\": a few plain words on why the room turned as it did}.";
+
+/// Validate a town-meeting verdict: (account, outcome∈[calmed,inflamed,divided]). Defaults to divided.
+fn parse_townhall(p: &serde_json::Value) -> Option<(String, String)> {
+    let account = p.get("account").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if account.is_empty() {
+        return None;
+    }
+    let o = p.get("outcome").and_then(|v| v.as_str()).unwrap_or("divided").trim().to_lowercase();
+    let outcome = ["calmed", "inflamed", "divided"].iter().find(|x| o.contains(*x)).map(|s| s.to_string()).unwrap_or_else(|| "divided".into());
+    Some((account, outcome))
 }
 
 // ------------------------------------------------------------------ a soul's own action
@@ -984,6 +1006,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                             println!("Ruling [{mag} · {ruling} · re {suspect}]: {account}");
                         }
                         None => eprintln!("oracle unavailable — the magistrate reserves his judgement this day."),
+                    }
+                }
+            }
+        }
+        Cmd::TownHall => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            match sim.townhall_brief(t) {
+                None => println!("No murder is open — there is nothing to call the parish together over."),
+                Some((mag, dossier)) => {
+                    let raw = claude_json(TOWNHALL_PROMPT, &format!("{dossier}\n\nRender the meeting and judge how the parish comes away."));
+                    match raw.as_ref().and_then(parse_townhall) {
+                        Some((account, outcome)) => {
+                            sim.record_townhall(t, &mag, &outcome, &account)?;
+                            sim.catch_up(today(), cur_phase())?; // fold the outcome — the dread breaks, or boils over
+                            println!("Town meeting [{mag} · the parish came away {outcome}]:\n{account}");
+                        }
+                        None => eprintln!("oracle unavailable — the meeting goes unrecorded."),
                     }
                 }
             }

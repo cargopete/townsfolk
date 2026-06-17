@@ -379,6 +379,24 @@ fn inquiry(sim: &Sim) -> String {
         Ok(_) => body.push_str("<p class=sub>The magistrate has read out no statements yet.</p>"),
         Err(e) => body.push_str(&format!("<p>({})</p>", esc(&e.to_string()))),
     }
+    // emergency town meetings — the full account of each assembly, and how the parish came away
+    if let Ok(halls) = sim.town_halls(10) {
+        if !halls.is_empty() {
+            body.push_str("<h2 style='margin-top:2.4rem'>The town meetings</h2>");
+            for (day, outcome, text) in halls {
+                let (label, col) = match outcome.as_str() {
+                    "calmed"   => ("the parish came away calmer", "#2f6b3f"),
+                    "inflamed" => ("the parish came away inflamed — crying for a name", "#9a3b2b"),
+                    _           => ("the parish came away divided", "#7a5a2e"),
+                };
+                body.push_str(&format!(
+                    "<div class=card><div><span class=tag style='color:{col};border-color:{col}'>{label}</span> <span class=date>&middot; {}</span></div>\
+                     <div class=think style='margin-top:.5rem;white-space:pre-line'>{}</div></div>",
+                    esc(&sim.day_to_date(day)), esc(&text)
+                ));
+            }
+        }
+    }
     // the full case file — every statement taken, whether read out or given in private
     match sim.all_testimony(200) {
         Ok(ts) if !ts.is_empty() => {

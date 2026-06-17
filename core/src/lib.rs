@@ -4010,7 +4010,7 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
         let ti = world.idx(&d.target);
         // a turning-point verdict is a public beat; a private conversation, a private thought, or a
         // statement to the magistrate (surfaced on its own page + as gossip) is not a chronicle beat
-        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" && d.kind != "psyche" && d.kind != "judgment" {
+        if d.kind != "dialogue" && d.kind != "reflect" && d.kind != "testimony" && d.kind != "psyche" && d.kind != "judgment" && d.kind != "townhall" {
             out.push(Event { day, date: date.to_string(), kind: "decree".into(), actor: d.subject.clone(), text: d.text.clone() });
         }
         match (d.kind.as_str(), d.choice.as_str()) {
@@ -4314,6 +4314,42 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     }
                     world.inquest = Some(inq);
                 }
+            }
+            // an emergency assembly over the open murder: the magistrate gives his account and the
+            // parish voices its fear. The oracle decides how the room turns — calmer, inflamed toward a
+            // scapegoat, or split — and the consequence is fixed here, town-wide. The account (d.text)
+            // is the public beat, emitted below; it is also kept in full for the inquiry page.
+            ("townhall", outcome) => {
+                let n = world.agents.len();
+                match outcome {
+                    // the magistrate steadies them: the dread breaks, and the eye eases off the hunted
+                    "calmed" => {
+                        world.dread = (world.dread - 25).max(0);
+                        for i in 0..n {
+                            if !world.agents[i].active() { continue; }
+                            nudge_mood(&mut world.agents[i], 6);
+                            if world.agents[i].suspicion >= 40 { world.agents[i].suspicion = (world.agents[i].suspicion - 25).max(0); }
+                        }
+                        if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) { q.held_until = q.held_until.max(day + 5); }
+                    }
+                    // the room turns ugly: the fear deepens, the hunted are pressed harder, and the
+                    // mob will not wait — the magistrate's hand is forced, his cooling broken
+                    "inflamed" => {
+                        world.dread = (world.dread + 20).min(100);
+                        for i in 0..n {
+                            if !world.agents[i].active() { continue; }
+                            nudge_mood(&mut world.agents[i], -6);
+                            if world.agents[i].suspicion >= 30 { world.agents[i].suspicion = (world.agents[i].suspicion + 20).min(300); }
+                        }
+                        if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) { q.held_until = 0; }
+                    }
+                    // a house divided — no common mind; the unease simply festers on
+                    _ => { world.dread = (world.dread + 5).min(100); }
+                }
+                let who = magistrate_idx(world).map(|i| world.agents[i].name.clone()).unwrap_or_else(|| "the magistrate".into());
+                let vn = world.inquest.as_ref().map(|q| q.victim_name.clone()).unwrap_or_default();
+                out.push(Event { day, date: date.to_string(), kind: "inquest".into(), actor: who,
+                    text: if d.text.trim().is_empty() { format!("The parish met in emergency assembly over {vn}'s murder, and came away {outcome}.") } else { d.text.clone() } });
             }
             // a plain townsperson's action, chosen by the oracle in the soul's own character: the
             // general lever by which a pressed soul authors their own next move. subject = the actor;
@@ -5029,6 +5065,70 @@ impl Sim {
         self.decrees = load_decrees(&self.conn)?;
         self.invalidate_from(day)?;
         Ok(())
+    }
+
+    /// Assemble the brief for an emergency town meeting over the open murder: the magistrate before a
+    /// frightened parish, where things stand, whom the fear has fixed on, and the question of how the
+    /// room turns. The oracle renders the meeting and judges the outcome (calmed | inflamed | divided),
+    /// which drives the town's dread and the cloud over the hunted. None if no murder is open.
+    pub fn townhall_brief(&self, today: Date) -> Option<(String, String)> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let inq = w.inquest.as_ref().filter(|q| !q.closed)?;
+        let days_open = day - inq.opened;
+        let mag = magistrate_idx(&w).map(|i| w.agents[i].name.clone()).unwrap_or_else(|| "the magistrate".into());
+        let mut suspects: Vec<(String, i32, bool)> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i != inq.victim && w.agents[i].suspicion >= 30)
+            .map(|i| {
+                let respectable = matches!(w.agents[i].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner");
+                (w.agents[i].name.clone(), w.agents[i].suspicion, respectable)
+            })
+            .collect();
+        suspects.sort_by_key(|(_, s, _)| std::cmp::Reverse(*s));
+        let suspect_line = if suspects.is_empty() {
+            "no one in particular — the fear has found no fixed object".to_string()
+        } else {
+            suspects.iter().take(4)
+                .map(|(n, s, r)| format!("{n} (the fear on them stands at {s}{})", if *r { ", though of standing" } else { ", an outsider or of the labouring poor" }))
+                .collect::<Vec<_>>().join("; ")
+        };
+        // those few who have spoken for the most-suspected — the voices that might steady the room
+        let defenders = suspects.first().and_then(|(name, _, _)| w.idx(name)).map(|m| {
+            (0..w.agents.len()).filter(|&j| j != m && w.agents[j].active() && w.aff(j, m) >= 40)
+                .map(|j| w.agents[j].name.clone()).collect::<Vec<_>>()
+        }).unwrap_or_default();
+        let mut d = format!(
+            "{mag} has called the whole parish together in emergency assembly — the church hall full and restless, every pew taken — over the murder of {victim}, now {days_open} days unsolved and the killer still unknown and at large among them. The town's dread stands at {dread} of a hundred: fear walks the lanes, doors are barred at dusk, and the parish has come wanting an answer and an end to it. {mag} must stand before them, give his account of where the inquiry stands, and hear their fears voiced from the floor.\n\nWhere it TRULY stands: there is no proof against any living soul — only the town's fear and its old grudges. The fear has settled hardest on: {suspect_line}. {mag} has already twice refused to charge a man on suspicion alone, holding that a frightened town makes a poor substitute for evidence.",
+            mag = mag, victim = inq.victim_name, days_open = days_open, dread = w.dread, suspect_line = suspect_line,
+        );
+        if !defenders.is_empty() {
+            d.push_str(&format!("\nA few would speak up for the most-suspected if it came to it: {}.", defenders.join(", ")));
+        }
+        d.push_str("\n\nIn the room: the frightened majority who want a name to hang and the thing finished; the few who have misgivings about condemning a man on fear; the gentlefolk and the labouring poor, who do not fear the same things nor trust the same men. Render the meeting as it would truly unfold — the magistrate's address, the voices raised from the floor (name them where it lands), the temper of the room as it shifts. Then judge how the parish comes AWAY: CALMED (he steadies them, and they will let justice be done right and slow), INFLAMED (more afraid than before, and demanding a scapegoat be charged and hanged NOW), or DIVIDED (the room splits, no common mind). Decide as the real weight of the town's terror, the want of any proof, and the magistrate's steadying authority would actually settle it. There is no right answer.");
+        Some((mag, d))
+    }
+
+    /// Record the town meeting and its outcome as a `townhall` decree, folded at its day. outcome ∈
+    /// [calmed, inflamed, divided]; text is the full account, read out and kept for the inquiry page.
+    pub fn record_townhall(&mut self, date: Date, magistrate: &str, outcome: &str, text: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(date).max(0);
+        self.conn.execute(
+            "INSERT INTO decrees(day,subject,kind,target,choice,text) VALUES(?1,?2,'townhall','',?3,?4)",
+            params![day, magistrate, outcome, text],
+        )?;
+        self.decrees = load_decrees(&self.conn)?;
+        self.invalidate_from(day)?;
+        Ok(())
+    }
+
+    /// The town meetings held over the murder, newest first — (day, outcome, full account) — for the
+    /// inquiry page. The full transcript of each assembly, kept as it was read out.
+    pub fn town_halls(&self, limit: i64) -> rusqlite::Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, choice, text FROM decrees WHERE kind='townhall' ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
     }
 
     /// Names of souls already questioned in the inquiry, so the magistrate works through the rest.
