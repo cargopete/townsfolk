@@ -4041,7 +4041,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 39;
+const SNAPSHOT_VERSION: i64 = 40;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4247,11 +4247,17 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         }
                         // …and, rarely, resolve them to act on it of their own accord
                         match resolve {
-                            // pay court — begin a suit, if both are free and the match is possible
+                            // pay court — begin a suit, but only a MATCH that could really be one: both
+                            // free, of opposite sex, of marrying age, and within a generation of each
+                            // other. (No 70-year-old widow resolving to court a lad of nineteen.)
                             "court" => {
                                 let (a, b) = (&world.agents[si], &world.agents[t]);
+                                let plausible = (18..=55).contains(&a.age(day))
+                                    && (18..=55).contains(&b.age(day))
+                                    && (a.age(day) - b.age(day)).abs() <= 16;
                                 if a.courting < 0 && a.spouse.is_none() && b.spouse.is_none()
                                     && a.sex != b.sex && a.archetype != "child" && b.archetype != "child"
+                                    && plausible
                                 {
                                     world.agents[si].courting = t as i32;
                                     world.agents[si].courtship = 0;

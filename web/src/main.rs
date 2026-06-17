@@ -1139,9 +1139,15 @@ fn map_page(sim: &Sim) -> String {
         ("the docks at plymouth", "Away - Plymouth", 90, 7),
     ];
 
-    let mut by_seat: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    // place each soul by which location their seat names — substring match, so "lodgings at the
+    // Pelican" lands at the Pelican and "…at the Bank House of Church Row" at the Bank House.
+    let mut by_seat: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
     for (i, a) in w.agents.iter().enumerate() {
-        if a.active() { by_seat.entry(a.seat.trim().to_lowercase()).or_default().push(i); }
+        if !a.active() { continue; }
+        let seat = a.seat.trim().to_lowercase();
+        if let Some(&(key, ..)) = places.iter().find(|(k, ..)| seat.contains(k)) {
+            by_seat.entry(key).or_default().push(i);
+        }
     }
 
     let avatar = |i: usize, extra: &str| -> String {
