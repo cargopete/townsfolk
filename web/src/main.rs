@@ -1100,93 +1100,112 @@ fn talk_page(sim: &Sim, url: &str) -> String {
     page("Thrushcombe — A word with…", &body)
 }
 
-/// A stylised map of Thrushcombe St Mary — the church and square at its heart, the lanes and the
-/// beck, the great houses and the farms on the hills, with every living soul set at their own door.
+/// A map of Thrushcombe St Mary — the parish laid out by its places, every living soul a little
+/// portrait-dot at their own door. Clean HTML/CSS (no fragile inline SVG); a generated map
+/// illustration drops in behind it as the background if one is placed at portraits/map.<ext>.
 fn map_page(sim: &Sim) -> String {
     let w = sim.world_snapshot(today());
-    // hand-laid geography: (seat-key lowercased, label, x, y, kind) on a 960×640 canvas
-    let places: &[(&str, &str, i32, i32, &str)] = &[
-        ("high foldside", "High Foldside", 120, 70, "farm"),
-        ("crale court", "Crale Court", 820, 95, "hall"),
-        ("the laurels", "The Laurels", 160, 200, "hall"),
-        ("five elms", "Five Elms", 800, 200, "hall"),
-        ("springs house", "Springs House", 110, 330, "house"),
-        ("the vicarage", "The Vicarage", 430, 165, "house"),
-        ("the bank house", "The Bank House", 565, 205, "house"),
-        ("church row", "Church Row", 360, 300, "house"),
-        ("beck house", "Beck House", 250, 360, "house"),
-        ("the shop", "The Shop", 545, 320, "shop"),
-        ("the draper's", "The Draper's", 545, 320, "shop"),
-        ("the pelican", "The Pelican", 600, 380, "inn"),
-        ("the forge", "The Forge", 380, 415, "forge"),
-        ("the bakehouse", "The Bakehouse", 640, 430, "shop"),
-        ("home farm", "Home Farm", 170, 470, "farm"),
-        ("the empty cottage", "The Empty Cottage", 470, 480, "house"),
-        ("ivy cottage", "Ivy Cottage", 690, 300, "house"),
-        ("gunnerside", "Gunnerside", 250, 560, "house"),
-        ("the station", "The Station", 760, 510, "house"),
-        ("the carrier's yard", "Carrier's Yard", 640, 545, "house"),
-        ("the knacker's yard", "Knacker's Yard", 880, 575, "house"),
+    // the parish geography as percentages of the map panel: (seat-key, label, x%, y%)
+    let places: &[(&str, &str, i32, i32)] = &[
+        ("high foldside", "High Foldside", 13, 12),
+        ("the laurels", "The Laurels", 16, 28),
+        ("crale court", "Crale Court", 86, 14),
+        ("the crale estate", "Crale Estate", 90, 24),
+        ("five elms", "Five Elms", 84, 29),
+        ("the vicarage", "The Vicarage", 44, 22),
+        ("the school", "The School", 36, 33),
+        ("the post office", "The Post Office", 54, 34),
+        ("the bank house", "The Bank House", 64, 30),
+        ("church row", "Church Row", 33, 44),
+        ("the churchyard", "The Churchyard", 50, 50),
+        ("the constabulary", "The Constabulary", 60, 45),
+        ("the committee", "The Vestry", 41, 40),
+        ("the draper's", "The Draper's", 56, 40),
+        ("the shop", "The Shop", 66, 42),
+        ("the shambles", "The Shambles", 45, 55),
+        ("the mill", "The Mill", 26, 50),
+        ("beck house", "Beck House", 22, 60),
+        ("springs house", "Springs House", 12, 44),
+        ("ivy cottage", "Ivy Cottage", 76, 50),
+        ("the pelican", "The Pelican", 64, 62),
+        ("the forge", "The Forge", 40, 68),
+        ("the bakehouse", "The Bakehouse", 70, 70),
+        ("the empty cottage", "Widcombe Lane", 52, 80),
+        ("home farm", "Home Farm", 16, 76),
+        ("gunnerside", "Gunnerside", 26, 90),
+        ("the station", "The Station", 82, 80),
+        ("the carrier's yard", "Carrier's Yard", 68, 88),
+        ("the knacker's yard", "Knacker's Yard", 92, 92),
+        ("the docks at plymouth", "Away - Plymouth", 90, 7),
     ];
-    // a soft hand-drawn glyph per kind
-    let glyph = |kind: &str, x: i32, y: i32| -> String {
-        let c = "#6b5b44";
-        match kind {
-            "hall" => format!("<rect x={} y={} width=34 height=22 rx=2 fill=#d9cba6 stroke={c}/><polygon points='{},{} {},{} {},{}' fill=#b9a77f stroke={c}/>", x-17, y-6, x-20, y-6, x, y-22, x+20, y-6),
-            "farm" => format!("<rect x={} y={} width=26 height=18 rx=2 fill=#d9cba6 stroke={c}/><rect x={} y={} width=16 height=14 fill=#c8b98f stroke={c}/>", x-16, y-4, x+2, y),
-            "inn"  => format!("<rect x={} y={} width=28 height=20 rx=2 fill='#cdb98c' stroke={c}/><rect x={} y={} width=11 height=8 fill='#efe6cf' stroke={c}/>", x-14, y-6, x+16, y-12),
-            "forge"=> format!("<rect x={} y={} width=24 height=18 rx=2 fill='#c2a878' stroke={c}/><circle cx={} cy={} r=3 fill='#b5502f'/>", x-12, y-4, x, y+5),
-            "shop" => format!("<rect x={} y={} width=24 height=18 rx=2 fill=#d6c69a stroke={c}/>", x-12, y-4),
-            _      => format!("<rect x={} y={} width=20 height=16 rx=2 fill=#d9cba6 stroke={c}/><polygon points='{},{} {},{} {},{}' fill=#b9a77f stroke={c}/>", x-10, y-4, x-12, y-4, x, y-15, x+12, y-4),
-        }
-    };
 
-    let mut svg = String::from(
-        "<svg viewBox='0 0 960 640' style='width:100%;height:auto;background:#efe6cf;border:1px solid #cdbf9d;border-radius:8px'>"
-    );
-    // the hills behind High Foldside, and the beck winding through
-    svg.push_str("<polygon points='0,0 360,0 220,150 0,210' fill='#ddd2ad'/>");
-    svg.push_str("<path d='M 0 250 C 250 230, 360 360, 520 360 S 820 470, 960 450' fill='none' stroke='#9fb9c6' stroke-width='10' opacity='0.7'/>");
-    // the lanes, radiating from the church/square
-    for &(_, _, x, y, _) in places.iter() {
-        svg.push_str(&format!("<line x1=470 y1=270 x2={x} y2={y} stroke='#c9ba93' stroke-width='3' opacity='0.5'/>"));
-    }
-    // the church at the heart, and the square
-    svg.push_str("<g><rect x=450 y=240 width=40 height=28 rx=2 fill='#cdbf99' stroke='#6b5b44'/><polygon points='450,240 470,210 490,240' fill='#b9a77f' stroke='#6b5b44'/><line x1=470 y1=210 x2=470 y2=195 stroke='#6b5b44' stroke-width=2/><line x1=464 y1=202 x2=476 y2=202 stroke='#6b5b44' stroke-width=2/></g>");
-    svg.push_str("<text x=470 y=285 font-size=12 text-anchor=middle fill='#5b4d39' font-style=italic>St Mary's</text>");
-
-    // each place, its glyph, label, and the souls who live there
     let mut by_seat: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
     for (i, a) in w.agents.iter().enumerate() {
         if a.active() { by_seat.entry(a.seat.trim().to_lowercase()).or_default().push(i); }
     }
+
+    let avatar = |i: usize, extra: &str| -> String {
+        let sx = if w.agents[i].sex == 0 { "w" } else { "m" };
+        format!(
+            "<a class='av {sx}' href='/folk/{i}' title='{}{extra}' style=\"background-image:url(/portraits/{i})\"></a>",
+            esc(&w.agents[i].name)
+        )
+    };
+
+    let mut markers = String::new();
+    let mut placed: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut drawn: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for &(key, label, x, y, kind) in places.iter() {
-        if !drawn.insert(label) { continue; } // The Shop / The Draper's share a spot — draw once
-        svg.push_str(&glyph(kind, x, y));
-        svg.push_str(&format!("<text x={x} y={} font-size=11 text-anchor=middle fill='#5b4d39'>{}</text>", y + 18, esc(label)));
-        // the souls at this place — small dots, clustered, each a link to their page
+    for &(key, label, x, y) in places.iter() {
+        if !drawn.insert(label) { continue; }
         let here: Vec<usize> = by_seat.get(key).cloned().unwrap_or_default();
-        for (k, &i) in here.iter().enumerate() {
-            let dx = ((k % 5) as i32) * 11 - 22;
-            let dy = (k / 5) as i32 * 11 + 26;
-            let col = if w.agents[i].sex == 0 { "#9a5a6a" } else { "#4a6a8a" };
-            svg.push_str(&format!(
-                "<a href='/folk/{i}'><circle cx={} cy={} r=4 fill='{col}' stroke='#3a2f22'><title>{}</title></circle></a>",
-                x + dx, y + dy, esc(&w.agents[i].name)
-            ));
+        let mut avs = String::new();
+        for &i in here.iter().take(8) {
+            placed.insert(i);
+            avs.push_str(&avatar(i, ""));
         }
+        if here.len() > 8 { avs.push_str(&format!("<span class=more>+{}</span>", here.len() - 8)); }
+        markers.push_str(&format!(
+            "<div class=loc style='left:{x}%;top:{y}%'><div class=ln>{}</div><div class=av-row>{avs}</div></div>",
+            esc(label)
+        ));
     }
-    svg.push_str("</svg>");
+    // any soul whose seat has no spot on the map — gathered below, so no one is lost
+    let strays: Vec<usize> = (0..w.agents.len())
+        .filter(|&i| w.agents[i].active() && !placed.contains(&i)).collect();
+    let mut stray_html = String::new();
+    if !strays.is_empty() {
+        for &i in &strays {
+            stray_html.push_str(&avatar(i, &format!(" - of {}", esc(&w.agents[i].seat))));
+        }
+        stray_html = format!("<div class=sub style='margin-top:1.2rem'>elsewhere about the parish:</div><div class=av-row style='justify-content:flex-start;margin-top:.3rem'>{stray_html}</div>");
+    }
+
+    let style = "<style>\
+      .mapwrap{position:relative;width:100%;aspect-ratio:3/2;margin:.5rem 0 1rem;border:1px solid #cdbf9d;border-radius:10px;\
+        background:radial-gradient(circle at 50% 45%,#f4ecd6,#e6dabb 70%,#dccfa9);\
+        background-size:cover;background-position:center;box-shadow:inset 0 0 60px rgba(120,95,55,.18);overflow:hidden}\
+      .church{position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);font:italic 13px Georgia;color:#5b4d39;text-align:center;opacity:.8;pointer-events:none}\
+      .church:before{content:'\\271D';display:block;font-size:20px;line-height:1}\
+      .loc{position:absolute;transform:translate(-50%,-50%);text-align:center;width:130px}\
+      .ln{font:600 11px Georgia;color:#5b4d39;background:rgba(247,240,220,.74);border-radius:8px;padding:1px 6px;display:inline-block;margin-bottom:3px;white-space:nowrap}\
+      .av-row{display:flex;flex-wrap:wrap;gap:2px;justify-content:center}\
+      .av{display:inline-block;width:30px;height:30px;border-radius:50%;background-size:cover;background-position:center 18%;\
+        border:2px solid #fff;box-shadow:0 1px 3px rgba(80,60,30,.45);transition:transform .1s}\
+      .av:hover{transform:scale(1.3);z-index:5;position:relative}\
+      .av.m{background-color:#6f86a6}.av.w{background-color:#b07f8e}\
+      .more{font:600 11px Georgia;color:#7a6a4e;align-self:center;margin-left:2px}\
+    </style>";
 
     let body = format!(
-        "<h1>Thrushcombe St Mary</h1>\
-         <div class=sub>The parish, door by door — every living soul at their own hearth. \
-         <span style='color:#4a6a8a'>●</span> a man, <span style='color:#9a5a6a'>●</span> a woman; hover for a name, click to their page.</div>\
-         {svg}\
+        "{style}<h1>Thrushcombe St Mary</h1>\
+         <div class=sub>The parish, place by place - every living soul a face at their own door. \
+         <span style='color:#6f86a6'>&#9679;</span> a man, <span style='color:#b07f8e'>&#9679;</span> a woman; hover to lift them, click to their page. \
+         (A drawn map slots in behind once one is placed at <code>portraits/map.jpg</code>.)</div>\
+         <div class=mapwrap style=\"background-image:url(/portraits/map)\"><div class=church>St Mary's</div>{markers}</div>\
+         {stray_html}\
          <p style='margin-top:1rem'><a href=/folk>&larr; the cast in full</a></p>"
     );
-    page("Thrushcombe — the map", &body)
+    page("Thrushcombe - the map", &body)
 }
 
 /// A filename-safe slug of a name: lowercase, runs of non-alphanumerics become single hyphens.
