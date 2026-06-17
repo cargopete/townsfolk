@@ -447,8 +447,20 @@ fn person(sim: &Sim, idx: usize) -> String {
     } else {
         String::new()
     };
+    // a sepia portrait if one has been made, else a period likeness-card with their initials
+    let initials: String = a.name.split_whitespace()
+        .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
+        .filter_map(|w| w.chars().next()).take(2).collect();
+    let portrait = format!(
+        "<div style='float:right;width:148px;margin:.2rem 0 .8rem 1.2rem;text-align:center'>\
+           <img src='/portraits/{idx}.jpg' alt='' style='width:148px;height:182px;object-fit:cover;border-radius:6px;border:3px solid #8a7654;box-shadow:0 2px 6px rgba(80,60,30,.3);filter:sepia(.3)' \
+             onerror=\"this.style.display='none';document.getElementById('ph{idx}').style.display='flex'\">\
+           <div id='ph{idx}' style='display:none;width:148px;height:182px;border-radius:6px;border:3px solid #8a7654;box-shadow:0 2px 6px rgba(80,60,30,.3);background:linear-gradient(160deg,#d8cba6,#b9a77f);color:#5b4d39;align-items:center;justify-content:center;font:italic 2.6rem Georgia'>{initials}</div>\
+           <div style='font-size:.74rem;color:#7a6a4e;margin-top:.25rem;font-style:italic'>a likeness</div>\
+         </div>"
+    );
     let mut body = format!(
-        "<h1>{}{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
+        "{portrait}<h1>{}{}{}</h1><div class=sub>{} of {} &middot; {} years{}</div>",
         esc(&a.name), status, speak, esc(&station(a)), esc(&a.seat), a.age(day), origin
     );
 
@@ -1387,6 +1399,11 @@ fn main() {
     // When THRUSH_WEB_KEY is set (e.g. behind a public Funnel), gate every request behind
     // HTTP Basic auth — any username, password == the key. Unset (tailnet use) = wide open.
     let web_key = std::env::var("THRUSH_WEB_KEY").ok().filter(|k| !k.is_empty());
+    // sepia portraits live in a `portraits/` folder beside the world db — served as /portraits/<n>.jpg
+    let portrait_dir = std::path::Path::new(&db).parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.join("portraits"))
+        .unwrap_or_else(|| std::path::PathBuf::from("portraits"));
     println!(
         "Thrushcombe reader on http://{addr}  (db: {db}){}",
         if web_key.is_some() { "  [auth on]" } else { "" }
@@ -1423,6 +1440,20 @@ fn main() {
                 );
                 continue;
             }
+        }
+        // a soul's sepia portrait, if one has been made: /portraits/<n>.jpg from the portraits folder
+        if let Some(name) = url.strip_prefix("/portraits/") {
+            let name = name.split(['?', '/']).next().unwrap_or("");
+            let safe = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if safe {
+                if let Ok(bytes) = std::fs::read(portrait_dir.join(name)) {
+                    let ct = Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap();
+                    let _ = req.respond(Response::from_data(bytes).with_header(ct));
+                    continue;
+                }
+            }
+            let _ = req.respond(Response::from_string("").with_status_code(404));
+            continue;
         }
         // pick up anything the hourly driver has written since (new decrees: feuds, courtships,
         // plans, conversation residue, and any calendar jump), so the dashboard never lags behind.
