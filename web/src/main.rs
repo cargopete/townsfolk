@@ -1189,6 +1189,63 @@ fn map_page(sim: &Sim) -> String {
     page("Thrushcombe — the map", &body)
 }
 
+/// A filename-safe slug of a name: lowercase, runs of non-alphanumerics become single hyphens.
+fn slugify(s: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !out.is_empty() && !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// A name with any leading honorific dropped ("Mrs Cynthia Pelham" → "Cynthia Pelham").
+fn strip_title(name: &str) -> String {
+    const TITLES: &[&str] = &["mr", "mrs", "miss", "ms", "dr", "revd", "rev", "major", "lady", "sir", "constable", "old", "capt", "col"];
+    let mut parts: Vec<&str> = name.split_whitespace().collect();
+    if parts.len() > 1 && TITLES.contains(&parts[0].trim_end_matches('.').to_lowercase().as_str()) {
+        parts.remove(0);
+    }
+    parts.join(" ")
+}
+
+/// Find a soul's portrait file in the folder — by index OR a name-slug, in any common image format.
+/// Returns the bytes and the right content-type. Lets the user name files however reads naturally.
+fn resolve_portrait(dir: &std::path::Path, sim: &Sim, req: &str) -> Option<(Vec<u8>, &'static str)> {
+    let base = req.rsplit_once('.').map(|(b, _)| b).unwrap_or(req).trim();
+    if base.is_empty() {
+        return None;
+    }
+    // candidate filename stems, most specific first
+    let mut cands: Vec<String> = Vec::new();
+    if base.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        cands.push(base.to_lowercase()); // an index (18) or a slug already
+    }
+    if let Ok(idx) = base.parse::<usize>() {
+        let w = sim.world_snapshot(today());
+        if let Some(a) = w.agents.get(idx) {
+            cands.push(slugify(&a.name)); // major-pringle, mrs-pringle
+            let st = slugify(&strip_title(&a.name));
+            if !st.is_empty() { cands.push(st); } // cynthia-pelham, aldermaston
+        }
+    }
+    for cand in &cands {
+        if cand.is_empty() || cand.contains("..") { continue; }
+        for (ext, ct) in [("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("png", "image/png"), ("webp", "image/webp")] {
+            if let Ok(bytes) = std::fs::read(dir.join(format!("{cand}.{ext}"))) {
+                return Some((bytes, ct));
+            }
+        }
+    }
+    None
+}
+
 fn route(sim: &Sim, url: &str) -> String {
     let path = url.split('?').next().unwrap_or("/");
     if path == "/" {
@@ -1441,18 +1498,16 @@ fn main() {
                 continue;
             }
         }
-        // a soul's sepia portrait, if one has been made: /portraits/<n>.jpg from the portraits folder
+        // a soul's portrait, if one has been made — resolved by index OR a name-slug, any image
+        // format (so files named 18.jpg, major-pringle.png, mrs-pringle.png … all just work).
         if let Some(name) = url.strip_prefix("/portraits/") {
-            let name = name.split(['?', '/']).next().unwrap_or("");
-            let safe = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-            if safe {
-                if let Ok(bytes) = std::fs::read(portrait_dir.join(name)) {
-                    let ct = Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap();
-                    let _ = req.respond(Response::from_data(bytes).with_header(ct));
-                    continue;
-                }
+            let key = name.split(['?', '/']).next().unwrap_or("");
+            if let Some((bytes, ct)) = resolve_portrait(&portrait_dir, &sim, key) {
+                let hdr = Header::from_bytes(&b"Content-Type"[..], ct.as_bytes()).unwrap();
+                let _ = req.respond(Response::from_data(bytes).with_header(hdr));
+            } else {
+                let _ = req.respond(Response::from_string("").with_status_code(404));
             }
-            let _ = req.respond(Response::from_string("").with_status_code(404));
             continue;
         }
         // pick up anything the hourly driver has written since (new decrees: feuds, courtships,
