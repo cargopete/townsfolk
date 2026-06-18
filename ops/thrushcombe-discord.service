@@ -1,0 +1,13 @@
+[Unit]
+Description=Thrushcombe Discord bot (two-way chat — you are Pete Peckers, the town replies as itself)
+After=network-online.target thrushcombe-web.service
+Wants=thrushcombe-web.service
+
+[Service]
+WorkingDirectory=/home/pepe/townsfolk
+ExecStart=/home/pepe/townsfolk/.venv/bin/python /home/pepe/townsfolk/ops/discord_bot.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

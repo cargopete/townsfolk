@@ -205,6 +205,17 @@ enum Cmd {
         #[arg(long, default_value = "")]
         note: String,
     },
+    /// Emit new beats (narration/thought/speech) since per-table cursors, as JSON, for the Discord feed.
+    DiscordFeed {
+        #[arg(long, default_value_t = 0)]
+        since_e: i64,
+        #[arg(long, default_value_t = 0)]
+        since_t: i64,
+        #[arg(long, default_value_t = 0)]
+        since_d: i64,
+        #[arg(long, default_value_t = 100000)]
+        limit: i64,
+    },
 }
 
 const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a West-Country market town in 1934. Render the given event as ONE plain sentence (two at the very most), in the register of interwar English provincial writing — dry, observed, lightly wry, the small dignity and the small humiliation borne with grace. \
@@ -1194,6 +1205,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let added = sim.catch_up(today(), cur_phase())?;
             println!("Providence — {kind} upon {target}. {added} event(s) re-folded; the town will make of it what it will.");
             print_status(&sim.report(today())?);
+        }
+        Cmd::DiscordFeed { since_e, since_t, since_d, limit } => {
+            let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
+            let beats = sim.discord_beats(since_e, since_t, since_d, limit)?;
+            println!("{}", serde_json::to_string(&beats).unwrap_or_else(|_| "[]".into()));
         }
     }
     Ok(())

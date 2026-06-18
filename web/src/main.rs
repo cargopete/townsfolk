@@ -1360,6 +1360,19 @@ fn transcript_of(sim: &Sim, source: usize, target: usize, hist: &serde_json::Val
         .unwrap_or_default()
 }
 
+/// GET /api/roster — the living adult cast as JSON {idx,name,seat,standing,sex}, so the Discord
+/// bot can resolve who a message addresses and which souls belong to which place-channel.
+fn handle_roster(sim: &Sim) -> String {
+    let w = sim.world_snapshot(today());
+    let arr: Vec<serde_json::Value> = w.agents.iter().enumerate()
+        .filter(|(_, a)| a.active() && a.archetype != "child")
+        .map(|(i, a)| serde_json::json!({
+            "idx": i, "name": a.name, "seat": a.seat, "standing": a.standing, "sex": a.sex,
+        }))
+        .collect();
+    serde_json::json!({ "roster": arr }).to_string()
+}
+
 /// POST /talk/say — one in-character reply from the target. Returns {"reply": "..."}.
 fn handle_say(sim: &Sim, body: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
@@ -1533,6 +1546,19 @@ fn main() {
     );
     for mut req in server.incoming_requests() {
         let url = req.url().to_string();
+        // a soul's portrait is public (no auth) — Discord and other readers fetch these as avatars.
+        // Served by index OR name-slug, any image format (18.jpg, major-pringle.png … all just work).
+        if let Some(name) = url.strip_prefix("/portraits/") {
+            let key = name.split(['?', '/']).next().unwrap_or("");
+            if let Some((bytes, ct)) = resolve_portrait(&portrait_dir, &sim, key) {
+                let hdr = Header::from_bytes(&b"Content-Type"[..], ct.as_bytes()).unwrap();
+                let cache = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=86400"[..]).unwrap();
+                let _ = req.respond(Response::from_data(bytes).with_header(hdr).with_header(cache));
+            } else {
+                let _ = req.respond(Response::from_string("").with_status_code(404));
+            }
+            continue;
+        }
         if let Some(key) = &web_key {
             let ok = req
                 .headers()
@@ -1564,18 +1590,6 @@ fn main() {
                 continue;
             }
         }
-        // a soul's portrait, if one has been made — resolved by index OR a name-slug, any image
-        // format (so files named 18.jpg, major-pringle.png, mrs-pringle.png … all just work).
-        if let Some(name) = url.strip_prefix("/portraits/") {
-            let key = name.split(['?', '/']).next().unwrap_or("");
-            if let Some((bytes, ct)) = resolve_portrait(&portrait_dir, &sim, key) {
-                let hdr = Header::from_bytes(&b"Content-Type"[..], ct.as_bytes()).unwrap();
-                let _ = req.respond(Response::from_data(bytes).with_header(hdr));
-            } else {
-                let _ = req.respond(Response::from_string("").with_status_code(404));
-            }
-            continue;
-        }
         // pick up anything the hourly driver has written since (new decrees: feuds, courtships,
         // plans, conversation residue, and any calendar jump), so the dashboard never lags behind.
         let _ = sim.reload_inputs();
@@ -1593,6 +1607,8 @@ fn main() {
                 _ => handle_between_end(&mut sim, &body),
             };
             let _ = req.respond(Response::from_string(json).with_header(json_hdr));
+        } else if url.split('?').next() == Some("/api/roster") {
+            let _ = req.respond(Response::from_string(handle_roster(&sim)).with_header(json_hdr));
         } else {
             let html = route(&sim, &url);
             let _ = req.respond(Response::from_string(html).with_header(html_hdr));

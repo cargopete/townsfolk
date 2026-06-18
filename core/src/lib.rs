@@ -4072,6 +4072,23 @@ pub struct ChronEntry {
     pub text: String,
 }
 
+/// One beat for the Discord feed: a line plus where its speaker stands and who they are, so the
+/// feed can post it to the right place-channel under the townsperson's own face. `voice` tells the
+/// feed how to render it — `narration` (a happening, observed), `thought` (private reflection), or
+/// `speech` (words said aloud). `src`+`id` is the per-table cursor the feed advances.
+#[derive(Serialize)]
+pub struct DiscordBeat {
+    pub src: String,    // "e" events · "t" reflections · "d" dialogues
+    pub id: i64,
+    pub voice: String,  // narration | thought | speech
+    pub actor: String,
+    pub idx: i32,
+    pub seat: String,
+    pub sex: i32,
+    pub kind: String,
+    pub text: String,
+}
+
 /// One phase of a soul's day: where they were and what they were about.
 pub struct DayLine {
     pub phase: String,
@@ -6364,6 +6381,64 @@ impl Sim {
             Ok(ChronEntry { date: r.get(0)?, phase: r.get(1)?, kind: r.get(2)?, actor: r.get(3)?, text: r.get(4)? })
         })?;
         rows.collect()
+    }
+
+    /// New beats since the given per-table cursors, each tagged with its `voice` and the speaker's
+    /// current seat, cast index (for their portrait), and sex — so the Discord feed can route each
+    /// to its place-channel and post it under the townsperson's own name and face. Three voices:
+    /// narration (narrated events), thought (a soul's reflections), speech (conversation lines).
+    pub fn discord_beats(&self, since_e: i64, since_t: i64, since_d: i64, limit: i64)
+        -> rusqlite::Result<Vec<DiscordBeat>>
+    {
+        let w = self.world_at(self.last_slot().max(0));
+        let mut by_name: std::collections::HashMap<&str, (i32, String, i32)> = std::collections::HashMap::new();
+        for (i, a) in w.agents.iter().enumerate() {
+            by_name.insert(a.name.as_str(), (i as i32, a.seat.clone(), a.sex as i32));
+        }
+        let look = |name: &str| by_name.get(name).cloned().unwrap_or((-1, String::new(), -1));
+        let mut out = Vec::new();
+
+        // narration — the oracle's voiced chronicle events
+        let mut s = self.conn.prepare(
+            "SELECT e.id, e.kind, e.actor, n.text FROM events e JOIN narration n ON n.event_id = e.id
+             WHERE e.id > ?1 ORDER BY e.id ASC LIMIT ?2")?;
+        for row in s.query_map(params![since_e, limit], |r|
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
+        {
+            let (id, kind, actor, text) = row?;
+            let (idx, seat, sex) = look(&actor);
+            out.push(DiscordBeat { src: "e".into(), id, voice: "narration".into(), actor, idx, seat, sex, kind, text });
+        }
+
+        // thought — a soul's private reflection
+        let mut s = self.conn.prepare(
+            "SELECT id, subject, thought FROM reflections WHERE id > ?1 ORDER BY id ASC LIMIT ?2")?;
+        for row in s.query_map(params![since_t, limit], |r|
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        {
+            let (id, actor, text) = row?;
+            let (idx, seat, sex) = look(&actor);
+            out.push(DiscordBeat { src: "t".into(), id, voice: "thought".into(), actor, idx, seat, sex, kind: "reflection".into(), text });
+        }
+
+        // speech — each line of a conversation, attributed to its speaker
+        let mut s = self.conn.prepare(
+            "SELECT id, transcript FROM dialogues WHERE id > ?1 ORDER BY id ASC LIMIT ?2")?;
+        for row in s.query_map(params![since_d, limit], |r|
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        {
+            let (id, transcript) = row?;
+            for line in transcript.lines() {
+                let line = line.trim();
+                if let Some((who, said)) = line.split_once(": ") {
+                    if let Some((idx, seat, sex)) = by_name.get(who).cloned() {
+                        out.push(DiscordBeat { src: "d".into(), id, voice: "speech".into(),
+                            actor: who.to_string(), idx, seat, sex, kind: "dialogue".into(), text: said.trim().to_string() });
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Every chronicle entry that names a person — their life as the town recorded it.

@@ -31,3 +31,7 @@ export PATH="$HOME/.local/bin:$PATH"
 "$BIN" --db "$DB" betroth --count 1 || true  # a ripe courtship comes to its question — the courted soul answers
 "$BIN" --db "$DB" gamble --count 1 || true  # in a growing season, a farmer weighs a gamble on the land
 "$BIN" --db "$DB" biography --limit 1 || true  # write the life of a soul still lacking one
+
+# Push the hour's new voiced beats to Discord — each townsperson posts to their place-channel,
+# in their own name and face. Cursor-tracked; safe to run every hour. (No-op if Discord unset.)
+[ -f "$REPO/ops/discord_channels.json" ] && python3 "$REPO/ops/discord_feed.py" || true

@@ -9,3 +9,6 @@ ops/secrets.env
 # macOS
 .DS_Store
 **/.DS_Store
+ops/discord_channels.json
+ops/discord_state.json
+.venv/

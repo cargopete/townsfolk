@@ -449,7 +449,36 @@ A read-only, period-styled web view over the SQLite log and the folded world:
 Binds `127.0.0.1:8717` by default; `THRUSH_WEB_ADDR` changes the address and
 `THRUSH_WEB_KEY` gates every request behind HTTP Basic auth (any username, password =
 the key) — leave it unset for private/tailnet use, set it to serve the dashboard
-publicly, e.g. behind a Tailscale Funnel.
+publicly, e.g. behind a Tailscale Funnel. **`/portraits/*` is always public** (no auth),
+so external readers (Discord) can fetch a soul's sepia portrait as an avatar.
+
+Two small JSON endpoints back the Discord layer: **`POST /talk/say`** (one in-character
+reply — `{source, target, history, message}` → `{reply}`) and **`GET /api/roster`**
+(the living adult cast: `{idx, name, seat, standing, sex}`).
+
+## The town in Discord
+
+A second front-end where the parish lives **as itself**, in real time — a Discord server of
+**per-place channels** (`#the-pelican`, `#five-elms`, `#the-vicarage`, `#the-inquiry`, a
+catch-all `#town-chronicle`…). One bot does it all: a Discord **webhook** overrides the name and
+avatar on every message, so the same plumbing posts as Major Pringle, then Daphne, then Sam
+Trotter — each with their own face. No per-character bots.
+
+- **The live feed** — `thrush discord-feed` emits new beats since per-table cursors as JSON, each
+  tagged with a *voice*; `ops/discord_feed.py` (run hourly from `daily.sh`) routes each to its
+  place-channel by the speaker's seat and posts it as that soul. Three voices read distinctly:
+  **narration** *(italic — a happening)*, **thought** *(💭 italic — a private reflection)*,
+  **speech** *("quoted" — words said aloud)*.
+- **Two-way chat** — `ops/discord_bot.py` (persistent `thrushcombe-discord.service`): you type in a
+  place-channel **as Mr Pete Peckers** (cast #59); the bot resolves whom you addressed (a name in
+  the message, else the most prominent resident), asks the sim for that soul's reply
+  (`/talk/say`, source = Pete), and posts it back through the webhook as that townsperson.
+
+Setup is one-time: a Discord application + bot (Message-Content & Server-Members intents), invited
+with `bot` scope; `ops/discord_setup_channels.py` builds the channels + webhooks idempotently and
+writes `ops/discord_channels.json`. Secrets (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`,
+`THRUSH_WEB_KEY`) live in the gitignored `ops/secrets.env`; the channel/webhook map and feed
+cursor (`ops/discord_channels.json`, `ops/discord_state.json`) are gitignored too.
 
 ## Layout
 
@@ -461,7 +490,8 @@ wasm-policies/  the behaviour layer as one wasm guest (built by ops/build-wasm.s
 thrush/         CLI + detailed ratatui monitor + the wasmtime-backed engine
 web/            thrush-web — dashboard, legends & kinship browser
 llm/            the recorded-oracle client (now the claude CLI, Sonnet)
-ops/            the daily timer and the wasm build script
+ops/            the daily timer, the wasm build script, and the Discord layer
+                (setup_channels · feed · bot · thrushcombe-discord.service)
 docs/           the design
 ```
 
