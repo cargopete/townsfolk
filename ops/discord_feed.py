@@ -17,6 +17,7 @@ DB = ROOT / "world.db"
 PUBLIC_BASE = "https://pepe-thinkpad.tailb0627.ts.net:8443"   # Funnel — portraits public here
 UA = "DiscordBot (https://thrushcombe.local, 0.1)"
 BACKFILL = 6             # on a fresh feed, seed each voice with its last N beats
+PETE = 59                # the player — their own conversations aren't echoed back by the feed
 SRC_KEY = {"e": "events", "t": "thoughts", "d": "speech"}
 
 PLACES = sorted(
@@ -83,20 +84,36 @@ def main():
         k = SRC_KEY[b["src"]]
         maxid[k] = max(maxid.get(k, 0), b["id"])
 
-    if fresh:                              # only seed the last few of each voice
-        keep = []
-        for src in ("e", "t", "d"):
-            keep += [b for b in beats if b["src"] == src][-BACKFILL:]
-        beats = keep
+    # narration & thought post individually; speech is grouped by conversation so a whole exchange
+    # lands together in one room (where it happened), not split across each speaker's channel.
+    from collections import OrderedDict
+    others = [b for b in beats if b["src"] != "d"]
+    dialogs = OrderedDict()
+    for b in (b for b in beats if b["src"] == "d"):
+        dialogs.setdefault(b["id"], []).append(b)
+    # the player's own conversations are lived in the channel already — never echo them back
+    dialogs = OrderedDict((i, g) for i, g in dialogs.items() if not any(x["idx"] == PETE for x in g))
+
+    if fresh:
+        others = ([b for b in others if b["src"] == "e"][-BACKFILL:]
+                  + [b for b in others if b["src"] == "t"][-BACKFILL:])
+        keep = list(dialogs)[-BACKFILL:]
+        dialogs = OrderedDict((i, dialogs[i]) for i in keep)
 
     posted = 0
-    for b in beats:
+    for b in sorted(others, key=lambda b: (b["src"], b["id"])):
         if post(channel_for(b), b):
             posted += 1; time.sleep(0.4)
+    for _id, group in dialogs.items():
+        slug = channel_for(group[0])       # the whole conversation to where it began
+        for b in group:
+            if post(slug, b):
+                posted += 1; time.sleep(0.4)
+
     STATE.write_text(json.dumps({"events": maxid.get("events", 0),
                                  "thoughts": maxid.get("thoughts", 0),
                                  "speech": maxid.get("speech", 0)}))
-    print(f"posted {posted}/{len(beats)} beats; cursors -> {json.loads(STATE.read_text())}")
+    print(f"posted {posted} beats; cursors -> {json.loads(STATE.read_text())}")
     return 0
 
 

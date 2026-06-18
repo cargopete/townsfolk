@@ -473,7 +473,10 @@ Trotter — each with their own face. No per-character bots.
   place-channel **as Mr Pete Peckers** (cast #59); the bot resolves whom you addressed — **reply to
   a soul's message**, or **name them**, else the most prominent resident of that place — asks the
   sim for that soul's reply (`/talk/say`, source = Pete), and posts it back through the webhook as
-  that townsperson.
+  that townsperson. **`@everyone`/`@here`** in a room hails every resident; anything else is a 1:1.
+  Each 1:1 carries its history for continuity, and when it goes quiet the bot **folds it back into
+  the world** (`/talk/end` — warmth + a memory), so everything said in Discord updates Thrushcombe.
+  (Your own conversations aren't echoed back by the feed.)
 - **Who's here now** — `ops/discord_presence.py` (hourly) keeps each place-channel's *topic*
   showing the souls there this phase; those out roving (paying calls, the rounds) are listed in
   `#town-chronicle`. Only edits a topic when it changed (Discord throttles topic edits).

@@ -7,7 +7,7 @@ that channel), asks the sim for that soul's in-character reply (POST /talk/say, 
 and posts it back through the channel webhook AS that townsperson — own name, own portrait.
 
 One bot, sixty voices. Run as a persistent service (ops/thrushcombe-discord.service)."""
-import json, os, pathlib, urllib.request, urllib.error, base64
+import json, os, pathlib, urllib.request, urllib.error, base64, asyncio
 import discord
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -69,15 +69,67 @@ def post_as(webhook, name, idx, content):
     urllib.request.urlopen(req, timeout=20)
 
 
+# --- conversation memory: each channel holds at most one live 1:1, carried as history so the
+# talk stays continuous, then flushed to the sim (POST /talk/end folds warmth + a memory into the
+# world) when it goes quiet — so everything said in Discord feeds back into Thrushcombe. -----------
+ACTIVE = {}          # channel_id -> {"target": idx, "name": str, "turns": [[role,text]], "last": t}
+IDLE = 240           # seconds of quiet before a conversation is judged and folded
+
+
+def history_for(cid, target):
+    c = ACTIVE.get(cid)
+    return c["turns"] if c and c["target"] == target["idx"] else []
+
+
+def remember_turn(cid, target, said, reply):
+    c = ACTIVE.get(cid)
+    if not c or c["target"] != target["idx"]:
+        c = ACTIVE[cid] = {"target": target["idx"], "name": target["name"], "turns": [], "last": 0}
+    c["turns"] += [["user", said], ["assistant", reply]]
+    c["turns"] = c["turns"][-16:]
+    c["last"] = asyncio.get_running_loop().time()
+
+
+async def flush(cid):
+    c = ACTIVE.pop(cid, None)
+    if not c or not c["turns"]:
+        return
+    try:
+        r = web_post("/talk/end", {"source": PETE, "target": c["target"], "history": c["turns"]})
+        print(f"folded talk with {c['name']}: warmth={r.get('warmth')} — {r.get('memory','')[:80]}")
+    except Exception as e:
+        print("flush failed:", e)
+
+
+def refresh_roster():
+    global ROSTER, BY_NAME
+    try:
+        ROSTER = web_get("/api/roster")["roster"]
+        BY_NAME = {r["name"].lower(): r for r in ROSTER}
+    except Exception as e:
+        print("roster refresh failed:", e)
+
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 client = discord.Client(intents=intents)
 
 
+async def housekeeper():
+    """Flush idle conversations into the world; keep the roster current as souls move/marry/leave."""
+    while True:
+        await asyncio.sleep(60)
+        now = asyncio.get_running_loop().time()
+        for cid in [c for c, v in ACTIVE.items() if now - v.get("last", 0) > IDLE]:
+            await flush(cid)
+        refresh_roster()
+
+
 @client.event
 async def on_ready():
     print(f"Thrushcombe bot online as {client.user} — Pete Peckers at the keyboard, {len(BY_ID)} channels")
+    client.loop.create_task(housekeeper())
 
 
 @client.event
@@ -89,8 +141,31 @@ async def on_message(msg):
     if entry is None:
         return
     slug, seat_key, webhook = entry
-    # address priority: (1) reply to a townie's message → that soul; (2) a name in the message;
-    # (3) the most prominent resident of this place.
+
+    async def speak(t, message, history):
+        async with msg.channel.typing():
+            try:
+                reply = web_post("/talk/say", {"source": PETE, "target": t["idx"],
+                                               "history": history, "message": message}).get("reply", "…")
+            except Exception as e:
+                print("say failed:", e); return None
+        try:
+            post_as(webhook, t["name"], t["idx"], reply)
+        except Exception as e:
+            print("post failed:", e)
+        return reply
+
+    # @everyone / @here in a room — every resident of that place answers in turn (a group is hailed)
+    low = msg.content.lower()
+    if msg.mention_everyone or "@everyone" in low or "@here" in low:
+        said = msg.content.replace("@everyone", "").replace("@here", "").strip() or "Well — what say you all?"
+        for t in residents(seat_key)[:6]:
+            await speak(t, said, [])
+            await asyncio.sleep(0.6)
+        return
+
+    # otherwise a 1:1 — address priority: (1) reply to a townie's message; (2) a name in the
+    # message; (3) the most prominent resident of this place.
     target = None
     ref = msg.reference
     if ref and ref.message_id:
@@ -106,18 +181,13 @@ async def on_message(msg):
         target = resolve_target(msg.content, seat_key)
     if target is None:
         return
-    async with msg.channel.typing():
-        try:
-            reply = web_post("/talk/say", {
-                "source": PETE, "target": target["idx"],
-                "history": [], "message": msg.content,
-            }).get("reply", "…")
-        except Exception as e:
-            print("say failed:", e); return
-    try:
-        post_as(webhook, target["name"], target["idx"], reply)
-    except Exception as e:
-        print("post failed:", e)
+    cid = msg.channel.id
+    cur = ACTIVE.get(cid)
+    if cur and cur["target"] != target["idx"]:   # you turned to someone else — fold the last talk
+        await flush(cid)
+    reply = await speak(target, msg.content, history_for(cid, target))
+    if reply is not None:
+        remember_turn(cid, target, msg.content, reply)
 
 
 client.run(TOKEN)
