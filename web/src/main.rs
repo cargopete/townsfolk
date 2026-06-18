@@ -1299,6 +1299,11 @@ fn resolve_portrait(dir: &std::path::Path, sim: &Sim, req: &str) -> Option<(Vec<
             cands.push(slugify(&a.name)); // major-pringle, mrs-pringle
             let st = slugify(&strip_title(&a.name));
             if !st.is_empty() { cands.push(st); } // cynthia-pelham, aldermaston
+            // drop a trailing post-nominal (MRCVS, MD, …): 'Mr Farran MRCVS' -> mr-farran
+            let words: Vec<&str> = a.name.split_whitespace().collect();
+            if words.len() > 1 && words.last().is_some_and(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_uppercase())) {
+                cands.push(slugify(&words[..words.len() - 1].join(" ")));
+            }
         }
     }
     for cand in &cands {
