@@ -7,6 +7,8 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
+**Progress:** ✅ = portrait done and in `portraits/`. 18 of 61 sitters photographed so far.
+
 ---
 
 ## STYLE — prepend to every prompt
@@ -21,27 +23,26 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 
 ## The gentry & professionals
 
-- **[4] Lady Aldermaston** — a 70-year-old gentlewoman, merchant's daughter turned lady of the manor for 48 years; silver hair neatly dressed, high-necked dark dress with a cameo brooch, a steady, gracious, unsentimental gaze.
-- **[18] Major Pringle** — a 60-year-old retired Indian Army officer; clipped white moustache, stiff collar and tweed, ramrod-straight, an air of expecting obedience, eyes faintly tired beneath the bearing.
-- **[19] Mrs Pringle** — a 55-year-old county wife; carefully waved greying hair, a good dark afternoon dress, composed to the point of unreadable.
-- **[20] Daphne Pringle** — a 24-year-old gentlewoman, ex-governess; plain centre-parted hair, modest high-collared blouse, scholarly and self-contained.
-- **[0] Mrs Cynthia Pelham** — a 42-year-old solicitor's wife of quiet competence; neat brown hair, a sensible well-kept dress, the tired capable look of a woman holding a household together.
-- **[1] Mr Robert Pelham** — a 46-year-old country solicitor; thinning hair, spectacles, dark suit, a measured, cautious face whose affairs have begun to fray.
-- **[8] Revd Mr Soames** — a 58-year-old parson; silvered hair, clerical collar and black coat, shoulders bent slightly forward as if listening for something just beyond hearing.
-- **[9] Mrs Soames** — a 54-year-old clergyman's wife and clergyman's daughter; greying hair in a soft bun, a discreet dark dress, quietly capable.
-- **[30] Dr Lydgate** — a 50-year-old London-trained doctor, widower; greying, dark coat over a waistcoat, modern and a touch melancholy.
-- **[10] Mr Farran MRCVS** — a 45-year-old veterinary surgeon, widower; weather-roughened but book-learned, plain working tweeds, quietly absorbed.
-- **[11] Mr James Herrick** — a 26-year-old country doctor; young, clever, faintly disappointed in himself, a neat suit a little too careful, sharp observant eyes.
-- **[39] Mr Tallin** — a 54-year-old solicitor to the better sort; steel-rimmed spectacles, dark formal suit, careful and discreet, a keeper of secrets.
-- **[40] Mr Quint** *(the late bank manager, murdered)* — a 50-ish Cambridge man, front-pew respectable; dry expression, dark banker's suit, a sound, slightly forbidding judgment in the eyes.
-- **[27] Mr Crisp** — a 48-year-old churchwarden, scholarship boy made good; sober suit, balding, fair and steady.
-- **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief.
-- **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
+- ✅ **[4] Lady Aldermaston** — a 70-year-old gentlewoman, merchant's daughter turned lady of the manor for 48 years; silver hair neatly dressed, high-necked dark dress with a cameo brooch, a steady, gracious, unsentimental gaze.
+- ✅ **[18] Major Pringle** — a 60-year-old retired Indian Army officer; clipped white moustache, stiff collar and tweed, ramrod-straight, an air of expecting obedience, eyes faintly tired beneath the bearing.
+- ✅ **[19] Mrs Pringle** — a 55-year-old county wife; carefully waved greying hair, a good dark afternoon dress, composed to the point of unreadable.
+- ✅ **[20] Daphne Pringle** — a 24-year-old gentlewoman, ex-governess; plain centre-parted hair, modest high-collared blouse, scholarly and self-contained.
+- ✅ **[0] Mrs Cynthia Pelham** — a 42-year-old solicitor's wife of quiet competence; neat brown hair, a sensible well-kept dress, the tired capable look of a woman holding a household together.
+- ✅ **[1] Mr Robert Pelham** — a 46-year-old country solicitor; thinning hair, spectacles, dark suit, a measured, cautious face whose affairs have begun to fray.
+- ✅ **[8] Revd Mr Soames** — a 58-year-old parson; silvered hair, clerical collar and black coat, shoulders bent slightly forward as if listening for something just beyond hearing.
+- ✅ **[9] Mrs Soames** — a 54-year-old clergyman's wife and clergyman's daughter; greying hair in a soft bun, a discreet dark dress, quietly capable.
+- ✅ **[30] Dr Lydgate** — a 50-year-old London-trained doctor, widower; greying, dark coat over a waistcoat, modern and a touch melancholy.
+- ✅ **[10] Mr Farran MRCVS** — a 45-year-old veterinary surgeon, widower; weather-roughened but book-learned, plain working tweeds, quietly absorbed.
+- ✅ **[11] Mr James Herrick** — a 26-year-old country doctor; young, clever, faintly disappointed in himself, a neat suit a little too careful, sharp observant eyes.
+- ✅ **[39] Mr Tallin** — a 54-year-old solicitor to the better sort; steel-rimmed spectacles, dark formal suit, careful and discreet, a keeper of secrets.
+- ✅ **[40] Mr Quint** *(the late bank manager, murdered)* — a 50-ish Cambridge man, front-pew respectable; dry expression, dark banker's suit, a sound, slightly forbidding judgment in the eyes.
+- ✅ **[27] Mr Crisp** — a 48-year-old churchwarden, scholarship boy made good; sober suit, balding, fair and steady.
+- ✅ **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief.- ✅ **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
 
 ## The estate, the farms & the land
 
-- **[5] Mr Rupert Crale** — a 28-year-old improving farmer with modern notions; restless, a good jacket worn for working, a touch of arrogance the labourers resent.
-- **[42] Mr Hollis** — a 43-year-old gamekeeper, ex-poacher gone straight, widower; weathered, corduroy and a gun-dog's patience, meticulous and hard.
+- ✅ **[5] Mr Rupert Crale** — a 28-year-old improving farmer with modern notions; restless, a good jacket worn for working, a touch of arrogance the labourers resent.
+- ✅ **[42] Mr Hollis** — a 43-year-old gamekeeper, ex-poacher gone straight, widower; weathered, corduroy and a gun-dog's patience, meticulous and hard.
 - **[12] Mr Sunter** — a 55-year-old hill farmer of few words; weather-beaten, broad-shouldered, flat cap and working tweeds, reads sheep like scripture.
 - **[13] Mrs Sunter** — a 52-year-old hill-farmer's wife; dark hair gone grey, grown stout, brisk and weathered, a buried old grief in the eyes.
 - **[14] Jack Sunter** — a 21-year-old farmer's son; broad shoulders, his mother's dark eyes, solid and taciturn, collarless shirt and braces.
