@@ -12,3 +12,5 @@ ops/secrets.env
 ops/discord_channels.json
 ops/discord_state.json
 .venv/
+__pycache__/
+*.pyc
