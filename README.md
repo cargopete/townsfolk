@@ -480,6 +480,11 @@ Trotter — each with their own face. No per-character bots.
 - **Who's here now** — `ops/discord_presence.py` (hourly) keeps each place-channel's *topic*
   showing the souls there this phase; those out roving (paying calls, the rounds) are listed in
   `#town-chronicle`. Only edits a topic when it changed (Discord throttles topic edits).
+- **Live encounters** — between the hourly beats the bot stages townie-to-townie talk: `thrush
+  encounter` picks two souls, generates the exchange **and records its residue** (warmth + a memory
+  both ways, folded back into the world), and the bot posts it line by line into the room where it
+  happened, each soul as themselves. This replaces the old hourly autonomous `converse`; the feed
+  leaves speech alone so a conversation is never double-posted.
 
 Setup is one-time: a Discord application + bot (Message-Content & Server-Members intents), invited
 with `bot` scope; `ops/discord_setup_channels.py` builds the channels + webhooks idempotently and

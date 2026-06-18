@@ -218,6 +218,14 @@ enum Cmd {
     },
     /// Emit who is in each place this phase, as JSON, for the Discord channel topics.
     DiscordPresence,
+    /// Stage one live encounter between two souls, record its residue, and emit it as JSON
+    /// {a_name,b_name,place,lines:[{name,idx,text}]} — for the Discord bot to post live.
+    Encounter {
+        #[arg(long, default_value = "")]
+        between: String,
+        #[arg(long, default_value = "")]
+        setting: String,
+    },
 }
 
 const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a West-Country market town in 1934. Render the given event as ONE plain sentence (two at the very most), in the register of interwar English provincial writing — dry, observed, lightly wry, the small dignity and the small humiliation borne with grace. \
@@ -1219,6 +1227,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply_engine(&mut sim, cli.wasm);
             let rows = sim.presence(today(), cur_phase())?;
             println!("{}", serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()));
+        }
+        Cmd::Encounter { between, setting } => {
+            let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let forced = (!between.is_empty()).then(|| between.split_once('|')).flatten();
+            let pair = match forced {
+                Some((a, b)) => sim.converse_pair_between(t, a.trim(), b.trim(), setting.trim()),
+                None => sim.converse_pair(t),
+            };
+            let Some(p) = pair else { println!("{{}}"); return Ok(()); };
+            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
+            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
+            let Some(scene) = converse_scene(&agent, &host, &model, &p.a_brief, &p.b_brief, &p.relation) else {
+                println!("{{}}"); return Ok(());
+            };
+            // record each soul's residue both ways, so the encounter folds back into the world
+            if let Some(((wa, ma, sa), (wb, mb, sb))) = assess_pair(&agent, &host, &model, &p.a_name, &p.b_name, &scene) {
+                sim.record_dialogue(t, &p.a_name, &p.b_name, &scene, &mb, &wb, &sb)?;
+                sim.record_dialogue(t, &p.b_name, &p.a_name, &scene, &ma, &wa, &sa)?;
+                sim.catch_up(today(), cur_phase())?;
+            }
+            // resolve each line to one of the TWO speakers — the oracle may shorten a name
+            // ("Will" for Will Metcalfe), so match by token overlap, and alternate on a tie.
+            let w = sim.world_snapshot(t);
+            let toks = |s: &str| s.to_lowercase().split_whitespace().map(|x| x.to_string()).collect::<Vec<_>>();
+            let (a_toks, b_toks) = (toks(&p.a_name), toks(&p.b_name));
+            let overlap = |who: &[String], cand: &[String]| who.iter().filter(|x| cand.contains(x)).count();
+            let mut prev_a = false;
+            let lines: Vec<serde_json::Value> = scene.lines().filter_map(|l| {
+                let (who, said) = l.trim().split_once(": ")?;
+                if said.trim().is_empty() { return None; }
+                let wt = toks(who);
+                let (sa, sb) = (overlap(&wt, &a_toks), overlap(&wt, &b_toks));
+                let is_a = if sa > sb { true } else if sb > sa { false } else { !prev_a };
+                prev_a = is_a;
+                let (idx, name) = if is_a { (p.a, &p.a_name) } else { (p.b, &p.b_name) };
+                Some(serde_json::json!({ "name": name, "idx": idx, "text": said.trim() }))
+            }).collect();
+            let place = w.agents.get(p.a).map(|a| a.seat.clone()).unwrap_or_default();
+            println!("{}", serde_json::json!({
+                "a_name": p.a_name, "b_name": p.b_name, "place": place, "lines": lines,
+            }));
         }
     }
     Ok(())

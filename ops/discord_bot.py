@@ -27,6 +27,24 @@ AUTH = "Basic " + base64.b64encode(f"thrush:{WEB_KEY}".encode()).decode()
 CH = json.loads((ROOT / "ops" / "discord_channels.json").read_text())["channels"]
 # channel_id -> (slug, seat_key, webhook)
 BY_ID = {int(c["channel_id"]): (slug, c["seat_key"], c["webhook"]) for slug, c in CH.items()}
+PLACES_SORTED = sorted([(c["seat_key"], slug) for slug, c in CH.items() if not c["seat_key"].startswith("__")],
+                       key=lambda kv: -len(kv[0]))
+
+# live townie-to-townie encounters, staged by the sim between the hourly beats
+THRUSH = ROOT / "target" / "release" / "thrush"
+DB = ROOT / "world.db"
+ENCOUNTER_INTERVAL = 600                  # seconds between staged encounters (~6/hour)
+SUBENV = dict(os.environ,
+              PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""),
+              CLAUDE_BIN=os.path.expanduser("~/.local/bin/claude"))
+
+
+def place_channel(place):
+    p = (place or "").lower()
+    for key, slug in PLACES_SORTED:
+        if key in p:
+            return slug
+    return None
 
 
 def web_get(path):
@@ -126,10 +144,48 @@ async def housekeeper():
         refresh_roster()
 
 
+async def encounters():
+    """Stage live townie-to-townie talk between the hourly beats: the sim picks two souls, the talk
+    is generated AND recorded (its residue folds back into the world), and the bot posts it line by
+    line into the room where it happened — each soul speaking as themselves."""
+    while True:
+        await asyncio.sleep(ENCOUNTER_INTERVAL)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(THRUSH), "--db", str(DB), "encounter",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+            out, _ = await proc.communicate()
+            d = json.loads((out.decode() or "{}").strip() or "{}")
+        except Exception as e:
+            print("encounter failed:", e); continue
+        lines = d.get("lines") or []
+        if not lines:
+            continue
+        slug = place_channel(d.get("place", ""))
+        if not slug:                                   # else route by the first speaker's home
+            r = BY_NAME.get((lines[0].get("name") or "").lower())
+            slug = place_channel(r["seat"]) if r else None
+        if not slug:
+            continue
+        webhook = CH[slug]["webhook"]
+        ch = client.get_channel(int(CH[slug]["channel_id"]))
+        for ln in lines:
+            try:
+                if ch:
+                    async with ch.typing():
+                        await asyncio.sleep(1.6)
+                post_as(webhook, ln["name"], ln["idx"], ln["text"])
+            except Exception as e:
+                print("encounter post failed:", e)
+            await asyncio.sleep(1.4)
+        print(f"live encounter: {d.get('a_name')} & {d.get('b_name')} in #{slug} ({len(lines)} lines)")
+
+
 @client.event
 async def on_ready():
     print(f"Thrushcombe bot online as {client.user} — Pete Peckers at the keyboard, {len(BY_ID)} channels")
     client.loop.create_task(housekeeper())
+    client.loop.create_task(encounters())
 
 
 @client.event

@@ -21,7 +21,8 @@ export PATH="$HOME/.local/bin:$PATH"
 "$BIN" --db "$DB" narrate --limit 14
 "$BIN" --db "$DB" wildcard || true   # now and then, an LLM-invented happening (throttled)
 "$BIN" --db "$DB" hinge    || true   # now and then, a soul faces a turning point
-"$BIN" --db "$DB" converse || true   # let two souls fall into talk of their own accord
+# conversations are now staged LIVE between beats by the Discord bot's encounter loop (recorded,
+# folded back into the world), so the hourly autonomous converse is retired here.
 "$BIN" --db "$DB" interrogate --count 2 || true  # the magistrate questions a couple more souls, if a murder is open
 "$BIN" --db "$DB" judge     || true  # if a murder's cloud has settled past bearing, the magistrate rules: accuse | hold | widen
 "$BIN" --db "$DB" reflect --count 7 || true  # advance several souls' streams a beat (continuity: keep every soul's thread fresh)
