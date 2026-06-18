@@ -89,7 +89,21 @@ async def on_message(msg):
     if entry is None:
         return
     slug, seat_key, webhook = entry
-    target = resolve_target(msg.content, seat_key)
+    # address priority: (1) reply to a townie's message → that soul; (2) a name in the message;
+    # (3) the most prominent resident of this place.
+    target = None
+    ref = msg.reference
+    if ref and ref.message_id:
+        try:
+            refmsg = ref.resolved if isinstance(ref.resolved, discord.Message) \
+                else await msg.channel.fetch_message(ref.message_id)
+            nm = (refmsg.author.display_name or "").lower()
+            if nm in BY_NAME and BY_NAME[nm]["idx"] != PETE:
+                target = BY_NAME[nm]
+        except Exception:
+            pass
+    if target is None:
+        target = resolve_target(msg.content, seat_key)
     if target is None:
         return
     async with msg.channel.typing():

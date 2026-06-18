@@ -35,3 +35,5 @@ export PATH="$HOME/.local/bin:$PATH"
 # Push the hour's new voiced beats to Discord — each townsperson posts to their place-channel,
 # in their own name and face. Cursor-tracked; safe to run every hour. (No-op if Discord unset.)
 [ -f "$REPO/ops/discord_channels.json" ] && python3 "$REPO/ops/discord_feed.py" || true
+# refresh each place-channel's topic with who is there this phase (only edits what changed)
+[ -f "$REPO/ops/discord_channels.json" ] && python3 "$REPO/ops/discord_presence.py" || true

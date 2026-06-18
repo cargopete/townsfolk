@@ -216,6 +216,8 @@ enum Cmd {
         #[arg(long, default_value_t = 100000)]
         limit: i64,
     },
+    /// Emit who is in each place this phase, as JSON, for the Discord channel topics.
+    DiscordPresence,
 }
 
 const SYSTEM_PROMPT: &str = "You are the chronicler of Thrushcombe St Mary, a West-Country market town in 1934. Render the given event as ONE plain sentence (two at the very most), in the register of interwar English provincial writing — dry, observed, lightly wry, the small dignity and the small humiliation borne with grace. \
@@ -1211,6 +1213,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply_engine(&mut sim, cli.wasm);
             let beats = sim.discord_beats(since_e, since_t, since_d, limit)?;
             println!("{}", serde_json::to_string(&beats).unwrap_or_else(|_| "[]".into()));
+        }
+        Cmd::DiscordPresence => {
+            let mut sim = Sim::open(&cli.db)?;
+            apply_engine(&mut sim, cli.wasm);
+            let rows = sim.presence(today(), cur_phase())?;
+            println!("{}", serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()));
         }
     }
     Ok(())

@@ -470,9 +470,13 @@ Trotter — each with their own face. No per-character bots.
   **narration** *(italic — a happening)*, **thought** *(💭 italic — a private reflection)*,
   **speech** *("quoted" — words said aloud)*.
 - **Two-way chat** — `ops/discord_bot.py` (persistent `thrushcombe-discord.service`): you type in a
-  place-channel **as Mr Pete Peckers** (cast #59); the bot resolves whom you addressed (a name in
-  the message, else the most prominent resident), asks the sim for that soul's reply
-  (`/talk/say`, source = Pete), and posts it back through the webhook as that townsperson.
+  place-channel **as Mr Pete Peckers** (cast #59); the bot resolves whom you addressed — **reply to
+  a soul's message**, or **name them**, else the most prominent resident of that place — asks the
+  sim for that soul's reply (`/talk/say`, source = Pete), and posts it back through the webhook as
+  that townsperson.
+- **Who's here now** — `ops/discord_presence.py` (hourly) keeps each place-channel's *topic*
+  showing the souls there this phase; those out roving (paying calls, the rounds) are listed in
+  `#town-chronicle`. Only edits a topic when it changed (Discord throttles topic edits).
 
 Setup is one-time: a Discord application + bot (Message-Content & Server-Members intents), invited
 with `bot` scope; `ops/discord_setup_channels.py` builds the channels + webhooks idempotently and

@@ -4089,6 +4089,16 @@ pub struct DiscordBeat {
     pub text: String,
 }
 
+/// Where a soul is this phase — for the Discord channel-topic "who's here now".
+#[derive(Serialize)]
+pub struct PresenceRow {
+    pub name: String,
+    pub idx: i32,
+    pub location: String,   // where they are this phase (may be a roving activity)
+    pub seat: String,       // their home/workplace
+    pub doing: String,
+}
+
 /// One phase of a soul's day: where they were and what they were about.
 pub struct DayLine {
     pub phase: String,
@@ -6439,6 +6449,16 @@ impl Sim {
             }
         }
         Ok(out)
+    }
+
+    /// Where every living adult is this phase — for the Discord feed to keep each place-channel's
+    /// topic showing who is there now. Reuses the dashboard's per-phase placement.
+    pub fn presence(&self, today: Date, phase: Phase) -> rusqlite::Result<Vec<PresenceRow>> {
+        let d = self.detail(today, phase)?;
+        Ok(d.people.into_iter()
+            .filter(|p| p.archetype != "child")
+            .map(|p| PresenceRow { name: p.name, idx: p.idx as i32, location: p.location, seat: p.seat, doing: p.doing })
+            .collect())
     }
 
     /// Every chronicle entry that names a person — their life as the town recorded it.
