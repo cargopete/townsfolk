@@ -802,7 +802,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 age = a.age(day),
                 standing = a.standing,
                 purse = a.purse,
-                mood = thrush_core::mood_word(a.mood),
+                mood = thrush_core::mood_of(a),
                 sit = h.situation,
                 hist = if recent.is_empty() { "  (little to remark on of late)".to_string() } else { recent.join("\n") },
             );

@@ -2055,7 +2055,7 @@ pub fn self_regard_phrase(seen_as: i16) -> &'static str {
 /// A word for a soul's present spirits.
 pub fn mood_word(m: i16) -> &'static str {
     match m {
-        x if x <= -55 => "grieving",
+        x if x <= -55 => "downcast",
         x if x <= -28 => "low",
         x if x <= -9 => "out of sorts",
         x if x < 9 => "content",
@@ -2063,6 +2063,18 @@ pub fn mood_word(m: i16) -> &'static str {
         x if x < 55 => "in good spirits",
         _ => "triumphant",
     }
+}
+
+/// The mood word a soul actually wears — the numeric band (`mood_word`), but with the deepest
+/// band reading "grieving" ONLY for a soul carrying a real, still-gripping bereavement. A town
+/// merely worn down by drought and dread is *downcast*, not bereaved; grief is named for grief.
+pub fn mood_of(a: &Agent) -> &'static str {
+    if a.mood <= -55
+        && a.memories.iter().any(|m| m.kind == "grief" && m.salience >= 50)
+    {
+        return "grieving";
+    }
+    mood_word(a.mood)
 }
 
 /// Their ambition, in words.
@@ -3485,7 +3497,9 @@ fn relationship_events(world: &mut World, day: i64, date: Date, seed: u64) -> Ve
                 .map(|m| m.salience)
                 .max()
                 .unwrap_or(0);
-            let recovery = if weight >= 70 { 0 } else if weight >= 35 { 1 } else { 2 };
+            // even the heaviest wound lets the spirits creep back by a hair each day — grief is
+            // carried, but never pins a soul to the floor forever; the parish breathes again in time.
+            let recovery = if weight >= 35 { 1 } else { 2 };
             world.agents[i].mood += (base - world.agents[i].mood).signum() * recovery;
             if let Some(s) = world.agents[i].spouse {
                 if world.agents[s].active() {
@@ -4041,7 +4055,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 41;
+const SNAPSHOT_VERSION: i64 = 42;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4986,7 +5000,7 @@ impl Sim {
                 "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
             }.to_string());
             format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}.",
-                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_word(ag.mood), goal_label(w, ag.goal, ag.goal_target))
+                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_of(ag), goal_label(w, ag.goal, ag.goal_target))
         };
         let mut relation = if w.agents[a].spouse == Some(b) {
             "They are man and wife.".to_string()
@@ -5623,7 +5637,7 @@ impl Sim {
         let mut dossier = format!(
             "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}. They want {goal}.",
             name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
-            mood = mood_word(ag.mood), goal = goal_label(&w, ag.goal, ag.goal_target),
+            mood = mood_of(ag), goal = goal_label(&w, ag.goal, ag.goal_target),
         );
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
@@ -5996,7 +6010,7 @@ impl Sim {
         }.to_string());
         let mut d = format!(
             "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}.",
-            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse, mood = mood_word(ag.mood),
+            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse, mood = mood_of(ag),
         );
         if let Ok(Some(bio)) = self.biography(&ag.name) {
             d.push_str(&format!("\nThe life the parish tells of them: {bio}"));
@@ -6439,7 +6453,7 @@ impl Sim {
                 } else {
                     goal_label(&world, a.goal, a.goal_target)
                 },
-                mood: mood_word(a.mood).to_string(),
+                mood: mood_of(a).to_string(),
                 friends: world.ties(i, true, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 rivals: world.ties(i, false, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 recent: self.person_events(&a.name, 4)?,

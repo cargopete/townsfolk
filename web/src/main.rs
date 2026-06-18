@@ -873,7 +873,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
          Should a stranger speak of such things the words carry no meaning for you — you mishear them for something from your own world, or say plainly you do not take their meaning, and you never explain a notion you could not have had. About your own world, though, you are nobody's fool. \
          Never mention being an AI or a model; never break character; never narrate stage directions or describe your own tone.",
         name = t.name, role = role, seat = t.seat, age = t.age(day),
-        voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_word(t.mood),
+        voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
     // how wide their knowledge of the world runs, by station and trade
