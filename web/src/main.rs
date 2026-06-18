@@ -859,7 +859,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         f if f <= -12 => format!("You have little love for {}, and are guarded with them.", s.name),
         _ => format!("You have no strong feeling about {} either way.", s.name),
     };
-    let want = thrush_core::goal_label(&w, t.goal as u8, t.goal_target);
+    let want = thrush_core::want_phrase(&w, target);
 
     let mut p = format!(
         "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary in the year 1934. \
@@ -876,6 +876,12 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
+    // the truth of who they are bound to — so they never invent a spouse or forget a child,
+    // and the bond between the two speakers is named plainly (kin, marriage, or a suit).
+    p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
+    if let Some(rel) = thrush_core::pair_relation(&w, target, source) {
+        p.push_str(&format!(" As to the one you speak with: {rel}."));
+    }
     // how wide their knowledge of the world runs, by station and trade
     p.push(' ');
     p.push_str(learning_of(&t.archetype, t.standing));

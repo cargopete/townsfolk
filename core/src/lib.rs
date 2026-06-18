@@ -1241,12 +1241,26 @@ fn arbitrate(world: &mut World, i: usize, action: Action, day: i64, date: Date, 
                 // a call is a small kindness, warmly received and warmly paid
                 world.nudge_aff(t, i, 2);
                 world.nudge_aff(i, t, 1);
-                let line = pick(&mut rng, &[
-                    "{n} paid an afternoon call on {t}, and was thought to look very well.",
-                    "{n} called on {t}, leaving a card and a good impression.",
-                    "{n} took tea with {t}, and the visit was a success on both sides.",
-                    "{n} called on {t} — cultivating the acquaintance, said the unkind.",
-                ]).replace("{n}", &name).replace("{t}", &tname);
+                // family visit family as family — a parent calling on a child is no courtship
+                let kin = world.agents[i].spouse == Some(t)
+                    || world.agents[i].parent == Some(t)
+                    || world.agents[t].parent == Some(i)
+                    || (world.agents[i].parent.is_some() && world.agents[i].parent == world.agents[t].parent);
+                let templates: &[&str] = if kin {
+                    &[
+                        "{n} looked in on {t}, as family will.",
+                        "{n} spent an hour with {t} by the fire.",
+                        "{n} called on {t} to see how they did.",
+                    ]
+                } else {
+                    &[
+                        "{n} paid an afternoon call on {t}, and was thought to look very well.",
+                        "{n} called on {t}, leaving a card and a good impression.",
+                        "{n} took tea with {t}, and the visit was a success on both sides.",
+                        "{n} called on {t} — cultivating the acquaintance, said the unkind.",
+                    ]
+                };
+                let line = pick(&mut rng, templates).replace("{n}", &name).replace("{t}", &tname);
                 out.push(mk("status", line));
             } else {
                 let line = pick(&mut rng, &[
@@ -2149,6 +2163,83 @@ pub fn goal_label(world: &World, kind: u8, target: i32) -> String {
         5 => "to make their fortune".into(),
         _ => "to keep their place".into(),
     }
+}
+
+/// What a soul most wants, in words — courtship-aware. A suit toward marriage reads as winning a
+/// hand; an attachment where either party is already wed cannot end in marriage, so it reads as
+/// being *drawn to* them — an affair, not a courtship. Kin are never rendered as romance.
+pub fn want_phrase(w: &World, idx: usize) -> String {
+    let a = &w.agents[idx];
+    if a.courting >= 0 {
+        if let Some(t) = w.agents.get(a.courting as usize) {
+            let affair = a.spouse.is_some() || t.spouse.is_some();
+            return if affair { format!("drawn to {}", t.name) } else { format!("to win {}'s hand", t.name) };
+        }
+    }
+    if a.archetype == "child" { return "to grow up".into(); }
+    goal_label(w, a.goal, a.goal_target)
+}
+
+/// A soul's actual ties, drawn straight from the model — marriage, blood, and courtship — so the
+/// oracle reasons from the truth and never invents a spouse, a child, or an attachment that does
+/// not exist. Two souls who are kin are stated as kin and never as suitors. Fed into every dossier.
+pub fn relationships_brief(w: &World, idx: usize, day: i64) -> String {
+    let a = &w.agents[idx];
+    let nm = |i: usize| w.agents[i].name.clone();
+    let mut parts: Vec<String> = Vec::new();
+    match a.spouse {
+        Some(s) => parts.push(format!("married to {}", nm(s))),
+        None => parts.push("not married".into()),
+    }
+    if let Some(p) = a.parent {
+        if w.agents.get(p).is_some_and(|x| x.active()) { parts.push(format!("a son or daughter of {}", nm(p))); }
+    }
+    let kids: Vec<String> = (0..w.agents.len())
+        .filter(|&j| w.agents[j].parent == Some(idx) && w.agents[j].active())
+        .map(|j| format!("{} ({})", w.agents[j].name, w.agents[j].age(day)))
+        .collect();
+    if !kids.is_empty() { parts.push(format!("parent of {}", kids.join(", "))); }
+    if a.courting >= 0 {
+        if let Some(t) = w.agents.get(a.courting as usize) {
+            let affair = a.spouse.is_some() || t.spouse.is_some();
+            parts.push(if affair {
+                format!("carrying an attachment outside marriage to {} (it cannot end in a wedding)", t.name)
+            } else {
+                format!("paying court to {}", t.name)
+            });
+        }
+    }
+    let suitors: Vec<String> = (0..w.agents.len())
+        .filter(|&j| w.agents[j].courting == idx as i32 && w.agents[j].active())
+        .map(nm).collect();
+    if !suitors.is_empty() { parts.push(format!("being courted by {}", suitors.join(", "))); }
+
+    format!(
+        "Their actual ties in the parish, and the whole of them — reason only from these; do NOT invent a spouse, a child, or any attachment beyond what is named: {}.",
+        parts.join("; ")
+    )
+}
+
+/// How `other` stands to `me` in blood or courtship, if at all — stated plainly (and from `me`'s
+/// vantage) so two souls in talk never invent, nor forget, a marriage, a parentage, or a suit
+/// between them. Returns None when they are unrelated.
+pub fn pair_relation(w: &World, me: usize, other: usize) -> Option<String> {
+    let (a, b) = (&w.agents[me], &w.agents[other]);
+    let term = |male: &'static str, female: &'static str| if b.sex == 1 { male } else { female };
+    if a.spouse == Some(other) { return Some(format!("{} is your own {}", b.name, term("husband", "wife"))); }
+    if a.parent == Some(other) { return Some(format!("{} is your {}", b.name, term("father", "mother"))); }
+    if b.parent == Some(me) { return Some(format!("{} is your own {}", b.name, term("son", "daughter"))); }
+    if a.parent.is_some() && a.parent == b.parent { return Some(format!("{} is your {}", b.name, term("brother", "sister"))); }
+    if a.courting == other as i32 && b.courting == me as i32 { return Some(format!("you and {} are courting one another", b.name)); }
+    if a.courting == other as i32 {
+        let affair = a.spouse.is_some() || b.spouse.is_some();
+        return Some(if affair { format!("you carry an attachment to {}, outside of marriage", b.name) } else { format!("you are paying court to {}", b.name) });
+    }
+    if b.courting == me as i32 {
+        let affair = a.spouse.is_some() || b.spouse.is_some();
+        return Some(if affair { format!("{} carries an attachment to you, outside of marriage", b.name) } else { format!("{} is paying court to you", b.name) });
+    }
+    None
 }
 
 /// Declare, sustain, and lay to rest the town's rivalries. A grudge that hardens past a
@@ -4999,13 +5090,23 @@ impl Sim {
                 "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
                 "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
             }.to_string());
-            format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}.",
-                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_of(ag), goal_label(w, ag.goal, ag.goal_target))
+            format!("{}, {}, of {}, aged {}, standing {} of a hundred, presently {}, who wants {}. {}",
+                ag.name, role, ag.seat, ag.age(day), ag.standing, mood_of(ag), want_phrase(w, i), relationships_brief(w, i, day))
         };
         let mut relation = if w.agents[a].spouse == Some(b) {
             "They are man and wife.".to_string()
+        } else if w.agents[a].parent == Some(b) || w.agents[b].parent == Some(a) {
+            let (p, c) = if w.agents[a].parent == Some(b) { (b, a) } else { (a, b) };
+            format!("{} is the parent of {} — they are family, and speak as parent and child, never as sweethearts.", w.agents[p].name, w.agents[c].name)
+        } else if w.agents[a].parent.is_some() && w.agents[a].parent == w.agents[b].parent {
+            format!("{} and {} are brother and sister.", w.agents[a].name, w.agents[b].name)
         } else if w.agents[a].courting == b as i32 || w.agents[b].courting == a as i32 {
-            format!("{} is courting {}.", w.agents[a].name, w.agents[b].name)
+            let (sx, tx) = if w.agents[a].courting == b as i32 { (a, b) } else { (b, a) };
+            if w.agents[a].spouse.is_some() || w.agents[b].spouse.is_some() {
+                format!("{} carries an attachment to {} though one of them is already wed — it cannot end in marriage.", w.agents[sx].name, w.agents[tx].name)
+            } else {
+                format!("{} is paying court to {}.", w.agents[sx].name, w.agents[tx].name)
+            }
         } else {
             let af = w.aff(a, b);
             if af >= 30 { "They are the best of friends.".into() }
@@ -5639,6 +5740,7 @@ impl Sim {
             name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
             mood = mood_of(ag), goal = goal_label(&w, ag.goal, ag.goal_target),
         );
+        dossier.push_str(&format!("\n{}", relationships_brief(w, idx, day)));
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
         if let Some(r) = feud { dossier.push_str(&format!("\nThey nurse a running grudge against {r}.")); }
@@ -5810,7 +5912,7 @@ impl Sim {
         let people = cand.iter().map(|&j| w.agents[j].name.clone()).collect::<Vec<_>>().join(", ");
 
         d.push_str(&format!(
-            "\n\nWHAT DO THEY DO NOW? Being so moved, this soul may take ONE plain action of the sort a townsperson takes — or none at all. Choose only what THIS soul, as they are and feel, would truly do today:\n  · call — pay a friendly call on someone, to warm or keep a tie\n  · confront — have it out with one they are at odds with, and say their piece\n  · court — pay court to one they are drawn to, and free to be courted (to press a suit on a married soul is improper, and goes nowhere)\n  · offer — make a material offer within their means: a gift, a loan, the promise of work, a bargain\n  · reconcile — go to mend a broken tie or put down a grudge\n  · withdraw — do nothing outward; keep to themselves and bear it alone\nThe soul they act upon must be one of the living named here: {people}. If they withdraw, name no one."
+            "\n\nWHAT DO THEY DO NOW? Being so moved, this soul may take ONE plain action of the sort a townsperson takes — or none at all. Choose only what THIS soul, as they are and feel, would truly do today:\n  · call — pay a friendly call on someone, to warm or keep a tie\n  · confront — have it out with one they are at odds with, and say their piece\n  · court — pay court to one they are drawn to (never one of their own blood, and to press a suit on a married soul is improper, an attachment that cannot end in marriage)\n  · offer — make a material offer within their means: a gift, a loan, the promise of work, a bargain\n  · reconcile — go to mend a broken tie or put down a grudge\n  · withdraw — do nothing outward; keep to themselves and bear it alone\nThe soul they act upon must be one of the living named here: {people}. If they withdraw, name no one."
         ));
         Some((w.agents[idx].name.clone(), d))
     }
@@ -6446,13 +6548,7 @@ impl Sim {
                 parent: a.parent.map(|p| world.agents[p].name.clone()),
                 children,
                 origin: a.origin.clone(),
-                wants: if a.courting >= 0 {
-                    format!("to win {}'s hand", world.agents.get(a.courting as usize).map(|x| x.name.as_str()).unwrap_or("—"))
-                } else if a.archetype == "child" {
-                    "to grow up".into()
-                } else {
-                    goal_label(&world, a.goal, a.goal_target)
-                },
+                wants: want_phrase(&world, i),
                 mood: mood_of(a).to_string(),
                 friends: world.ties(i, true, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
                 rivals: world.ties(i, false, 3).iter().map(|&(j, _)| world.agents[j].name.clone()).collect(),
