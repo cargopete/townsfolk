@@ -4041,7 +4041,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 40;
+const SNAPSHOT_VERSION: i64 = 41;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4485,13 +4485,26 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                         world.remember(t, "snub", si as i32, -50, 55, day);
                         world.spawn_news(&an, &format!("the hard words {an} had with {tn}"), -2, day, &[]);
                     },
-                    // paying court: a strong reaching-out, warmly remembered
+                    // paying court: a strong reaching-out, warmly remembered — unless paid where
+                    // it ought not be. Attentions to a married soul are not forbidden (the heart is
+                    // no respecter of banns), but they land as impropriety: received with unease, a
+                    // faint stain on the suitor's name, and they go nowhere.
                     "court" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
-                        world.nudge_aff(si, t, 22);
-                        world.nudge_aff(t, si, 10);
-                        nudge_mood(&mut world.agents[si], 8);
-                        world.remember(t, "reprieve", si as i32, 50, 55, day);
-                        world.spawn_news(&an, &format!("{an}'s attentions to {tn}"), 1, day, &[]);
+                        if world.agents[t].spouse.is_some_and(|s| s != si) {
+                            world.nudge_aff(si, t, 12);
+                            world.nudge_aff(t, si, -6);
+                            nudge_mood(&mut world.agents[si], 4);
+                            nudge_mood(&mut world.agents[t], -4);
+                            clamp_standing(&mut world.agents[si], -1);
+                            world.remember(t, "wronged", si as i32, -30, 46, day);
+                            world.spawn_news(&an, &format!("{an}'s unlooked-for attentions to {tn}"), -1, day, &[]);
+                        } else {
+                            world.nudge_aff(si, t, 22);
+                            world.nudge_aff(t, si, 10);
+                            nudge_mood(&mut world.agents[si], 8);
+                            world.remember(t, "reprieve", si as i32, 50, 55, day);
+                            world.spawn_news(&an, &format!("{an}'s attentions to {tn}"), 1, day, &[]);
+                        }
                     },
                     // a material offer within their means: it costs the giver, lifts the taker, raises a name
                     "offer" => if let Some(t) = ti.filter(|&t| world.agents[t].active() && t != si) {
@@ -5783,7 +5796,7 @@ impl Sim {
         let people = cand.iter().map(|&j| w.agents[j].name.clone()).collect::<Vec<_>>().join(", ");
 
         d.push_str(&format!(
-            "\n\nWHAT DO THEY DO NOW? Being so moved, this soul may take ONE plain action of the sort a townsperson takes — or none at all. Choose only what THIS soul, as they are and feel, would truly do today:\n  · call — pay a friendly call on someone, to warm or keep a tie\n  · confront — have it out with one they are at odds with, and say their piece\n  · court — pay court to one they are drawn to\n  · offer — make a material offer within their means: a gift, a loan, the promise of work, a bargain\n  · reconcile — go to mend a broken tie or put down a grudge\n  · withdraw — do nothing outward; keep to themselves and bear it alone\nThe soul they act upon must be one of the living named here: {people}. If they withdraw, name no one."
+            "\n\nWHAT DO THEY DO NOW? Being so moved, this soul may take ONE plain action of the sort a townsperson takes — or none at all. Choose only what THIS soul, as they are and feel, would truly do today:\n  · call — pay a friendly call on someone, to warm or keep a tie\n  · confront — have it out with one they are at odds with, and say their piece\n  · court — pay court to one they are drawn to, and free to be courted (to press a suit on a married soul is improper, and goes nowhere)\n  · offer — make a material offer within their means: a gift, a loan, the promise of work, a bargain\n  · reconcile — go to mend a broken tie or put down a grudge\n  · withdraw — do nothing outward; keep to themselves and bear it alone\nThe soul they act upon must be one of the living named here: {people}. If they withdraw, name no one."
         ));
         Some((w.agents[idx].name.clone(), d))
     }
