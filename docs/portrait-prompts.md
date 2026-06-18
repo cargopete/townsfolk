@@ -37,8 +37,7 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[39] Mr Tallin** — a 54-year-old solicitor to the better sort; steel-rimmed spectacles, dark formal suit, careful and discreet, a keeper of secrets.
 - ✅ **[40] Mr Quint** *(the late bank manager, murdered)* — a 50-ish Cambridge man, front-pew respectable; dry expression, dark banker's suit, a sound, slightly forbidding judgment in the eyes.
 - ✅ **[27] Mr Crisp** — a 48-year-old churchwarden, scholarship boy made good; sober suit, balding, fair and steady.
-- ✅ **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief. *(saved as `mrs-pertwee.jpg` — slug won't match "miss-pertwee"; rename the file or rely on index `29.jpg`.)*
-- ✅ **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
+- ✅ **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief.- ✅ **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
 
 ## The estate, the farms & the land
 
