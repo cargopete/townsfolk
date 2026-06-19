@@ -58,7 +58,15 @@ def main():
         print("discord-presence failed:", out.stderr[:200], file=sys.stderr); return 1
     rows = json.loads(out.stdout or "[]")
 
-    here = {slug: [] for slug in CHANNELS}
+    def seat_channel(seat):                 # which channel a soul LIVES in, by their seat
+        s = (seat or "").lower()
+        for key, slug in PLACES:
+            if key in s:
+                return slug
+        return None
+
+    here = {slug: [] for slug in CHANNELS}   # present this phase
+    home = {slug: [] for slug in CHANNELS}   # live here, present or not
     abroad = []
     for r in rows:
         slug = channel_for(r["location"], r["seat"])
@@ -66,13 +74,26 @@ def main():
             here[slug].append(r["name"])
         elif r["location"].lower() in ROVING:
             abroad.append(r["name"])
+        hc = seat_channel(r["seat"])
+        if hc:
+            home[hc].append(r["name"])
 
     topics = {}
     for slug, c in CHANNELS.items():
         if c["seat_key"].startswith("__"):
             continue
-        names = here.get(slug, [])
-        topics[slug] = ("Here now: " + ", ".join(names)) if names else "Quiet just now — no one about."
+        present = here.get(slug, [])
+        residents = home.get(slug, [])
+        out = [n for n in residents if n not in present]
+        if present:
+            t = "Here now: " + ", ".join(present)
+            if out:
+                t += " · away: " + ", ".join(out)
+        elif residents:                      # no one in just now, but it's someone's home
+            t = "Quiet — " + ", ".join(residents) + " out about the parish"
+        else:
+            t = "Quiet just now."
+        topics[slug] = t[:1024]
     if CHRONICLE and abroad:
         topics[CHRONICLE] = "Out about the parish: " + ", ".join(abroad)
 
