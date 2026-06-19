@@ -7,7 +7,7 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
-**Progress:** ✅ = portrait done and in `portraits/`. 30 of 61 sitters photographed so far.
+**Progress:** ✅ = portrait done and in `portraits/`. 37 of 61 sitters photographed so far.
 
 ---
 
@@ -58,13 +58,13 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[34] Mr Tranter** — a 44-year-old baker, widower, up before four; flour-dusted forearms marked with old burns, collarless shirt and apron, a tired, decent, lonely steadiness.
 - ✅ **[35] Mr Dunnage** — a 51-year-old butcher; heavy-set, butcher's authority, a striped apron, blunt fair dealing.
 - ✅ **[36] Miss Clewes** — a 41-year-old dressmaker; wild dark curly hair pinned imperfectly, careworn eyes, plain dark dress with a tape-measure, a guarded, watchful, haunted quiet.
-- **[37] Mr Yeo** — a 56-year-old miller, a man of method; floury, methodical, a waistcoat and rolled sleeves.
-- **[21] Mr Bunce** — a 50-year-old cooper and publican; broad capable hands, shirtsleeves and waistcoat, honest and unhurried.
-- **[22] Mrs Bunce** — a 47-year-old publican's wife, the town's true centre; warm shrewd eyes that read a person at a glance, hair pinned, an apron over a dark dress.
-- **[23] Mr Pickering** — a 52-year-old grocer's assistant of measured grace; neat, balding, a shopkeeper's apron.
-- **[31] Mrs Pollard** — a 53-year-old postmistress who rules the sorting bench; precise, spectacled, hair tightly done.
-- **[41] Mr Coad** — a 46-year-old carrier, widower of thirty years; horseman's hands, a heavy coat, steady and reliable.
-- **[44] Mr Vye** — a 48-year-old knacker who lives apart by the marshes; scarred hands, crooked shoulders, a grim leather apron, a hard-used face.
+- ✅ **[37] Mr Yeo** — a 56-year-old miller, a man of method; floury, methodical, a waistcoat and rolled sleeves.
+- ✅ **[21] Mr Bunce** — a 50-year-old cooper and publican; broad capable hands, shirtsleeves and waistcoat, honest and unhurried.
+- ✅ **[22] Mrs Bunce** — a 47-year-old publican's wife, the town's true centre; warm shrewd eyes that read a person at a glance, hair pinned, an apron over a dark dress.
+- ✅ **[23] Mr Pickering** — a 52-year-old grocer's assistant of measured grace; neat, balding, a shopkeeper's apron.
+- ✅ **[31] Mrs Pollard** — a 53-year-old postmistress who rules the sorting bench; precise, spectacled, hair tightly done.
+- ✅ **[41] Mr Coad** — a 46-year-old carrier, widower of thirty years; horseman's hands, a heavy coat, steady and reliable.
+- ✅ **[44] Mr Vye** — a 48-year-old knacker who lives apart by the marshes; scarred hands, crooked shoulders, a grim leather apron, a hard-used face.
 - **[43] Old Burrow** — a 67-year-old sexton; soil-darkened hands, a shapeless old coat, white hair, a slow, grave, churchyard calm.
 - **[45] Jeb Pascoe** — a 30-year-old dock labourer from a drowned fishing family; broad-backed, scarred hands, a seaman's jersey, the quiet of a man who has lost.
 - **[33] Mr Annis** — a 27-year-old railway porter; trim porter's uniform and cap, a quiet competence, watches the London trains with something like longing.
