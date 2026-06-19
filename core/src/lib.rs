@@ -4224,6 +4224,8 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- A bespoke voice for a special soul: a full character prompt that replaces the generic
          -- villager scaffolding when they speak (Aldric Fynch and the like). Optional, per name.
          CREATE TABLE IF NOT EXISTS personas(name TEXT PRIMARY KEY, prompt TEXT NOT NULL);
+         -- Souls the novelist will not let go: the departure mechanic never offers them the door.
+         CREATE TABLE IF NOT EXISTS protected(name TEXT PRIMARY KEY);
          CREATE TABLE IF NOT EXISTS testimony(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL,
             alibi TEXT NOT NULL, accuses TEXT NOT NULL, public INTEGER NOT NULL, text TEXT NOT NULL);
@@ -5608,6 +5610,23 @@ impl Sim {
         Ok(())
     }
 
+    /// Pin (or release) a soul so the departure mechanic never offers them the leaving-choice.
+    pub fn protect(&self, name: &str, on: bool) -> rusqlite::Result<()> {
+        if on {
+            self.conn.execute("INSERT OR IGNORE INTO protected(name) VALUES(?1)", params![name])?;
+        } else {
+            self.conn.execute("DELETE FROM protected WHERE name=?1", params![name])?;
+        }
+        Ok(())
+    }
+
+    /// The souls currently pinned against departure.
+    pub fn protected_list(&self) -> rusqlite::Result<Vec<String>> {
+        let mut s = self.conn.prepare("SELECT name FROM protected ORDER BY name")?;
+        let rows = s.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
     /// The living adults who have no biography yet — the backlog for the biographer to work through.
     pub fn souls_without_bio(&self, today: Date) -> Vec<String> {
         let w = self.world_snapshot(today);
@@ -6079,6 +6098,16 @@ impl Sim {
         };
         let accused = w.inquest.as_ref().map(|q| q.accused).unwrap_or(-1);
         let open_murder = w.inquest.as_ref().is_some_and(|q| !q.closed);
+        // souls the novelist has pinned — they are never put to the leaving-choice, and so stay
+        let protected: std::collections::HashSet<String> = {
+            let mut set = std::collections::HashSet::new();
+            if let Ok(mut s) = self.conn.prepare("SELECT name FROM protected") {
+                if let Ok(rows) = s.query_map([], |r| r.get::<_, String>(0)) {
+                    for n in rows.flatten() { set.insert(n); }
+                }
+            }
+            set
+        };
         // how far past bearing a soul's lot has come — ruin, or the hunt closing on them
         let brink = |i: usize| -> i32 {
             let a = &w.agents[i];
@@ -6093,6 +6122,7 @@ impl Sim {
         };
         let idx = (0..w.agents.len())
             .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i as i32 != accused)
+            .filter(|&i| !protected.contains(&w.agents[i].name))
             .filter(|&i| day - asked.get(&w.agents[i].name).copied().unwrap_or(i64::MIN / 2) >= DEPART_COOLDOWN)
             .filter(|&i| brink(i) >= DEPART_FLOOR)
             .max_by_key(|&i| (brink(i), std::cmp::Reverse(i)))?;

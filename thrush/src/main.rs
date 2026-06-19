@@ -218,6 +218,13 @@ enum Cmd {
     },
     /// Emit who is in each place this phase, as JSON, for the Discord channel topics.
     DiscordPresence,
+    /// Pin a soul so the departure mechanic never makes them leave (no name = list the pinned).
+    Keep {
+        #[arg(default_value = "")]
+        name: String,
+        #[arg(long)]
+        release: bool,
+    },
     /// Stage one live encounter between two souls, record its residue, and emit it as JSON
     /// {a_name,b_name,place,lines:[{name,idx,text}]} — for the Discord bot to post live.
     Encounter {
@@ -1227,6 +1234,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply_engine(&mut sim, cli.wasm);
             let rows = sim.presence(today(), cur_phase())?;
             println!("{}", serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()));
+        }
+        Cmd::Keep { name, release } => {
+            let sim = Sim::open(&cli.db)?;
+            if name.is_empty() {
+                let pinned = sim.protected_list()?;
+                println!("Pinned against departure: {}", if pinned.is_empty() { "(none)".into() } else { pinned.join(", ") });
+            } else {
+                sim.protect(&name, !release)?;
+                println!("{name} {} the protected list — {}.", if release { "removed from" } else { "added to" },
+                    if release { "the parish may yet lose them" } else { "they will never be made to leave" });
+            }
         }
         Cmd::Encounter { between, setting } => {
             let mut sim = Sim::open(&cli.db)?;
