@@ -7,7 +7,7 @@ that channel), asks the sim for that soul's in-character reply (POST /talk/say, 
 and posts it back through the channel webhook AS that townsperson — own name, own portrait.
 
 One bot, sixty voices. Run as a persistent service (ops/thrushcombe-discord.service)."""
-import json, os, pathlib, urllib.request, urllib.error, base64, asyncio
+import json, os, pathlib, urllib.request, urllib.error, base64, asyncio, random
 import discord
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -35,6 +35,19 @@ CHRONICLE = next((s for s, c in CH.items() if c["seat_key"] == "__chronicle__"),
 THRUSH = ROOT / "target" / "release" / "thrush"
 DB = ROOT / "world.db"
 ENCOUNTER_INTERVAL = 600                  # seconds between staged encounters (~6/hour)
+
+# the overthrow plot: a cell of the discontented, meeting in #overthrow to be rid of the Major
+CONSPIRATORS = ["Mr Coad", "Tot Wragg", "Jeb Pascoe", "Mr Vye", "Mr Dunnage"]
+OVERTHROW = "overthrow"
+CONSPIRACY_INTERVAL = 900                  # seconds between plotting scenes (~4/hour)
+PLOT_SETTINGS = [
+    "after dark in the carrier's yard, the lamp low and the gate barred — the talk turns again to Major Pringle, who will hang no name while the parish bears the fear, and what the working men might do to have him off the bench",
+    "in the back corner of the Pelican, voices kept down, reckoning who in the parish would set a hand to a petition against the magistrate, and who would lose their nerve",
+    "by the knacker's wall where no respectable soul walks, weighing whether paper to the county bench will serve or whether it must come to a harder thing",
+    "a snatched word at the edge of the market — counting heads, naming the doubtful, asking how far each man is willing to go to be rid of Pringle",
+    "the long room above the carrier's stable, the talk grown bolder — no longer whether the Major should go, but how it is to be done, and who will carry the word to the other farms",
+]
+_last_consp = [None]
 SUBENV = dict(os.environ,
               PATH=os.path.expanduser("~/.local/bin") + ":" + os.environ.get("PATH", ""),
               CLAUDE_BIN=os.path.expanduser("~/.local/bin/claude"))
@@ -188,11 +201,54 @@ async def encounters():
         print(f"live encounter: {d.get('a_name')} & {d.get('b_name')} in #{slug} ({len(lines)} lines)")
 
 
+async def conspiracy():
+    """The overthrow plot, playing out over the days: pick two of the discontented (biased to the
+    ringleader Coad), stage their plotting with a conspiratorial setting, and post it to #overthrow.
+    Recorded like any encounter, so the cell's bond hardens in the world as they scheme."""
+    while True:
+        await asyncio.sleep(CONSPIRACY_INTERVAL)
+        present = [n for n in CONSPIRATORS if n.lower() in BY_NAME]
+        if len(present) < 2:
+            continue
+        pair = random.sample(present, 2)
+        for _ in range(6):                               # bias toward Coad; avoid the exact last pair
+            pair = (["Mr Coad", random.choice([n for n in present if n != "Mr Coad"])]
+                    if "Mr Coad" in present and random.random() < 0.6 else random.sample(present, 2))
+            if frozenset(pair) != _last_consp[0]:
+                break
+        _last_consp[0] = frozenset(pair)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(THRUSH), "--db", str(DB), "encounter",
+                "--between", f"{pair[0]}|{pair[1]}", "--setting", random.choice(PLOT_SETTINGS),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+            out, _ = await proc.communicate()
+            d = json.loads((out.decode() or "{}").strip() or "{}")
+        except Exception as e:
+            print("conspiracy failed:", e); continue
+        lines = d.get("lines") or []
+        if not lines:
+            continue
+        webhook = CH[OVERTHROW]["webhook"]
+        ch = client.get_channel(int(CH[OVERTHROW]["channel_id"]))
+        for ln in lines:
+            try:
+                if ch:
+                    async with ch.typing():
+                        await asyncio.sleep(1.5)
+                post_as(webhook, ln["name"], ln["idx"], ln["text"])
+            except Exception as e:
+                print("conspiracy post failed:", e)
+            await asyncio.sleep(1.3)
+        print(f"conspiracy: {d.get('a_name')} & {d.get('b_name')} ({len(lines)} lines)")
+
+
 @client.event
 async def on_ready():
     print(f"Thrushcombe bot online as {client.user} — Pete Peckers at the keyboard, {len(BY_ID)} channels")
     client.loop.create_task(housekeeper())
     client.loop.create_task(encounters())
+    client.loop.create_task(conspiracy())
 
 
 @client.event
