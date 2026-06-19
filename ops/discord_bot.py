@@ -76,6 +76,9 @@ ROSTER = web_get("/api/roster")["roster"]                       # [{idx,name,sea
 BY_NAME = {r["name"].lower(): r for r in ROSTER}
 # residents of a channel: souls whose seat contains the channel's seat-key, prominent first
 def residents(seat_key):
+    # #overthrow has no geography — its "people" are the conspirators (ringleader Coad first)
+    if seat_key == "__overthrow__":
+        return [BY_NAME[n.lower()] for n in CONSPIRATORS if n.lower() in BY_NAME]
     if not seat_key or seat_key.startswith("__"):
         return []
     rs = [r for r in ROSTER if seat_key in r["seat"].lower() and r["idx"] != PETE]
