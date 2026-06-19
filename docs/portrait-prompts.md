@@ -7,7 +7,7 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
-**Progress:** ✅ = portrait done and in `portraits/`. 18 of 61 sitters photographed so far.
+**Progress:** ✅ = portrait done and in `portraits/`. 30 of 61 sitters photographed so far.
 
 ---
 
@@ -43,21 +43,21 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 
 - ✅ **[5] Mr Rupert Crale** — a 28-year-old improving farmer with modern notions; restless, a good jacket worn for working, a touch of arrogance the labourers resent.
 - ✅ **[42] Mr Hollis** — a 43-year-old gamekeeper, ex-poacher gone straight, widower; weathered, corduroy and a gun-dog's patience, meticulous and hard.
-- **[12] Mr Sunter** — a 55-year-old hill farmer of few words; weather-beaten, broad-shouldered, flat cap and working tweeds, reads sheep like scripture.
-- **[13] Mrs Sunter** — a 52-year-old hill-farmer's wife; dark hair gone grey, grown stout, brisk and weathered, a buried old grief in the eyes.
-- **[14] Jack Sunter** — a 21-year-old farmer's son; broad shoulders, his mother's dark eyes, solid and taciturn, collarless shirt and braces.
-- **[15] Mr Metcalfe** — a 48-year-old fell-farmer of stubborn silence; lean, grim, deeply weathered, flat cap.
-- **[16] Mrs Metcalfe** — a 44-year-old farmer's wife; weathered and stubborn, hair pulled back, a hard-wearing dress and shawl.
-- **[17] Will Metcalfe** — a 19-year-old farm lad; lean, his father's set jaw, the high moor already in him, a worn jacket.
-- **[7] Sam Trotter** — a 35-year-old farm labourer; the labour worn into his shoulders, quick capable hands, collarless shirt, a steady, faintly trapped look.
-- **[6] Tot Wragg** — a 20-year-old labourer, runt of eight, built slight; a surprising rage in the shoulders, cap, patched clothes, a straight back held with effort.
+- ✅ **[12] Mr Sunter** — a 55-year-old hill farmer of few words; weather-beaten, broad-shouldered, flat cap and working tweeds, reads sheep like scripture.
+- ✅ **[13] Mrs Sunter** — a 52-year-old hill-farmer's wife; dark hair gone grey, grown stout, brisk and weathered, a buried old grief in the eyes.
+- ✅ **[14] Jack Sunter** — a 21-year-old farmer's son; broad shoulders, his mother's dark eyes, solid and taciturn, collarless shirt and braces.
+- ✅ **[15] Mr Metcalfe** — a 48-year-old fell-farmer of stubborn silence; lean, grim, deeply weathered, flat cap.
+- ✅ **[16] Mrs Metcalfe** — a 44-year-old farmer's wife; weathered and stubborn, hair pulled back, a hard-wearing dress and shawl.
+- ✅ **[17] Will Metcalfe** — a 19-year-old farm lad; lean, his father's set jaw, the high moor already in him, a worn jacket.
+- ✅ **[7] Sam Trotter** — a 35-year-old farm labourer; the labour worn into his shoulders, quick capable hands, collarless shirt, a steady, faintly trapped look.
+- ✅ **[6] Tot Wragg** — a 20-year-old labourer, runt of eight, built slight; a surprising rage in the shoulders, cap, patched clothes, a straight back held with effort.
 
 ## The trades & the working folk
 
-- **[24] Mr Garth** — a 40-year-old blacksmith; powerful forearms, leather apron over a collarless shirt, soot on the hands, a quick anger that passes like April rain.
-- **[34] Mr Tranter** — a 44-year-old baker, widower, up before four; flour-dusted forearms marked with old burns, collarless shirt and apron, a tired, decent, lonely steadiness.
-- **[35] Mr Dunnage** — a 51-year-old butcher; heavy-set, butcher's authority, a striped apron, blunt fair dealing.
-- **[36] Miss Clewes** — a 41-year-old dressmaker; wild dark curly hair pinned imperfectly, careworn eyes, plain dark dress with a tape-measure, a guarded, watchful, haunted quiet.
+- ✅ **[24] Mr Garth** — a 40-year-old blacksmith; powerful forearms, leather apron over a collarless shirt, soot on the hands, a quick anger that passes like April rain.
+- ✅ **[34] Mr Tranter** — a 44-year-old baker, widower, up before four; flour-dusted forearms marked with old burns, collarless shirt and apron, a tired, decent, lonely steadiness.
+- ✅ **[35] Mr Dunnage** — a 51-year-old butcher; heavy-set, butcher's authority, a striped apron, blunt fair dealing.
+- ✅ **[36] Miss Clewes** — a 41-year-old dressmaker; wild dark curly hair pinned imperfectly, careworn eyes, plain dark dress with a tape-measure, a guarded, watchful, haunted quiet.
 - **[37] Mr Yeo** — a 56-year-old miller, a man of method; floury, methodical, a waistcoat and rolled sleeves.
 - **[21] Mr Bunce** — a 50-year-old cooper and publican; broad capable hands, shirtsleeves and waistcoat, honest and unhurried.
 - **[22] Mrs Bunce** — a 47-year-old publican's wife, the town's true centre; warm shrewd eyes that read a person at a glance, hair pinned, an apron over a dark dress.
