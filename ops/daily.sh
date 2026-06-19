@@ -38,3 +38,5 @@ export PATH="$HOME/.local/bin:$PATH"
 [ -f "$REPO/ops/discord_channels.json" ] && python3 "$REPO/ops/discord_feed.py" || true
 # refresh each place-channel's topic with who is there this phase (only edits what changed)
 [ -f "$REPO/ops/discord_channels.json" ] && python3 "$REPO/ops/discord_presence.py" || true
+# fire any scheduled event whose day has arrived (parties, the Show, …) into its channel
+[ -f "$REPO/ops/events.json" ] && python3 "$REPO/ops/discord_event.py" || true

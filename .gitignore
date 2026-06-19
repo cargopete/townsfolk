@@ -14,3 +14,4 @@ ops/discord_state.json
 .venv/
 __pycache__/
 *.pyc
+ops/events.json
