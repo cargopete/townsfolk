@@ -1372,7 +1372,7 @@ fn handle_roster(sim: &Sim) -> String {
     let arr: Vec<serde_json::Value> = w.agents.iter().enumerate()
         .filter(|(_, a)| a.active() && a.archetype != "child")
         .map(|(i, a)| serde_json::json!({
-            "idx": i, "name": a.name, "seat": a.seat, "standing": a.standing, "sex": a.sex,
+            "idx": i, "name": a.name, "seat": a.seat, "standing": a.standing, "sex": a.sex, "suspicion": a.suspicion,
         }))
         .collect();
     serde_json::json!({ "roster": arr }).to_string()

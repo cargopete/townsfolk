@@ -2170,13 +2170,27 @@ pub fn goal_label(world: &World, kind: u8, target: i32) -> String {
 /// being *drawn to* them — an affair, not a courtship. Kin are never rendered as romance.
 pub fn want_phrase(w: &World, idx: usize) -> String {
     let a = &w.agents[idx];
+    if a.archetype == "child" { return "to grow up".into(); }
+    // a love-interest is the deepest want — it shows even for the suspected or the plotting
     if a.courting >= 0 {
         if let Some(t) = w.agents.get(a.courting as usize) {
             let affair = a.spouse.is_some() || t.spouse.is_some();
             return if affair { format!("drawn to {}", t.name) } else { format!("to win {}'s hand", t.name) };
         }
     }
-    if a.archetype == "child" { return "to grow up".into(); }
+    // the plotter's active answer to the crisis — grounded in their own secret (the player's view)
+    if a.secret.contains("Pringle") && (a.secret.contains("bench") || a.secret.contains("petition") || a.secret.contains("rid of")) {
+        return "to see Major Pringle off the bench".into();
+    }
+    // under the cloud of an open murder, survival eclipses ambition — but only for the genuinely
+    // hunted: the rope for the worst-suspected, clearing one's name for the rest of the cloud.
+    if w.inquest.is_some() && a.suspicion >= 75 {
+        let maxs = w.agents.iter().filter(|x| x.active()).map(|x| x.suspicion).max().unwrap_or(0);
+        return if a.suspicion >= maxs - 25 { "to clear their name before the noose".into() }
+               else { "to clear their name".into() };
+    }
+    // a placeless incomer, still finding a footing
+    if a.origin.is_some() && a.standing <= 20 { return "to find a footing in the town".into(); }
     goal_label(w, a.goal, a.goal_target)
 }
 
@@ -5822,7 +5836,7 @@ impl Sim {
         let mut dossier = format!(
             "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}. They want {goal}.",
             name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
-            mood = mood_of(ag), goal = goal_label(&w, ag.goal, ag.goal_target),
+            mood = mood_of(ag), goal = want_phrase(w, idx),
         );
         dossier.push_str(&format!("\n{}", relationships_brief(w, idx, day)));
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
