@@ -861,6 +861,33 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     };
     let want = thrush_core::want_phrase(&w, target);
 
+    // A bespoke character (Aldric Fynch and the like) speaks in their own prompted voice, with only
+    // the live world grounding and the strict 1934 guard appended — not the generic villager scaffolding.
+    if let Ok(Some(custom)) = sim.custom_persona(&t.name) {
+        let mut p = custom;
+        p.push_str(&format!(
+            "\n\n--- WHERE YOU ARE NOW ---\nIt is the year 1934, and you are in the West-Country market town of Thrushcombe St Mary, where you have lately come to stay. You are presently {mood}. You are speaking with {sname}, {srole}. {station}. {feeling} \
+             You know only what a man of your learning could know in 1934 — nothing of any matter after this year, no machine that thinks, no notion not yet born; should a stranger speak of such things you do not take their meaning, or mishear it for something of your own world, and you never break the year. Never mention being an AI or a model; never narrate stage directions or describe your own tone.",
+            mood = thrush_core::mood_of(t), sname = s.name, srole = srole, station = station, feeling = feeling,
+        ));
+        p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
+        if let Some(rel) = thrush_core::pair_relation(&w, target, source) {
+            p.push_str(&format!(" As to the one before you: {rel}."));
+        }
+        if let Some(brief) = sim.murder_brief(today(), &t.name) {
+            p.push_str(&format!(" The shadow over the parish you have walked into: {brief}"));
+        }
+        if !t.secret.is_empty() {
+            p.push_str(&format!(" A private matter you keep close: {}.", t.secret));
+        }
+        p.push_str(&format!(" The season is {}.", thrush_core::Season::of(today()).name()));
+        if let Ok(recent) = sim.chronicle(5) {
+            let happ: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
+            if !happ.is_empty() { p.push_str(&format!(" Lately about the parish: {}", happ.join(" "))); }
+        }
+        return Some(p);
+    }
+
     let mut p = format!(
         "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary in the year 1934. \
          You are {voice}. Your standing is {standing} of a hundred and you are presently {mood}. What you want of life: {want}. \

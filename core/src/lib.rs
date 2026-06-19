@@ -4221,6 +4221,9 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- A soul's biography: the life the parish would tell of them. Flavour, recorded once
          -- (never folded); injected into talk and reflection so every soul knows the others' stories.
          CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);
+         -- A bespoke voice for a special soul: a full character prompt that replaces the generic
+         -- villager scaffolding when they speak (Aldric Fynch and the like). Optional, per name.
+         CREATE TABLE IF NOT EXISTS personas(name TEXT PRIMARY KEY, prompt TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS testimony(
             id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL,
             alibi TEXT NOT NULL, accuses TEXT NOT NULL, public INTEGER NOT NULL, text TEXT NOT NULL);
@@ -5584,6 +5587,25 @@ impl Sim {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// A bespoke character prompt for a soul, if one has been set — used to give a special
+    /// character (Aldric Fynch) their own distinctive voice in place of the generic scaffolding.
+    pub fn custom_persona(&self, name: &str) -> rusqlite::Result<Option<String>> {
+        match self.conn.query_row("SELECT prompt FROM personas WHERE name = ?1", params![name], |r| r.get::<_, String>(0)) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set (or replace) a soul's bespoke character prompt.
+    pub fn set_persona(&self, name: &str, prompt: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO personas(name,prompt) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET prompt=?2",
+            params![name, prompt],
+        )?;
+        Ok(())
     }
 
     /// The living adults who have no biography yet — the backlog for the biographer to work through.
