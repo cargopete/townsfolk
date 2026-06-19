@@ -5097,6 +5097,63 @@ impl Sim {
         Some(self.build_pair(&w, a, b, day, today, ""))
     }
 
+    /// Like `converse_pair`, but salted with a `nonce` (so repeated calls on the same sim-day pick
+    /// DIFFERENT pairs) and skipping any pair in `avoid` (the recently-staged ones) — so live
+    /// encounters spread across the town instead of replaying the one ripest couple. Not folded.
+    pub fn converse_pair_varied(&self, today: Date, nonce: u64, avoid: &std::collections::HashSet<(usize, usize)>) -> Option<ConversePair> {
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let adults: Vec<usize> = (0..w.agents.len()).filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child").collect();
+        if adults.len() < 4 { return None; }
+        let norm = |a: usize, b: usize| if a < b { (a, b) } else { (b, a) };
+        let mut rng = rng_for(self.seed ^ 0xC04E_0000_0000, day ^ (nonce as i64));
+        let (mut courting, mut warm, mut cold) = (Vec::new(), Vec::new(), Vec::new());
+        for &i in &adults {
+            let c = w.agents[i].courting;
+            if c >= 0 && w.agents.get(c as usize).is_some_and(|a| a.active()) && !avoid.contains(&norm(i, c as usize)) {
+                courting.push((i, c as usize));
+            }
+            for &j in &adults {
+                if i < j && !avoid.contains(&(i, j)) {
+                    let a = w.aff(i, j);
+                    if a >= 30 { warm.push((i, j)); } else if a <= -30 { cold.push((i, j)); }
+                }
+            }
+        }
+        let pickv = |rng: &mut ChaCha8Rng, v: &[(usize, usize)]| if v.is_empty() { None } else { Some(v[rng.gen_range(0..v.len())]) };
+        let (a, b) = match rng.gen_range(0..10) {
+            0..=3 => pickv(&mut rng, &courting).or_else(|| pickv(&mut rng, &warm)).or_else(|| pickv(&mut rng, &cold)),
+            4..=6 => pickv(&mut rng, &warm).or_else(|| pickv(&mut rng, &cold)),
+            7..=8 => pickv(&mut rng, &cold).or_else(|| pickv(&mut rng, &warm)),
+            _ => None,
+        }
+        .or_else(|| {
+            for _ in 0..24 {
+                let (a, b) = (adults[rng.gen_range(0..adults.len())], adults[rng.gen_range(0..adults.len())]);
+                if a != b && !avoid.contains(&norm(a, b)) { return Some((a, b)); }
+            }
+            None
+        })?;
+        Some(self.build_pair(&w, a, b, day, today, ""))
+    }
+
+    /// The normalised (idx,idx) pairs of the most recently recorded conversations — so the live
+    /// encounter loop can avoid replaying them.
+    pub fn recent_dialogue_pairs(&self, today: Date, limit: i64) -> rusqlite::Result<std::collections::HashSet<(usize, usize)>> {
+        let w = self.world_snapshot(today);
+        let idx_of = |name: &str| w.agents.iter().position(|a| a.name == name);
+        let mut stmt = self.conn.prepare("SELECT source, target FROM dialogues ORDER BY id DESC LIMIT ?1")?;
+        let rows = stmt.query_map([limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut set = std::collections::HashSet::new();
+        for row in rows {
+            let (s, t) = row?;
+            if let (Some(a), Some(b)) = (idx_of(&s), idx_of(&t)) {
+                set.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        Ok(set)
+    }
+
     /// Force a conversation between two NAMED souls, with an optional scene — for staging a meeting
     /// the auto-picker would not have made (a busy evening at the Pelican, say). None if either is absent.
     pub fn converse_pair_between(&self, today: Date, a_name: &str, b_name: &str, setting: &str) -> Option<ConversePair> {

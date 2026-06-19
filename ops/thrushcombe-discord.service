@@ -4,6 +4,7 @@ After=network-online.target thrushcombe-web.service
 Wants=thrushcombe-web.service
 
 [Service]
+Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/home/pepe/townsfolk
 ExecStart=/home/pepe/townsfolk/.venv/bin/python /home/pepe/townsfolk/ops/discord_bot.py
 Restart=on-failure

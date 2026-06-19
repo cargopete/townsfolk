@@ -29,6 +29,7 @@ CH = json.loads((ROOT / "ops" / "discord_channels.json").read_text())["channels"
 BY_ID = {int(c["channel_id"]): (slug, c["seat_key"], c["webhook"]) for slug, c in CH.items()}
 PLACES_SORTED = sorted([(c["seat_key"], slug) for slug, c in CH.items() if not c["seat_key"].startswith("__")],
                        key=lambda kv: -len(kv[0]))
+CHRONICLE = next((s for s, c in CH.items() if c["seat_key"] == "__chronicle__"), "town-chronicle")
 
 # live townie-to-townie encounters, staged by the sim between the hourly beats
 THRUSH = ROOT / "target" / "release" / "thrush"
@@ -161,10 +162,16 @@ async def encounters():
         lines = d.get("lines") or []
         if not lines:
             continue
-        slug = place_channel(d.get("place", ""))
-        if not slug:                                   # else route by the first speaker's home
-            r = BY_NAME.get((lines[0].get("name") or "").lower())
-            slug = place_channel(r["seat"]) if r else None
+        # route to the room only when both souls belong there; a cross-household meeting happens
+        # in the commons (the lane / about the parish), not in one person's house.
+        seat_chans = set()
+        for ix in {ln["idx"] for ln in lines}:
+            r = next((x for x in ROSTER if x["idx"] == ix), None)
+            if r:
+                c = place_channel(r["seat"])
+                if c:
+                    seat_chans.add(c)
+        slug = seat_chans.pop() if len(seat_chans) == 1 else CHRONICLE
         if not slug:
             continue
         webhook = CH[slug]["webhook"]

@@ -1236,7 +1236,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let forced = (!between.is_empty()).then(|| between.split_once('|')).flatten();
             let pair = match forced {
                 Some((a, b)) => sim.converse_pair_between(t, a.trim(), b.trim(), setting.trim()),
-                None => sim.converse_pair(t),
+                None => {
+                    // vary the pair: a wall-clock nonce (so same-day calls differ) + avoid the last
+                    // ~10 conversations, so encounters spread across the town instead of repeating.
+                    let avoid = sim.recent_dialogue_pairs(t, 10).unwrap_or_default();
+                    let nonce = OffsetDateTime::now_utc().unix_timestamp_nanos() as u64;
+                    sim.converse_pair_varied(t, nonce, &avoid)
+                }
             };
             let Some(p) = pair else { println!("{{}}"); return Ok(()); };
             let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
