@@ -277,13 +277,21 @@ async def on_message(msg):
             print("post failed:", e)
         return reply
 
-    # @everyone / @here in a room — every resident of that place answers in turn (a group is hailed)
+    # @everyone / @here in a room — every resident of that place answers in turn (a group is hailed),
+    # and each soul's reply is folded back into the world so they REMEMBER that Pete spoke up.
     low = msg.content.lower()
     if msg.mention_everyone or "@everyone" in low or "@here" in low:
         said = msg.content.replace("@everyone", "").replace("@here", "").strip() or "Well — what say you all?"
+        loop = asyncio.get_running_loop()
+        folds = []
         for t in residents(seat_key)[:6]:
-            await speak(t, said, [])
+            reply = await speak(t, said, [])
+            if reply is not None:                        # record this exchange (warmth + a memory)
+                folds.append(loop.run_in_executor(None, lambda tt=t, rr=reply: web_post(
+                    "/talk/end", {"source": PETE, "target": tt["idx"], "history": [["user", said], ["assistant", rr]]})))
             await asyncio.sleep(0.6)
+        if folds:
+            await asyncio.gather(*folds, return_exceptions=True)
         return
 
     # otherwise a 1:1 — address priority: (1) reply to a townie's message; (2) a name in the
