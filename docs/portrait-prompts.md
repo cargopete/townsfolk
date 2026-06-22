@@ -7,7 +7,7 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
-**Progress:** ✅ = portrait done and in `portraits/`. 41 of 62 sitters photographed so far.
+**Progress:** ✅ = portrait done and in `portraits/`. 47 of 62 sitters photographed so far.
 
 ---
 
@@ -74,15 +74,15 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 
 ## The household servants
 
-- **[25] Mrs Toms (Cook)** — a 45-year-old cook of 31 years' service; forearms mapped with old scalds and burns, an apron and cap, unselfconscious kitchen authority.
-- **[26] Gladys** — a 19-year-old scullery maid; thin, hands raw from the lye, a plain dress and apron, kept small and useful, watchful.
+- ✅ **[25] Mrs Toms (Cook)** — a 45-year-old cook of 31 years' service; forearms mapped with old scalds and burns, an apron and cap, unselfconscious kitchen authority.
+- ✅ **[26] Gladys** — a 19-year-old scullery maid; thin, hands raw from the lye, a plain dress and apron, kept small and useful, watchful.
 
 ## The incomers
 
-- **[58] Mr Vane** — a 33-year-old northern incomer who keeps his own counsel; lean, guarded, a kit-bag carpenter's plainness, collarless shirt, scarred knuckles, the wary face of a man under suspicion.
-- **[59] Mr Pete Peckers** — a 38-year-old motor mechanic from "away"; wiry, oil under the nails, quick clever hands, a battered jacket, a showman's glint, faintly foreign.
-- **[60] Bee** — a 30-year-old woman with no memory, found in the wood wrapped in a ragged carpet; wild black curly hair, a plain borrowed dress, a guarded, searching, displaced look — beautiful and unplaceable.
-- **[61] Mr Aldric Fynch** — a 61-year-old scholar of the old Hermetic philosophy, come from the Welsh Marches to stay six months and help the parish; a rumpled academic gone pleasantly to seed — unruly grey hair and beard, half-moon spectacles, a worn tweed jacket with a waistcoat and an ink-stain or two, a soft watchful kindness in the eyes and the faint dry amusement of a man who takes the work seriously and himself not at all; perhaps a hand resting on the head of a rough-coated lurcher (Paracelsus).
+- ✅ **[58] Mr Vane** — a 33-year-old northern incomer who keeps his own counsel; lean, guarded, a kit-bag carpenter's plainness, collarless shirt, scarred knuckles, the wary face of a man under suspicion.
+- ✅ **[59] Mr Pete Peckers** — a 38-year-old motor mechanic from "away"; wiry, oil under the nails, quick clever hands, a battered jacket, a showman's glint, faintly foreign.
+- ✅ **[60] Bee** — a 30-year-old woman with no memory, found in the wood wrapped in a ragged carpet; wild black curly hair, a plain borrowed dress, a guarded, searching, displaced look — beautiful and unplaceable.
+- ✅ **[61] Mr Aldric Fynch** — a 61-year-old scholar of the old Hermetic philosophy, come from the Welsh Marches to stay six months and help the parish; a rumpled academic gone pleasantly to seed — unruly grey hair and beard, half-moon spectacles, a worn tweed jacket with a waistcoat and an ink-stain or two, a soft watchful kindness in the eyes and the faint dry amusement of a man who takes the work seriously and himself not at all; perhaps a hand resting on the head of a rough-coated lurcher (Paracelsus).
 
 ## The children
 
