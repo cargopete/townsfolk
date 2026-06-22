@@ -4436,6 +4436,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- (from the portrait descriptions). Fed to each soul so they are embodied — aware of how they
          -- look, able to think and speak of their own flesh and their years. Recorded once, never folded.
          CREATE TABLE IF NOT EXISTS appearances(name TEXT PRIMARY KEY, text TEXT NOT NULL);
+         -- The town's continuous murmur: a light one-line 'tick of consciousness' per soul each beat,
+         -- so no soul is ever frozen between the rarer deep reflections. Pure flavour, never folded;
+         -- unioned into a soul's recent stream so even the unpressed carry a present, living thought.
+         CREATE TABLE IF NOT EXISTS pulses(id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);
          -- A bespoke voice for a special soul: a full character prompt that replaces the generic
          -- villager scaffolding when they speak (Aldric Fynch and the like). Optional, per name.
          CREATE TABLE IF NOT EXISTS personas(name TEXT PRIMARY KEY, prompt TEXT NOT NULL);
@@ -5936,11 +5940,52 @@ impl Sim {
 
     /// A soul's own recent thoughts — the inner life they carry forward into talk and the next hour.
     pub fn self_reflections(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<String>> {
+        // newest first across BOTH the deep reflections and the light daily pulses, so even a soul
+        // who has not deeply reflected in a while still carries a present, living recent thought.
         let mut stmt = self.conn.prepare(
-            "SELECT thought FROM reflections WHERE subject = ?1 ORDER BY id DESC LIMIT ?2",
+            "SELECT thought FROM (
+                 SELECT day, id, thought, 1 AS deep FROM reflections WHERE subject = ?1
+                 UNION ALL
+                 SELECT day, id, thought, 0 AS deep FROM pulses WHERE subject = ?1
+             ) ORDER BY day DESC, deep DESC, id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![name, limit], |r| r.get(0))?;
         rows.collect()
+    }
+
+    /// Record one soul's light 'pulse' — a single present-tense thought for the beat. Pure flavour
+    /// (never folded); keeps the soul's inner stream warm between the rarer deep reflections.
+    pub fn record_pulse(&mut self, today: Date, subject: &str, thought: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(today).max(0);
+        self.conn.execute(
+            "INSERT INTO pulses(day,subject,thought) VALUES(?1,?2,?3)",
+            params![day, subject, thought],
+        )?;
+        Ok(())
+    }
+
+    /// The whole living cast with a brief line of who they are and what is on their mind — fed in
+    /// batches to the oracle to produce each soul's one-line pulse, cheaply, every beat.
+    pub fn pulse_roster(&self, today: Date) -> Vec<(String, String)> {
+        let w = self.world_snapshot(today);
+        let mut out = Vec::new();
+        for (i, a) in w.agents.iter().enumerate() {
+            if !a.active() { continue; }
+            let role = a.trade.clone().unwrap_or_else(|| match a.archetype.as_str() {
+                "genteel_status_seeker" => "gentlefolk", "hill_farmer" => "a hill farmer", "practitioner" => "of the practice",
+                "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish",
+                "child" => "a child", _ => "of the town",
+            }.to_string());
+            let last = self.self_reflections(&a.name, 1).ok().and_then(|v| v.into_iter().next()).unwrap_or_default();
+            let tail = if last.is_empty() { String::new() } else {
+                let s: String = last.chars().take(160).collect();
+                format!(" Last on their mind: {s}")
+            };
+            out.push((a.name.clone(),
+                format!("{}, {role}, aged {}, presently {} — wants {}.{tail}",
+                    a.name, a.age(self.target_day(today).max(0)), mood_of(a), want_phrase(&w, i))));
+        }
+        out
     }
 
     /// One soul's reflections, newest first, dated — for their own thought history.

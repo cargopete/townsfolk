@@ -31,7 +31,9 @@ fi
 
 echo "===== JUDGE ====="
 "$BIN" judge || true                       # rules only if a cloud has settled; a closed case stays closed
-echo "===== REFLECT --count $RC (parallel) ====="
+echo "===== PULSE (the whole town's murmur — every soul thinks a beat) ====="
+"$BIN" pulse || true
+echo "===== REFLECT --count $RC (parallel, the deep stream for the pressed) ====="
 "$BIN" reflect --count "$RC" || true
 echo "===== ACT --count 2 ====="
 "$BIN" act --count 2 || true

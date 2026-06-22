@@ -116,6 +116,13 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
+    /// The town's continuous murmur: a light one-line thought for EVERY living soul this beat, in
+    /// cheap batched calls, so no soul is ever frozen between the rarer deep reflections.
+    Pulse {
+        /// How many souls per oracle call (one call returns this many one-line thoughts).
+        #[arg(long, default_value_t = 12)]
+        batch: usize,
+    },
     /// Write the life the parish would tell of each soul — backstory, character, a defining turn.
     /// Works through those who lack one; injected into talk and reflection so souls know each other.
     Biography {
@@ -313,6 +320,8 @@ fn assess_pair(_agent: &ureq::Agent, _host: &str, _model: &str, a: &str, b: &str
     };
     Some((one(parsed.get("a")?)?, one(parsed.get("b")?)?))
 }
+
+const PULSE_PROMPT: &str = "You are the shared inner murmur of a 1934 West-Country market town, Thrushcombe St Mary, caught at a single passing moment. For EACH soul listed below you write ONE present-tense sentence — a true, specific, unforced flicker of what is ACTUALLY passing through their mind this very hour, in their own register and station, grounded in what weighs on them or what their hands are about. Quiet and real, the ordinary texture of a living mind, never melodramatic and never a bland summary of their situation. Each soul knows only the world of 1934 and their own parish. Return ONLY a JSON object mapping each soul's EXACT name (as given) to their single sentence — no preamble, no extra keys, nothing else.";
 
 const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Thrushcombe St Mary, a 1934 West-Country market town, in a quiet hour to themselves. You are given who they are, their station, their ties, their recent days, and how the parish stands. \
 CRUCIAL — this is a CONTINUOUS STREAM OF CONSCIOUSNESS, not a fresh start each time. The lines under 'The thread of their recent thinking' are THEIR OWN inner monologue from recent hours, oldest first. Carry that train of thought forward where it left off: pick up what was unfinished, let an earlier worry deepen or ease or give way, follow a resolve to where it now stands, change their mind if the days have changed it — but NEVER simply restate a thought already in the thread. Each hour is the next moment of one unbroken inner life. \
@@ -952,6 +961,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             if any {
                 sim.catch_up(today(), cur_phase())?; // fold all the batch's residues in one pass
             }
+        }
+        Cmd::Pulse { batch } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let roster = sim.pulse_roster(t);           // (name, brief) for every living soul
+            if roster.is_empty() { return Ok(()); }
+            let batch = batch.clamp(4, 24);
+            let chunks: Vec<Vec<(String, String)>> = roster.chunks(batch).map(|c| c.to_vec()).collect();
+            // one cheap oracle call per chunk, fanned out — each returns a one-line thought per soul
+            let records: Vec<Vec<(String, String)>> = par_map(chunks, oracle_concurrency(), |chunk| {
+                let listing = chunk.iter().map(|(_, brief)| format!("- {brief}")).collect::<Vec<_>>().join("\n");
+                let raw = claude_json(PULSE_PROMPT, &format!("The souls, this hour:\n{listing}\n\nGive each their one present thought."));
+                let mut out = Vec::new();
+                if let Some(obj) = raw.as_ref().and_then(|v| v.as_object()) {
+                    for (name, _) in &chunk {
+                        if let Some(th) = obj.get(name).and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                            out.push((name.clone(), th));
+                        }
+                    }
+                }
+                out
+            });
+            let mut done = 0;
+            for chunk in records {
+                for (name, th) in chunk {
+                    sim.record_pulse(t, &name, &th)?;
+                    done += 1;
+                }
+            }
+            println!("pulse: {done}/{} souls' streams advanced a beat.", roster.len());
         }
         Cmd::Introspect { count, target } => {
             let mut sim = Sim::open(&cli.db)?;
