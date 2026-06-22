@@ -7,7 +7,7 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
-**Progress:** ✅ = portrait done and in `portraits/`. 37 of 62 sitters photographed so far.
+**Progress:** ✅ = portrait done and in `portraits/`. 41 of 62 sitters photographed so far.
 
 ---
 
@@ -37,7 +37,8 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[39] Mr Tallin** — a 54-year-old solicitor to the better sort; steel-rimmed spectacles, dark formal suit, careful and discreet, a keeper of secrets.
 - ✅ **[40] Mr Quint** *(the late bank manager, murdered)* — a 50-ish Cambridge man, front-pew respectable; dry expression, dark banker's suit, a sound, slightly forbidding judgment in the eyes.
 - ✅ **[27] Mr Crisp** — a 48-year-old churchwarden, scholarship boy made good; sober suit, balding, fair and steady.
-- ✅ **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief.- ✅ **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
+- ✅ **[29] Miss Pertwee** — a 64-year-old spinster; neat grey dress, hair severely pinned, kind and watchful — sits with the dying and remembers every grief.
+- ✅ **[38] Miss Ferris** — a 35-year-old schoolmistress, vicar's daughter, Greek and certainty in her bones; plain dark dress, hair scraped back, upright and principled.
 
 ## The estate, the farms & the land
 
@@ -65,11 +66,11 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[31] Mrs Pollard** — a 53-year-old postmistress who rules the sorting bench; precise, spectacled, hair tightly done.
 - ✅ **[41] Mr Coad** — a 46-year-old carrier, widower of thirty years; horseman's hands, a heavy coat, steady and reliable.
 - ✅ **[44] Mr Vye** — a 48-year-old knacker who lives apart by the marshes; scarred hands, crooked shoulders, a grim leather apron, a hard-used face.
-- **[43] Old Burrow** — a 67-year-old sexton; soil-darkened hands, a shapeless old coat, white hair, a slow, grave, churchyard calm.
-- **[45] Jeb Pascoe** — a 30-year-old dock labourer from a drowned fishing family; broad-backed, scarred hands, a seaman's jersey, the quiet of a man who has lost.
+- ✅ **[43] Old Burrow** — a 67-year-old sexton; soil-darkened hands, a shapeless old coat, white hair, a slow, grave, churchyard calm.
+- ✅ **[45] Jeb Pascoe** — a 30-year-old dock labourer from a drowned fishing family; broad-backed, scarred hands, a seaman's jersey, the quiet of a man who has lost.
 - **[33] Mr Annis** — a 27-year-old railway porter; trim porter's uniform and cap, a quiet competence, watches the London trains with something like longing.
-- **[32] Mr Haskins** — a 49-year-old stationmaster; the manner of a man who knows his own reliability, brass-buttoned uniform and cap.
-- **[28] Constable Hodge** — a 38-year-old village constable; steady weathered fairness, high-collared police tunic and helmet, knows every lane.
+- ✅ **[32] Mr Haskins** — a 49-year-old stationmaster; the manner of a man who knows his own reliability, brass-buttoned uniform and cap.
+- ✅ **[28] Constable Hodge** — a 38-year-old village constable; steady weathered fairness, high-collared police tunic and helmet, knows every lane.
 
 ## The household servants
 
