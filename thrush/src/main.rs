@@ -123,6 +123,13 @@ enum Cmd {
         #[arg(long, default_value_t = 12)]
         batch: usize,
     },
+    /// The unconscious: render a vivid nightly dream for the most psychologically-charged souls —
+    /// the day's residue metabolised in the symbolic logic of sleep, carried into the next day.
+    Dream {
+        /// How many souls dream tonight (the most charged minds first).
+        #[arg(long, default_value_t = 6)]
+        count: i64,
+    },
     /// Write the life the parish would tell of each soul — backstory, character, a defining turn.
     /// Works through those who lack one; injected into talk and reflection so souls know each other.
     Biography {
@@ -322,6 +329,8 @@ fn assess_pair(_agent: &ureq::Agent, _host: &str, _model: &str, a: &str, b: &str
 }
 
 const PULSE_PROMPT: &str = "You are the shared inner murmur of a 1934 West-Country market town, Thrushcombe St Mary, caught at a single passing moment. For EACH soul listed below you write ONE present-tense sentence — a true, specific, unforced flicker of what is ACTUALLY passing through their mind this very hour, in their own register and station, grounded in what weighs on them or what their hands are about. Quiet and real, the ordinary texture of a living mind, never melodramatic and never a bland summary of their situation. Each soul knows only the world of 1934 and their own parish. Return ONLY a JSON object mapping each soul's EXACT name (as given) to their single sentence — no preamble, no extra keys, nothing else.";
+
+const DREAM_PROMPT: &str = "You are the dreaming mind of one soul of Thrushcombe St Mary, a 1934 West-Country market town, asleep tonight. From who they are and what weighs on them — above all what they cannot face by day — render the dream they have this night: the symbolic, associative, uncanny logic of real sleep, never a tidy allegory or a moral. What is repressed returns in disguise; grief, guilt, desire and dread wear the faces of ordinary things — a needle, a coat, a flooded field, a door that will not stay shut. Stay wholly within 1934 and their own world. Two to four sentences, present tense, vivid and strange, no preamble, no waking frame and no interpretation — only the dream itself.";
 
 const REFLECT_PROMPT: &str = "You voice the private reflection of one soul of Thrushcombe St Mary, a 1934 West-Country market town, in a quiet hour to themselves. You are given who they are, their station, their ties, their recent days, and how the parish stands. \
 CRUCIAL — this is a CONTINUOUS STREAM OF CONSCIOUSNESS, not a fresh start each time. The lines under 'The thread of their recent thinking' are THEIR OWN inner monologue from recent hours, oldest first. Carry that train of thought forward where it left off: pick up what was unfinished, let an earlier worry deepen or ease or give way, follow a resolve to where it now stands, change their mind if the days have changed it — but NEVER simply restate a thought already in the thread. Each hour is the next moment of one unbroken inner life. \
@@ -992,6 +1001,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             println!("pulse: {done}/{} souls' streams advanced a beat.", roster.len());
+        }
+        Cmd::Dream { count } => {
+            let mut sim = Sim::open(&cli.db)?;
+            sim.catch_up(today(), cur_phase())?;
+            let t = today();
+            let subjects = sim.dream_subjects(t, count.max(1) as usize);
+            if subjects.is_empty() { return Ok(()); }
+            let dreams = par_map(subjects, oracle_concurrency(), |r| {
+                let d = claude_text(DREAM_PROMPT, &format!("{}\n\nRender their dream tonight.", r.dossier))
+                    .map(|l| thrush_core::strip_filler(&l));
+                (r.name, d)
+            });
+            let mut done = 0;
+            for (name, d) in dreams {
+                if let Some(d) = d {
+                    sim.record_dream(t, &name, &d)?;
+                    println!("Dream [{name}]: {d}");
+                    done += 1;
+                }
+            }
+            println!("dream: {done} souls dreamed tonight.");
         }
         Cmd::Introspect { count, target } => {
             let mut sim = Sim::open(&cli.db)?;

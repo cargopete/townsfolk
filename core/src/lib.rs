@@ -4440,6 +4440,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- so no soul is ever frozen between the rarer deep reflections. Pure flavour, never folded;
          -- unioned into a soul's recent stream so even the unpressed carry a present, living thought.
          CREATE TABLE IF NOT EXISTS pulses(id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, thought TEXT NOT NULL);
+         -- The unconscious: a soul's nightly dream, where the day's residue is metabolised in the
+         -- symbolic logic of sleep — vivid and strange for the haunted and the repressed. Never folded;
+         -- carried into the next day as a dream half-remembered, colouring waking thought.
+         CREATE TABLE IF NOT EXISTS dreams(id INTEGER PRIMARY KEY, day INTEGER NOT NULL, subject TEXT NOT NULL, dream TEXT NOT NULL);
          -- A bespoke voice for a special soul: a full character prompt that replaces the generic
          -- villager scaffolding when they speak (Aldric Fynch and the like). Optional, per name.
          CREATE TABLE IF NOT EXISTS personas(name TEXT PRIMARY KEY, prompt TEXT NOT NULL);
@@ -5964,6 +5968,54 @@ impl Sim {
         Ok(())
     }
 
+    /// Record a soul's dream for the night. Pure flavour, never folded.
+    pub fn record_dream(&mut self, today: Date, subject: &str, dream: &str) -> rusqlite::Result<()> {
+        let day = self.target_day(today).max(0);
+        self.conn.execute(
+            "INSERT INTO dreams(day,subject,dream) VALUES(?1,?2,?3)",
+            params![day, subject, dream],
+        )?;
+        Ok(())
+    }
+
+    /// A soul's most recent dream, if any — carried into the day as something half-remembered.
+    pub fn recent_dream(&self, name: &str) -> Option<String> {
+        self.conn.query_row(
+            "SELECT dream FROM dreams WHERE subject = ?1 ORDER BY id DESC LIMIT 1",
+            params![name], |r| r.get::<_, String>(0),
+        ).ok()
+    }
+
+    /// The souls whose night is most charged — those with the most to metabolise in sleep (a buried
+    /// engram, the unspeakable truth of a killing, a real grief or terror, an extreme of mood, or
+    /// confinement) — picked first, so the deep dreams go to the minds that most need to dream.
+    pub fn dream_subjects(&self, today: Date, n: usize) -> Vec<ReflectSubject> {
+        if n == 0 { return Vec::new(); }
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let charge = |i: usize| -> i32 {
+            let a = &w.agents[i];
+            let mut s = 0;
+            if a.memories.iter().any(|m| m.kind == "haunt") { s += 5; }
+            if w.inquest.as_ref().is_some_and(|q| q.culprit == i as i32) { s += 4; }
+            if a.confined.is_some() { s += 3; }
+            s += (a.mood.unsigned_abs() as i32) / 20;                 // an extreme of spirits
+            s += a.memories.iter().filter(|m| m.valence.abs() >= CHARGED).count() as i32; // griefs, terrors
+            if !a.secret.is_empty() { s += 1; }
+            s
+        };
+        let mut cand: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        cand.sort_by_key(|&i| std::cmp::Reverse(charge(i)));
+        cand.into_iter().take(n).map(|idx| {
+            let name = w.agents[idx].name.clone();
+            let mut dossier = self.inner_dossier(&w, idx, day, today);
+            dossier.push_str(&self.life_since_reflection(&name, day));
+            ReflectSubject { name, dossier }
+        }).collect()
+    }
+
     /// The whole living cast with a brief line of who they are and what is on their mind — fed in
     /// batches to the oracle to produce each soul's one-line pulse, cheaply, every beat.
     pub fn pulse_roster(&self, today: Date) -> Vec<(String, String)> {
@@ -6204,6 +6256,9 @@ impl Sim {
             dossier.push_str(&format!(
                 "\nYOU ARE A PRISONER, held in {place} and unable to leave. You have been shut here behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest. Your thoughts now are a prisoner's thoughts — the cold and the stone, the long empty hours, what you can see from the one window, how you came to be here and what you dread is coming. You are not at large in the parish and must not think or speak as though you were."
             ));
+        }
+        if let Some(dream) = self.recent_dream(&ag.name) {
+            dossier.push_str(&format!("\nLast night you dreamed, and it lingers half-remembered into the day: {dream}"));
         }
         dossier.push_str(&format!("\n{}", relationships_brief(w, idx, day)));
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }

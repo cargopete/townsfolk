@@ -39,6 +39,8 @@ echo "===== ACT --count 2 ====="
 "$BIN" act --count 2 || true
 echo "===== DEPART --count 1 ====="
 "$BIN" depart --count 1 || true
+echo "===== DREAM --count 6 (the night's unconscious — the most charged minds) ====="
+"$BIN" dream --count 6 || true
 
 echo "===== DISCORD ====="
 [ -f ops/discord_channels.json ] && python3 ops/discord_feed.py 2>&1 | tail -2 || true

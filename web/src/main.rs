@@ -877,6 +877,9 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         " Today is your own birthday — you are {} years old today, and you feel the turn of another year.",
         t.age(day),
     )).unwrap_or_default();
+    let dream = sim.recent_dream(&t.name).map(|d| format!(
+        " Last night you dreamed, and it lingers half-remembered into the day: {d}"
+    )).unwrap_or_default();
 
     // A bespoke character (Aldric Fynch and the like) speaks in their own prompted voice, with only
     // the live world grounding and the strict 1934 guard appended — not the generic villager scaffolding.
@@ -902,7 +905,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             let happ: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
             if !happ.is_empty() { p.push_str(&format!(" Lately about the parish: {}", happ.join(" "))); }
         }
-        p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&confinement);
+        p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement);
         return Some(p);
     }
 
@@ -921,7 +924,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
-    p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&confinement);
+    p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement);
     // the truth of who they are bound to — so they never invent a spouse or forget a child,
     // and the bond between the two speakers is named plainly (kin, marriage, or a suit).
     p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
