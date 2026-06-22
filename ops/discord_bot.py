@@ -7,7 +7,7 @@ that channel), asks the sim for that soul's in-character reply (POST /talk/say, 
 and posts it back through the channel webhook AS that townsperson — own name, own portrait.
 
 One bot, sixty voices. Run as a persistent service (ops/thrushcombe-discord.service)."""
-import json, os, pathlib, urllib.request, urllib.error, base64, asyncio, random
+import json, os, pathlib, urllib.request, urllib.error, base64, asyncio, random, re
 import discord
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -36,9 +36,15 @@ THRUSH = ROOT / "target" / "release" / "thrush"
 DB = ROOT / "world.db"
 ENCOUNTER_INTERVAL = 600                  # seconds between staged encounters (~6/hour)
 
-# the overthrow plot: a cell of the discontented, meeting in #overthrow to be rid of the Major
+# the overthrow plot is OVER (the petition collapsed, the cell broke) — the conspiracy loop is retired.
 CONSPIRATORS = ["Mr Coad", "Tot Wragg", "Jeb Pascoe", "Mr Vye", "Mr Dunnage"]
 OVERTHROW = "overthrow"
+# souls held in the lock-up below the church: sidelined from the ambient sim (no wandering, no yard
+# scenes), but reachable for a word in #the-crypt. Single source of truth in ops/prisoners.json
+# (shared with discord_presence.py) — add a name there when the parish jails someone.
+_PRISON_FILE = ROOT / "ops" / "prisoners.json"
+PRISONERS = json.loads(_PRISON_FILE.read_text()) if _PRISON_FILE.exists() else []
+JAIL = "__jail__"
 CONSPIRACY_INTERVAL = 900                  # seconds between plotting scenes (~4/hour)
 PLOT_SETTINGS = [
     "after dark in the carrier's yard, the lamp low and the gate barred — the talk turns again to Major Pringle, who will hang no name while the parish bears the fear, and what the working men might do to have him off the bench",
@@ -74,11 +80,47 @@ def web_post(path, body):
 
 ROSTER = web_get("/api/roster")["roster"]                       # [{idx,name,seat,standing,sex}]
 BY_NAME = {r["name"].lower(): r for r in ROSTER}
+
+# distinctive name-tokens (surname / given name) -> full name, but ONLY where a token is unique, so a
+# rumour naming "Lydgate" or "Clewes" latches on, while ambiguous "Pringle" (several) needs the full name.
+HONORIFICS = {"mr", "mrs", "miss", "dr", "major", "lady", "revd", "rev", "sir", "master", "the", "old"}
+NAME_TOKENS = {}
+
+
+def build_name_tokens():
+    from collections import defaultdict
+    tok = defaultdict(set)
+    for r in ROSTER:
+        nm = r["name"].lower()
+        tok[nm].add(nm)                                          # the full name always resolves
+        for w in nm.split():
+            if w not in HONORIFICS and len(w) > 2:
+                tok[w].add(nm)
+    NAME_TOKENS.clear()
+    NAME_TOKENS.update({t: next(iter(s)) for t, s in tok.items() if len(s) == 1})
+
+
+build_name_tokens()
+
+
+def detect_subject(text):
+    """The one soul a rumour is plainly about — a full name or an unambiguous surname/given name
+    matched as a whole word (longest key first, so 'Major Pringle' beats a bare token). None if unclear."""
+    low = text.lower()
+    for key in sorted(NAME_TOKENS, key=len, reverse=True):
+        if re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", low):
+            r = BY_NAME.get(NAME_TOKENS[key])
+            if r and r["idx"] != PETE:
+                return r
+    return None
 # residents of a channel: souls whose seat contains the channel's seat-key, prominent first
 def residents(seat_key):
     # #overthrow has no geography — its "people" are the conspirators (ringleader Coad first)
     if seat_key == "__overthrow__":
         return [BY_NAME[n.lower()] for n in CONSPIRATORS if n.lower() in BY_NAME]
+    # the lock-up below the church — its "residents" are whoever the parish has jailed
+    if seat_key == "__jail__":
+        return [BY_NAME[n.lower()] for n in PRISONERS if n.lower() in BY_NAME]
     if not seat_key or seat_key.startswith("__"):
         return []
     rs = [r for r in ROSTER if seat_key in r["seat"].lower() and r["idx"] != PETE]
@@ -141,6 +183,7 @@ def refresh_roster():
     try:
         ROSTER = web_get("/api/roster")["roster"]
         BY_NAME = {r["name"].lower(): r for r in ROSTER}
+        build_name_tokens()
     except Exception as e:
         print("roster refresh failed:", e)
 
@@ -177,6 +220,10 @@ async def encounters():
             print("encounter failed:", e); continue
         lines = d.get("lines") or []
         if not lines:
+            continue
+        # the jailed do not wander the parish — drop any ambient scene that would feature a prisoner
+        jailed = {BY_NAME[n.lower()]["idx"] for n in PRISONERS if n.lower() in BY_NAME}
+        if any(ln["idx"] in jailed for ln in lines):
             continue
         # route to the room only when both souls belong there; a cross-household meeting happens
         # in the commons (the lane / about the parish), not in one person's house.
@@ -251,7 +298,7 @@ async def on_ready():
     print(f"Thrushcombe bot online as {client.user} — Pete Peckers at the keyboard, {len(BY_ID)} channels")
     client.loop.create_task(housekeeper())
     client.loop.create_task(encounters())
-    client.loop.create_task(conspiracy())
+    # conspiracy() retired — the overthrow plot has run its course
 
 
 @client.event
@@ -263,6 +310,71 @@ async def on_message(msg):
     if entry is None:
         return
     slug, seat_key, webhook = entry
+
+    # --- command channels ---------------------------------------------------------------------
+    # #skip-days: type a number → the town advances that many days and the day's beats are run.
+    if seat_key == "__skip__":
+        m = re.search(r"\d+", msg.content)
+        if not m:
+            await msg.channel.send("Give me a number of days — e.g. `skip 3`.")
+            return
+        days = max(1, min(14, int(m.group())))
+        await msg.channel.send(f"⏭ Skipping **{days} day(s)** — the town moves on. The beats take a few minutes…")
+
+        async def run_skip():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "bash", str(ROOT / "ops" / "ripple.sh"), str(days), "6",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+                await proc.communicate()
+                refresh_roster()
+                head = "The days have passed."
+                try:
+                    p2 = await asyncio.create_subprocess_exec(
+                        str(THRUSH), "--db", str(DB), "status",
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+                    so, _ = await p2.communicate()
+                    for ln in so.decode().splitlines():
+                        if "THRUSHCOMBE ST MARY" in ln:
+                            head = ln.strip(); break
+                except Exception:
+                    pass
+                await msg.channel.send(f"✅ {head}  — the feed and presence are updated.")
+            except Exception as e:
+                await msg.channel.send(f"⚠ skip failed: {e}")
+
+        client.loop.create_task(run_skip())
+        return
+
+    # #the-rumour-mill: whatever you type enters the lanes as anonymous gossip. Name a soul to bend
+    # the parish's opinion of them; prefix with + for a flattering rumour (default is damaging).
+    if seat_key == "__rumours__":
+        text = msg.content.strip()
+        if not text:
+            return
+        amount = "-1"
+        if text.startswith("+"):
+            amount = "1"; text = text[1:].strip()
+        subj = detect_subject(text)
+        target = subj["name"] if subj else ""
+
+        async def run_rumour():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    str(THRUSH), "--db", str(DB), "providence", "rumor",
+                    "--target", target, "--note", text, f"--amount={amount}",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+                await proc.communicate()
+                who = f" about **{target}**" if target else ""
+                kind = "kindly" if amount == "1" else "dark"
+                await msg.channel.send(
+                    f"🗣 The {kind} whisper{who} is loose in the lanes — no one will know it began with you. "
+                    f"It will spread, warp in the telling, and colour what the parish thinks over the days to come.")
+            except Exception as e:
+                await msg.channel.send(f"⚠ rumour failed: {e}")
+
+        client.loop.create_task(run_rumour())
+        return
 
     async def speak(t, message, history):
         async with msg.channel.typing():

@@ -256,6 +256,19 @@ pub struct Funeral {
     pub murdered: bool,    // a murdered soul's funeral is charged — the killer among the mourners
 }
 
+/// A betrothal with a date set: the couple are promised, the parish has a month to talk and scheme,
+/// and the rite falls on `scheduled`. Until then they are not yet wed (the auto-courtship leaves a
+/// promised couple alone). When the day comes the marriage is made and the whole town is lifted.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Wedding {
+    pub a: usize,          // the betrothed, by index
+    pub b: usize,
+    pub a_name: String,
+    pub b_name: String,
+    pub scheduled: i64,    // the day of the rite
+    pub venue: String,     // where the feast is held (the rite is at the church)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub agents: Vec<Agent>,
@@ -273,6 +286,9 @@ pub struct World {
     pub inquest: Option<Inquest>,
     /// Deaths awaiting burial — the funerals the parish will gather for, each on its day.
     pub funerals: Vec<Funeral>,
+    /// Betrothals with a date set — the weddings the parish is waiting on, each on its day.
+    #[serde(default)]
+    pub weddings: Vec<Wedding>,
 }
 
 impl World {
@@ -458,6 +474,7 @@ impl World {
             dread: 0,
             inquest: None,
             funerals: Vec::new(),
+            weddings: Vec::new(),
         };
         // every adult opens with an ambition fitting their situation, at their resting mood
         for i in 0..w.agents.len() {
@@ -1591,6 +1608,26 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     }
                 }
             }
+            "magistrate" => {
+                // the bench passes to a new hand: --target takes over the open inquiry as its
+                // investigator, with the standing of the office and a fresh start (the old cooling is
+                // cleared). The inquest's whole bias re-keys to the new magistrate's own station.
+                if let Some(idx) = world.idx(t) {
+                    let role = if iv.note.is_empty() { "the inquiry into the killing".to_string() } else { iv.note.clone() };
+                    let rise = if iv.amount > 0 { iv.amount } else { 10 };
+                    clamp_standing(&mut world.agents[idx], rise);
+                    world.agents[idx].trade = Some(role.clone());
+                    if let Some(q) = world.inquest.as_mut() {
+                        if !q.closed {
+                            q.investigator = idx as i32;
+                            q.held_until = 0;
+                        }
+                    }
+                    let nm = world.agents[idx].name.clone();
+                    out.push(mk("succession", &nm, format!("{nm} has been given {role}, the bench passing to a new hand.")));
+                    world.spawn_news(&nm, &format!("how {nm} now leads the inquiry into the killing"), 0, day, &[]);
+                }
+            }
             "funeral" => {
                 // hold a soul's funeral now — a great occasion the parish gathers for. Used to lay
                 // a death to rest on the novelist's cue; any pending automatic funeral is consumed.
@@ -1655,19 +1692,24 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                         }
                         world.dread = 85;
                         world.funerals.push(Funeral { who: v, name: t.clone(), scheduled: day + FUNERAL_DELAY, murdered: true });
-                        world.inquest = Some(Inquest {
-                            victim: v,
-                            victim_name: t.clone(),
-                            opened: day,
-                            accused: -1,
-                            accused_since: 0,
-                            hanged: false,
-                            closed: false,
-                            investigator: -1,
-                            public_inquiry: false,
-                            held_until: 0,
-                            culprit: -1,
-                        });
+                        // A second killing while the first inquiry still runs doubles the terror but
+                        // does not reconstitute the bench — the open inquest, and its magistrate,
+                        // stand. Only open a fresh inquest if none is already running.
+                        if !world.inquest.as_ref().is_some_and(|q| !q.closed) {
+                            world.inquest = Some(Inquest {
+                                victim: v,
+                                victim_name: t.clone(),
+                                opened: day,
+                                accused: -1,
+                                accused_since: 0,
+                                hanged: false,
+                                closed: false,
+                                investigator: -1,
+                                public_inquiry: false,
+                                held_until: 0,
+                                culprit: -1,
+                            });
+                        }
                     }
                     _ => out.push(mk("providence", t, format!("A killing was spoken of, but {t} was not there to be found."))),
                 }
@@ -1740,6 +1782,86 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                             nudge_mood(a, ease / 2);
                         }
                     }
+                }
+            }
+            "close" => {
+                // The magistrate shuts an open inquiry — not by a hanging but by decree: the case
+                // is declared resolved and the bench rises. Suspicion lifts from every soul, the
+                // dread eases, the manhunt stops. The culprit flag (if any) is PRESERVED — the
+                // kernel still privately knows whose hand it was; the parish is simply told to
+                // stop looking. --target names who closes it; --amount is how far it eases the
+                // dread (default 20). The truth does not change; only the looking-for-it ends.
+                if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) {
+                    q.closed = true;
+                    q.accused = -1;
+                    q.held_until = 0;
+                    let vn = q.victim_name.clone();
+                    for a in world.agents.iter_mut().filter(|a| a.active()) {
+                        a.suspicion = 0; // the pointing stops; the parish is told to breathe
+                    }
+                    let ease: i16 = if iv.amount != 0 { iv.amount.clamp(-40, 40) as i16 } else { 20 };
+                    world.dread = (world.dread - ease).clamp(0, 100);
+                    let nm = world.idx(t).map(|i| world.agents[i].name.clone()).unwrap_or_else(|| "The bench".into());
+                    out.push(mk("inquest", &nm, format!("{nm} declared the inquiry into {vn}'s murder closed — the case resolved, the bench risen, the parish to look no further.")));
+                    world.spawn_news(&nm, &format!("how {nm} closed the inquiry into the killings"), 1, day, &[]);
+                } else {
+                    out.push(mk("providence", t, "There is no open inquiry to close.".to_string()));
+                }
+            }
+            "rumor" => {
+                // An anonymous rumour loosed in the lanes. Seeded to a few souls (never traced to the
+                // player), it spreads hop by hop with no source anyone can name, grows in the telling
+                // (distortion), and bends the parish's opinion of its subject as it travels — exactly
+                // the existing news machinery. --target whom it concerns; --note the rumour itself;
+                // --amount its direction and bite (negative = damaging [default -1], positive = kind).
+                let val: i32 = if iv.amount != 0 { (iv.amount as i32).clamp(-3, 3) } else { -1 };
+                let topic = iv.note.trim();
+                let topic = if topic.is_empty() { format!("there is something not right about {t}") } else { topic.to_string() };
+                match world.idx(t) {
+                    Some(subj) => {
+                        // start it in a couple of mouths that are NOT the subject — so it comes from
+                        // "the lanes", and let the spread (and distortion) do the rest.
+                        let seeds: Vec<String> = (0..world.agents.len())
+                            .filter(|&i| i != subj && world.agents[i].active())
+                            .take(3)
+                            .map(|i| world.agents[i].name.clone())
+                            .collect();
+                        let seed_refs: Vec<&str> = seeds.iter().map(|s| s.as_str()).collect();
+                        world.spawn_news(t, &topic, val, day, &seed_refs);
+                        out.push(mk("gossip", t, format!("It began to go round the lanes — and no one could say who first set it going — that {topic}.")));
+                    }
+                    None => {
+                        // a rumour about no one in particular: a mood loosed on the whole town
+                        let bite: i16 = (-val).clamp(-15, 15) as i16;
+                        world.dread = (world.dread + bite).clamp(0, 100);
+                        out.push(mk("gossip", "Thrushcombe", format!("It began to go round the lanes — and no one could say who first set it going — that {topic}.")));
+                    }
+                }
+            }
+            "betroth" => {
+                // A betrothal with a date set. --target one party, --note "Groom|Feast venue" (the
+                // rite is always at the church), --amount days hence (default 30). The couple are
+                // promised and held courting; the parish is lifted and given the month to talk and
+                // scheme; the wedding is scheduled to fire on its day. A cross-class match wags tongues.
+                let mut parts = iv.note.splitn(2, '|');
+                let groom = parts.next().unwrap_or("").trim().to_string();
+                let venue = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "the bride's house".to_string());
+                let days = if iv.amount > 0 { iv.amount as i64 } else { 30 };
+                match (world.idx(t), world.idx(&groom)) {
+                    (Some(a), Some(b)) if a != b && world.agents[a].active() && world.agents[b].active() => {
+                        world.agents[a].courting = b as i32;
+                        world.agents[b].courting = a as i32;
+                        let (an, bn) = (world.agents[a].name.clone(), world.agents[b].name.clone());
+                        let cross = stratum_archetype(&world.agents[a].archetype) != stratum_archetype(&world.agents[b].archetype);
+                        world.weddings.push(Wedding { a, b, a_name: an.clone(), b_name: bn.clone(), scheduled: day + days, venue: venue.clone() });
+                        let note = if cross { ", a match across the class line that will be the talk of the parish" } else { "" };
+                        out.push(mk("betroth", &an, format!("{bn} and {an} are betrothed, to be wed in the church a month hence, with a feast to follow at {venue}{note}.")));
+                        world.dread = (world.dread - 10).max(0);             // a joy the whole parish shares
+                        for ag in world.agents.iter_mut().filter(|ag| ag.active()) { nudge_mood(ag, 4); }
+                        world.spawn_news_open(&an, &format!("the betrothal of {bn} and {an}, to wed in a month"), if cross { -1 } else { 2 }, day);
+                    }
+                    _ => out.push(mk("providence", t, format!("A betrothal was spoken of, but {t} or {groom} was not to be found."))),
                 }
             }
             other => {
@@ -2178,13 +2300,21 @@ pub fn want_phrase(w: &World, idx: usize) -> String {
             return if affair { format!("drawn to {}", t.name) } else { format!("to win {}'s hand", t.name) };
         }
     }
-    // the plotter's active answer to the crisis — grounded in their own secret (the player's view)
-    if a.secret.contains("Pringle") && (a.secret.contains("bench") || a.secret.contains("petition") || a.secret.contains("rid of")) {
+    // the factions, read from a soul's OWN secret (the player's view of their true aim). The two
+    // blocs carry canonical aim-phrases so an ally of Pringle is never mistaken for an enemy of his.
+    if a.secret.contains("take the running of the parish into the gentry") {
+        return "to find the killer and master the parish".into();          // the gentry bloc
+    }
+    if a.secret.contains("Major Pringle brought low and off the bench") {
+        return "to bring the Major low and off the bench".into();          // the rival bloc
+    }
+    // a lone plotter still set against the bench (the old conspiracy's language)
+    if a.secret.contains("Pringle") && (a.secret.contains("off the bench") || a.secret.contains("rid of")) {
         return "to see Major Pringle off the bench".into();
     }
     // under the cloud of an open murder, survival eclipses ambition — but only for the genuinely
     // hunted: the rope for the worst-suspected, clearing one's name for the rest of the cloud.
-    if w.inquest.is_some() && a.suspicion >= 75 {
+    if w.inquest.as_ref().is_some_and(|q| !q.closed) && a.suspicion >= 75 {
         let maxs = w.agents.iter().filter(|x| x.active()).map(|x| x.suspicion).max().unwrap_or(0);
         return if a.suspicion >= maxs - 25 { "to clear their name before the noose".into() }
                else { "to clear their name".into() };
@@ -2359,7 +2489,10 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
     let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "inquest".into(), actor: actor.into(), text };
     let Some(inq) = world.inquest.clone() else { return };
     if inq.closed {
-        // the town has had its reckoning; the unease ebbs over weeks, then lifts entirely
+        // the town has had its reckoning and the hunt is OVER: the pointing stops for good, no soul
+        // stands suspected once the case is shut (else stale suspicion keeps souls "clearing their
+        // name" long after anyone is looking). The unease ebbs over weeks, then lifts entirely.
+        for a in world.agents.iter_mut() { a.suspicion = 0; }
         world.dread = (world.dread - 2).max(0);
         if world.dread == 0 {
             world.inquest = None;
@@ -2557,6 +2690,35 @@ fn tend_funerals(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>) 
     world.funerals.retain(|f| f.scheduled > day);
     for f in due {
         hold_funeral(world, f.who, &f.name, f.murdered, day, date, out);
+    }
+}
+
+/// Hold the weddings whose day has come — the betrothed are married in the church, the parish lifted.
+fn tend_weddings(world: &mut World, day: i64, date: Date, out: &mut Vec<Event>) {
+    let due: Vec<Wedding> = world.weddings.iter().filter(|w| w.scheduled <= day).cloned().collect();
+    world.weddings.retain(|w| w.scheduled > day);
+    for wed in due {
+        let (a, b) = (wed.a, wed.b);
+        // a death, a departure, or another match in the interval calls it off
+        if !world.agents[a].active() || !world.agents[b].active()
+            || world.agents[a].spouse.is_some() || world.agents[b].spouse.is_some() {
+            continue;
+        }
+        world.agents[a].spouse = Some(b);
+        world.agents[b].spouse = Some(a);
+        world.agents[a].courting = -1; world.agents[a].courtship = 0;
+        world.agents[b].courting = -1; world.agents[b].courtship = 0;
+        nudge_mood(&mut world.agents[a], 26);
+        nudge_mood(&mut world.agents[b], 26);
+        world.remember(a, "wed", b as i32, 80, 80, day);
+        world.remember(b, "wed", a as i32, 80, 80, day);
+        let cross = stratum_archetype(&world.agents[a].archetype) != stratum_archetype(&world.agents[b].archetype);
+        let note = if cross { " — gentry and working folk joined, and the whole parish there to see it" } else { "" };
+        out.push(Event { day, date: date.to_string(), kind: "marriage".into(), actor: wed.b_name.clone(),
+            text: format!("{} and {} were married in the church, with a feast after at {}{}.", wed.b_name, wed.a_name, wed.venue, note) });
+        world.spawn_news_open(&wed.a_name, &format!("the wedding of {} and {}", wed.b_name, wed.a_name), 2, day);
+        world.dread = (world.dread - 8).max(0);                  // a wedding lifts the whole town
+        for ag in world.agents.iter_mut().filter(|ag| ag.active()) { nudge_mood(ag, 5); }
     }
 }
 
@@ -3446,6 +3608,7 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     // --- the funerals whose day has come: the parish gathers to bury its dead ---
     tend_funerals(world, day, date, &mut out);
+    tend_weddings(world, day, date, &mut out);
 
     // --- the predictive self-model: souls read the world back against what they were sure of,
     //     and the surprise of being wrong scales the blow, stamps the memory, and teaches them.
@@ -4187,7 +4350,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 42;
+const SNAPSHOT_VERSION: i64 = 46;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4720,7 +4883,10 @@ fn apply_decrees(world: &mut World, day: i64, date: Date, list: &[Decree]) -> Ve
                     let (dn, sn) = (world.agents[si].name.clone(), world.agents[suitor].name.clone());
                     match choice {
                         // she takes him: two lives joined, the long courtship come to its end
-                        "accept" => if world.agents[si].spouse.is_none() && world.agents[suitor].spouse.is_none() {
+                        // a couple with a date already set (world.weddings) is left to their scheduled
+                        // rite — the auto-courtship must not marry them early and pre-empt the wedding.
+                        "accept" => if world.agents[si].spouse.is_none() && world.agents[suitor].spouse.is_none()
+                            && !world.weddings.iter().any(|w| w.a == si || w.b == si || w.a == suitor || w.b == suitor) {
                             world.agents[si].spouse = Some(suitor);
                             world.agents[suitor].spouse = Some(si);
                             world.agents[si].courting = -1; world.agents[si].courtship = 0;
@@ -4990,7 +5156,7 @@ impl Sim {
             "SELECT e.id, e.date, e.text FROM events e
              LEFT JOIN narration n ON n.event_id = e.id
              WHERE n.event_id IS NULL AND e.kind IN ({placeholders})
-             ORDER BY e.id ASC LIMIT ?",
+             ORDER BY e.id DESC LIMIT ?",
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let params: Vec<&dyn rusqlite::ToSql> = SALIENT
@@ -5819,6 +5985,34 @@ impl Sim {
         Some(ReflectSubject { name, dossier })
     }
 
+    /// The `n` most-overdue souls' reflection dossiers in one shot, for a batched (parallel) reflect.
+    /// Same ranking as `reflect_subject` — longest-unreflected first, jitter breaking ties — but
+    /// returns the top `n` DISTINCT souls built from a SINGLE world snapshot, so their oracle calls
+    /// can run concurrently. The sequential `reflect_subject` re-folds between souls so each sees the
+    /// last one's residue; a batch trades that intra-batch continuity for speed (fine for a handful
+    /// of contemporaneous reflections — the cross-day thread still bridges via the reflections table,
+    /// and the caller folds every residue once when the batch is recorded).
+    pub fn reflect_subjects(&self, today: Date, salt: u64, n: usize) -> Vec<ReflectSubject> {
+        if n == 0 { return Vec::new(); }
+        let w = self.world_snapshot(today);
+        let day = self.target_day(today).max(0);
+        let last = self.last_reflected().unwrap_or_default();
+        let mut cand: Vec<usize> = (0..w.agents.len())
+            .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child")
+            .collect();
+        cand.sort_by_key(|&i| {
+            let since = last.get(&w.agents[i].name).copied().unwrap_or(-1);
+            let jitter = (i as u64 ^ salt).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33;
+            (since, jitter)
+        });
+        cand.into_iter().take(n).map(|idx| {
+            let name = w.agents[idx].name.clone();
+            let mut dossier = self.inner_dossier(&w, idx, day, today);
+            dossier.push_str(&self.life_since_reflection(&name, day));
+            ReflectSubject { name, dossier }
+        }).collect()
+    }
+
     /// What a soul has done and said since they last sat alone with their thoughts — their own acts
     /// and conversations in the interval — framed so their next reflection takes honest account of
     /// the whole of it and carries their one continuous inner life forward, never starting afresh.
@@ -6531,11 +6725,21 @@ impl Sim {
         let look = |name: &str| by_name.get(name).cloned().unwrap_or((-1, String::new(), -1));
         let mut out = Vec::new();
 
-        // narration — the oracle's voiced chronicle events
-        let mut s = self.conn.prepare(
-            "SELECT e.id, e.kind, e.actor, n.text FROM events e JOIN narration n ON n.event_id = e.id
-             WHERE e.id > ?1 ORDER BY e.id ASC LIMIT ?2")?;
-        for row in s.query_map(params![since_e, limit], |r|
+        // narration — the chronicle, voiced. The oracle's richer rendering when it has run, ELSE the
+        // plain chronicle line: a LEFT JOIN + COALESCE so an event never waits on the (optional, and
+        // perpetually-behind) narration pass to reach the feed. The kind filter keeps it to the same
+        // SALIENT events the narrator would ever touch, so behaviour is unchanged but for the fallback.
+        let ph = SALIENT.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT e.id, e.kind, e.actor, COALESCE(n.text, e.text) FROM events e
+             LEFT JOIN narration n ON n.event_id = e.id
+             WHERE e.id > ? AND e.kind IN ({ph}) ORDER BY e.id ASC LIMIT ?");
+        let mut s = self.conn.prepare(&sql)?;
+        let eparams: Vec<&dyn rusqlite::ToSql> = std::iter::once(&since_e as &dyn rusqlite::ToSql)
+            .chain(SALIENT.iter().map(|k| k as &dyn rusqlite::ToSql))
+            .chain(std::iter::once(&limit as &dyn rusqlite::ToSql))
+            .collect();
+        for row in s.query_map(eparams.as_slice(), |r|
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
         {
             let (id, kind, actor, text) = row?;
@@ -6877,8 +7081,11 @@ impl Sim {
             let bench = (inq.investigator >= 0).then(|| world.agents.get(inq.investigator as usize).map(|a| format!(" — {} on the bench", a.name))).flatten().unwrap_or_default();
             let level = format!("{dread_word}{bench}");
             if inq.closed {
-                let who = (inq.accused >= 0).then(|| world.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten().unwrap_or_else(|| "someone".into());
-                return format!("The murder of {} — {who} hanged for it {days}d on. {level}; no one quite sure justice was done.", inq.victim_name);
+                if inq.hanged {
+                    let who = (inq.accused >= 0).then(|| world.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten().unwrap_or_else(|| "someone".into());
+                    return format!("The murder of {} — {who} hanged for it {days}d on. {level}; no one quite sure justice was done.", inq.victim_name);
+                }
+                return format!("The murder of {} — the case closed {days}d on, the killer named and dead. {dread_word}; no one quite sure justice was done.", inq.victim_name);
             }
             if inq.accused >= 0 {
                 let acc = world.agents.get(inq.accused as usize).map(|a| a.name.clone()).unwrap_or_default();

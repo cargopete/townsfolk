@@ -240,11 +240,6 @@ Be STRICTLY FAITHFUL to the event you are given: use only the people, places, an
 Note especially: to say two people have 'grown thick' or 'grown close' means they have become friends or intimates — it is NEVER about bodily size, weight, or a swelling figure. Read such phrases as friendship. \
 Do not escalate into farce, do not pile embellishment upon embellishment, do not stretch a small thing into an absurdity. One wry touch is plenty. No preamble, no quotation marks, no lists.";
 
-/// One call to the recorded oracle. Returns the rendered prose, or None on failure
-/// (container down, timeout) so a batch degrades gracefully instead of dying.
-fn narrate_one(_agent: &ureq::Agent, _host: &str, _model: &str, _date: &str, text: &str) -> Option<String> {
-    claude_text(SYSTEM_PROMPT, text)
-}
 
 /// The town's calendar shift (days), loaded from the world at startup. Lets a `jump` carry the
 /// town forward while real life still ticks one day per day underneath. `today()` adds it, so
@@ -359,6 +354,51 @@ fn claude_json(system: &str, user: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&extract_json(&claude_text(system, user)?)?).ok()
 }
 
+/// How many oracle (claude CLI) calls to run at once in a narrate/reflect batch. Each call is its
+/// own subprocess, so this just bounds how many subscriptions-side round-trips are in flight.
+fn oracle_concurrency() -> usize {
+    // each call is a blocking `claude` subprocess waiting on the API — a slow call is the floor, so
+    // run a whole ordinary batch in ONE wave. Plenty high; override down if the box feels the load.
+    std::env::var("THRUSH_ORACLE_CONCURRENCY").ok().and_then(|v| v.parse().ok())
+        .filter(|&c| c >= 1).unwrap_or(12)
+}
+
+/// Run `f` over `items` with bounded concurrency, preserving input order. Turns a serial wall of
+/// independent oracle round-trips into a handful running at once. Touches NO world state — it only
+/// produces prose; the caller records the results and folds afterwards. Uses scoped OS threads (the
+/// work is blocking subprocess I/O), so no async runtime or extra crate is needed.
+fn par_map<T, R, F>(items: Vec<T>, concurrency: usize, f: F) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+    F: Fn(T) -> R + Sync,
+{
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    let n = items.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let slots: Vec<Mutex<Option<T>>> = items.into_iter().map(|x| Mutex::new(Some(x))).collect();
+    let out: Vec<Mutex<Option<R>>> = (0..n).map(|_| Mutex::new(None)).collect();
+    let next = AtomicUsize::new(0);
+    let workers = concurrency.clamp(1, n);
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                let item = slots[i].lock().unwrap().take().unwrap();
+                let r = f(item);
+                *out[i].lock().unwrap() = Some(r);
+            });
+        }
+    });
+    out.into_iter().map(|m| m.into_inner().unwrap().unwrap()).collect()
+}
+
 /// The day's Anthropic spend ledger — a "DATE\tUSD" sidecar beside the world db. Host-side ops
 /// state, never folded into the world; it only governs whether to call Claude or fall to Qwen.
 fn spend_file(db: &str) -> std::path::PathBuf {
@@ -375,15 +415,6 @@ fn spent_today(path: &std::path::Path, today: &str) -> f64 {
     }).unwrap_or(0.0)
 }
 
-/// One reflection from the local Qwen oracle — returns the raw JSON verdict object.
-fn reflect_qwen(_agent: &ureq::Agent, _host: &str, _model: &str, dossier: &str) -> Option<serde_json::Value> {
-    claude_json(REFLECT_PROMPT, &format!("{dossier}\n\nWrite their reflection."))
-}
-
-/// One reflection via the oracle (now the `claude` CLI). Returns the raw JSON verdict object.
-fn reflect_claude(_agent: &ureq::Agent, _key: &str, dossier: &str, _spend: &std::path::Path, _today: &str) -> Option<serde_json::Value> {
-    claude_json(REFLECT_PROMPT, &format!("{dossier}\n\nWrite their reflection."))
-}
 
 type Verdict = (String, String, String, String, String, String, String, String);
 
@@ -744,28 +775,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Cmd::Narrate { limit } => {
             let sim = Sim::open(&cli.db)?;
-            let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
-            let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
-            let agent = ureq::AgentBuilder::new()
-                .timeout_read(Duration::from_secs(180)) // survive a cold model load
-                .build();
             let items = sim.unnarrated_salient(limit)?;
             if items.is_empty() {
                 println!("Nothing to narrate — the chronicle is current.");
             }
-            let mut done = 0;
-            for (id, date, text) in items {
-                match narrate_one(&agent, &host, &model, &date, &text) {
-                    Some(prose) => {
-                        sim.save_narration(id, &prose)?;
-                        println!("  {date}  {prose}");
+            // each event's prose is independent — fan the oracle calls out across the batch at once,
+            // then record in order. (narrate writes only the narration table; no world state moves.)
+            let rendered = par_map(items, oracle_concurrency(), |(id, date, text)| {
+                (id, date, claude_text(SYSTEM_PROMPT, &text))
+            });
+            let (mut done, mut stalled) = (0, false);
+            for (id, date, prose) in rendered {
+                match prose {
+                    Some(p) => {
+                        sim.save_narration(id, &p)?;
+                        println!("  {date}  {p}");
                         done += 1;
                     }
-                    None => {
-                        eprintln!("oracle unavailable (is {host} up?) — stopping after {done} rendered.");
-                        break;
-                    }
+                    None => stalled = true,
                 }
+            }
+            if stalled {
+                eprintln!("oracle unavailable for some events — {done} rendered, the rest left for next run.");
             }
         }
         Cmd::Weather => {
@@ -890,42 +921,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .filter(|a| a.active() && a.archetype != "child").map(|a| a.name.clone()).collect();
             // --all is a full-town heartbeat: every active adult advances their thread once
             let count = if all { names.len() as i64 } else { count };
-            // prefer Claude (Haiku) for a sharper inner voice — but never past the day's Anthropic
-            // cap (default $1; set ANTHROPIC_DAILY_USD). Beyond it, reflect on the free local Qwen.
-            let cap: f64 = std::env::var("ANTHROPIC_DAILY_USD").ok().and_then(|x| x.parse().ok()).unwrap_or(1.0);
-            let spend = spend_file(&cli.db);
-            let today_str = t.to_string();
-            let agent = ureq::AgentBuilder::new().timeout_read(Duration::from_secs(240)).build();
-            // the wall-clock hour only breaks ties among the equally-overdue; who reflects is decided
-            // by who has gone longest without. Advance `count` souls' streams a beat each — after each
-            // is recorded and re-folded, the next-most-overdue is a different soul.
+            // who reflects is decided by who has gone longest without; the wall-clock hour only breaks
+            // ties among the equally-overdue. Batch-pick the most-overdue souls from one snapshot, run
+            // their oracle calls concurrently, record them, then fold every residue once at the end.
             let salt = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()).hour() as u64;
-            for _ in 0..count.max(1) {
-                let Some(r) = sim.reflect_subject(t, salt) else { break };
-                let claude_ok = cap - spent_today(&spend, &today_str) > 0.01;
-                let raw = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).filter(|_| claude_ok)
-                    .and_then(|key| reflect_claude(&agent, &key, &r.dossier, &spend, &today_str))
-                    .or_else(|| {
-                        let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
-                        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
-                        reflect_qwen(&agent, &host, &model, &r.dossier)
-                    });
+            let subjects = sim.reflect_subjects(t, salt, count.max(1) as usize);
+            if subjects.is_empty() {
+                return Ok(());
+            }
+            let raws = par_map(subjects, oracle_concurrency(), |r| {
+                let raw = claude_json(REFLECT_PROMPT, &format!("{}\n\nWrite their reflection.", r.dossier));
+                (r.name, raw)
+            });
+            let mut any = false;
+            for (name, raw) in raws {
                 match raw.as_ref().and_then(|v| parse_reflection(v, &names)) {
                     Some((thought, mood, sway, toward, regard, resolve, plan, revise)) => {
-                        sim.record_reflection(t, &r.name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan, &revise)?;
-                        sim.catch_up(today(), cur_phase())?; // re-fold so the residue lands + next pick differs
+                        sim.record_reflection(t, &name, &thought, &mood, &sway, &toward, &regard, &resolve, &plan, &revise)?;
+                        any = true;
                         let tail = if revise != "keep" { format!(" · plan {revise}") }
                             else if plan != "none" { format!(" · set on {plan}") }
                             else if resolve != "none" { format!(" · resolved to {resolve} {toward}") }
                             else if regard != "none" { format!(" · {regard} toward {toward}") }
                             else { String::new() };
-                        println!("Reflection [{} · {mood}/{sway}{tail}]: {thought}", r.name);
+                        println!("Reflection [{name} · {mood}/{sway}{tail}]: {thought}");
                     }
-                    None => {
-                        eprintln!("oracle unavailable — the stream stalls this beat.");
-                        break;
-                    }
+                    None => eprintln!("oracle stalled for {name} — their stream waits a beat."),
                 }
+            }
+            if any {
+                sim.catch_up(today(), cur_phase())?; // fold all the batch's residues in one pass
             }
         }
         Cmd::Introspect { count, target } => {

@@ -21,6 +21,11 @@ ROVING = {"out paying calls", "on the rounds", "about the parish", "the market",
 PLACES = sorted([(c["seat_key"], slug) for slug, c in CHANNELS.items() if not c["seat_key"].startswith("__")],
                 key=lambda kv: -len(kv[0]))
 CHRONICLE = next((s for s, c in CHANNELS.items() if c["seat_key"] == "__chronicle__"), None)
+# souls held in the lock-up: shown in #the-crypt, and kept OUT of their old home channel so a jailed
+# soul no longer appears at large. Single source of truth in ops/prisoners.json (shared with the bot).
+_PRISON_FILE = ROOT / "ops" / "prisoners.json"
+PRISONERS = set(json.loads(_PRISON_FILE.read_text())) if _PRISON_FILE.exists() else set()
+JAIL_SLUG = next((s for s, c in CHANNELS.items() if c["seat_key"] == "__jail__"), None)
 
 
 def api(method, path, body=None):
@@ -69,6 +74,8 @@ def main():
     home = {slug: [] for slug in CHANNELS}   # live here, present or not
     abroad = []
     for r in rows:
+        if r["name"] in PRISONERS:           # the jailed are shown in the crypt, not at large
+            continue
         slug = channel_for(r["location"], r["seat"])
         if slug:
             here[slug].append(r["name"])
@@ -94,6 +101,9 @@ def main():
         else:
             t = "Quiet just now."
         topics[slug] = t[:1024]
+    if JAIL_SLUG:
+        held = sorted(PRISONERS)
+        topics[JAIL_SLUG] = ("Held below the church: " + ", ".join(held)) if held else "Empty just now."
     if CHRONICLE and abroad:
         topics[CHRONICLE] = "Out about the parish: " + ", ".join(abroad)
 
