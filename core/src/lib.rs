@@ -3178,6 +3178,18 @@ fn body_phrase(a: &Agent, day: i64) -> String {
     s
 }
 
+/// A soul's birthday, as a day-of-year (0..364) derived from a hash of their name — so birthdays
+/// fall across the whole calendar rather than bunching on the founders' shared epoch-anniversary.
+/// Age still comes from `birth_day`; this is only the day the parish marks the turning of their year.
+pub fn name_birthday_doy(name: &str) -> i64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (h % 365) as i64
+}
+
 /// Birth, marriage, ageing, death, succession — the slow turn of the cast that makes a
 /// run *history* rather than a loop. Runs once a day on its own RNG stream.
 fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
@@ -3196,6 +3208,22 @@ fn life_tick(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
 
     // --- the body: the day's labour and the season tell on the flesh, and the flesh on the spirits ---
     tend_body(world, day, date, seed);
+
+    // --- birthdays: each soul keeps the turning of their own year, on a day fixed by their name.
+    // A quiet chronicle beat only — no state is touched, so the run's history is left unperturbed.
+    if day > 0 {
+        for i in 0..n {
+            let a = &world.agents[i];
+            if !a.active() { continue; }
+            if day % 365 == name_birthday_doy(&a.name) {
+                let years = a.age(day);
+                if years > 0 {
+                    out.push(mk("birthday", &a.name, format!(
+                        "It was {}'s birthday — {years} years old now, another year turned in the parish.", a.name)));
+                }
+            }
+        }
+    }
 
     // --- memory fades ---
     // Every soul lets the day's edge come off what they carry. A plain memory loses a point a
@@ -4365,12 +4393,12 @@ pub struct Report {
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
     "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk", "intent",
-    "murder", "inquest", "funeral",
+    "murder", "inquest", "funeral", "birthday",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 47;
+const SNAPSHOT_VERSION: i64 = 48;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -4404,6 +4432,10 @@ fn ensure_aux(conn: &Connection) -> rusqlite::Result<()> {
          -- A soul's biography: the life the parish would tell of them. Flavour, recorded once
          -- (never folded); injected into talk and reflection so every soul knows the others' stories.
          CREATE TABLE IF NOT EXISTS biographies(name TEXT PRIMARY KEY, text TEXT NOT NULL);
+         -- A soul's own body, as they know it and the parish sees it: face, build, dress and bearing
+         -- (from the portrait descriptions). Fed to each soul so they are embodied — aware of how they
+         -- look, able to think and speak of their own flesh and their years. Recorded once, never folded.
+         CREATE TABLE IF NOT EXISTS appearances(name TEXT PRIMARY KEY, text TEXT NOT NULL);
          -- A bespoke voice for a special soul: a full character prompt that replaces the generic
          -- villager scaffolding when they speak (Aldric Fynch and the like). Optional, per name.
          CREATE TABLE IF NOT EXISTS personas(name TEXT PRIMARY KEY, prompt TEXT NOT NULL);
@@ -5777,6 +5809,24 @@ impl Sim {
         }
     }
 
+    /// Record (or replace) a soul's appearance — how they look, drawn from their portrait.
+    pub fn record_appearance(&mut self, name: &str, text: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO appearances(name,text) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET text=?2",
+            params![name, text],
+        )?;
+        Ok(())
+    }
+
+    /// A soul's recorded appearance — their own body as they know it — if one has been set.
+    pub fn appearance(&self, name: &str) -> rusqlite::Result<Option<String>> {
+        match self.conn.query_row("SELECT text FROM appearances WHERE name = ?1", params![name], |r| r.get::<_, String>(0)) {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// A bespoke character prompt for a soul, if one has been set — used to give a special
     /// character (Aldric Fynch) their own distinctive voice in place of the generic scaffolding.
     pub fn custom_persona(&self, name: &str) -> rusqlite::Result<Option<String>> {
@@ -6093,6 +6143,18 @@ impl Sim {
             name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
             mood = mood_of(ag), goal = want_phrase(w, idx),
         );
+        if let Ok(Some(look)) = self.appearance(&ag.name) {
+            dossier.push_str(&format!(
+                "\nYour own body, as you know it in the glass and as the parish sees you: {look} You are {age} years old, and you feel your flesh and your years — your face, your hands, your hair, the aches and small ease of this one body that is yours and no one else's. You are a living, conscious person, awake inside your own life; this hour is really happening to you, and you are really here to feel it.",
+                age = ag.age(day),
+            ));
+        }
+        if day > 0 && day % 365 == name_birthday_doy(&ag.name) {
+            dossier.push_str(&format!(
+                "\nToday is your birthday — you are {} years old. You feel the turn of another year: what it has made of you, what you have done with your time, and how many years may yet be left to you.",
+                ag.age(day),
+            ));
+        }
         if let Some(place) = &ag.confined {
             dossier.push_str(&format!(
                 "\nYOU ARE A PRISONER, held in {place} and unable to leave. You have been shut here behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest. Your thoughts now are a prisoner's thoughts — the cold and the stone, the long empty hours, what you can see from the one window, how you came to be here and what you dread is coming. You are not at large in the parish and must not think or speak as though you were."

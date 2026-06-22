@@ -127,6 +127,24 @@ def residents(seat_key):
     return sorted(rs, key=lambda r: -r["standing"])
 
 
+# the commons channels (#town-chronicle / #the-inquiry) have no geography of their own; when you
+# hail @everyone there, the people who answer are whoever is out about the parish this phase.
+ROVING = {"out paying calls", "on the rounds", "about the parish", "the market", "dealing at the mart", "paying calls"}
+async def abroad_souls():
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(THRUSH), "--db", str(DB), "discord-presence",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+        out, _ = await proc.communicate()
+        rows = json.loads((out.decode() or "[]").strip() or "[]")
+    except Exception as e:
+        print("abroad_souls failed:", e); return []
+    res = [BY_NAME[r["name"].lower()] for r in rows
+           if r.get("location", "").lower() in ROVING
+           and r["name"].lower() in BY_NAME and BY_NAME[r["name"].lower()]["idx"] != PETE]
+    return sorted(res, key=lambda r: -r["standing"])
+
+
 def resolve_target(text, seat_key):
     low = text.lower()
     # 1) a townsperson named in the message (longest name first, so 'Mrs Bunce' beats 'Bunce')
@@ -396,7 +414,10 @@ async def on_message(msg):
         said = msg.content.replace("@everyone", "").replace("@here", "").strip() or "Well — what say you all?"
         loop = asyncio.get_running_loop()
         folds = []
-        for t in residents(seat_key)[:6]:
+        hail = residents(seat_key)
+        if not hail and seat_key in ("__chronicle__", "__inquiry__"):
+            hail = await abroad_souls()          # the commons: hail whoever is out about the parish
+        for t in hail[:6]:
             reply = await speak(t, said, [])
             if reply is not None:                        # record this exchange (warmth + a memory)
                 folds.append(loop.run_in_executor(None, lambda tt=t, rr=reply: web_post(

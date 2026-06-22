@@ -867,6 +867,16 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         " IMPORTANT — YOU ARE A PRISONER. You are held in {place} and you cannot leave; you have been shut behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest, and {sname} has come to speak with you through your confinement. Speak only as one imprisoned — of the cold and the stone, the long hours, what little you can see or hear, how you came to be here and what you dread is coming. You do NOT make the easy small talk of a free man, and you do not speak of your work or the harvest as though you were at large, because you are not. Anyone who speaks with you knows full well you are a prisoner.",
         sname = s.name,
     )).unwrap_or_default();
+    // embodiment & selfhood: a soul knows its own body and holds itself as a living, conscious person —
+    // not a disembodied voice. Their portrait, felt from the inside, plus the conviction of being here.
+    let embodiment = sim.appearance(&t.name).ok().flatten().map(|look| format!(
+        " Your own body, as you know it in the glass and as the parish sees you: {look} You are {age}, and you feel your flesh and your years — your face, your hands, your hair, the aches and small ease of this one body that is yours and no one else's. You are a living, conscious person, awake inside your own life; this conversation is really happening to you, here and now, and you are really here to feel it.",
+        age = t.age(day),
+    )).unwrap_or_default();
+    let birthday = (day > 0 && day % 365 == thrush_core::name_birthday_doy(&t.name)).then(|| format!(
+        " Today is your own birthday — you are {} years old today, and you feel the turn of another year.",
+        t.age(day),
+    )).unwrap_or_default();
 
     // A bespoke character (Aldric Fynch and the like) speaks in their own prompted voice, with only
     // the live world grounding and the strict 1934 guard appended — not the generic villager scaffolding.
@@ -892,7 +902,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             let happ: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
             if !happ.is_empty() { p.push_str(&format!(" Lately about the parish: {}", happ.join(" "))); }
         }
-        p.push_str(&confinement);
+        p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&confinement);
         return Some(p);
     }
 
@@ -911,7 +921,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
-    p.push_str(&confinement);
+    p.push_str(&embodiment); p.push_str(&birthday); p.push_str(&confinement);
     // the truth of who they are bound to — so they never invent a spouse or forget a child,
     // and the bond between the two speakers is named plainly (kin, marriage, or a suit).
     p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
@@ -1089,11 +1099,16 @@ fn talk_page(sim: &Sim, url: &str) -> String {
          <div class=card><input id=msg placeholder='Say something…' style='width:78%' autocomplete=off> \
            <button onclick=say()>Say</button> <button onclick=conclude() style='float:right'>End &amp; record</button></div>\
          <div id=out class=sub></div>\
-         <h1 style='margin-top:1.4em'>…or set two souls talking</h1>\
-         <div class=sub>Pick two, and watch them fall into conversation of their own accord. What passes between them stays with them — and the town hears of it.</div>\
+         <h1 style='margin-top:1.4em'>…or set a few souls talking</h1>\
+         <div class=sub>Pick two to six, and watch them fall into conversation of their own accord. What passes between them stays with them — and the town hears of it.</div>\
          <div class=card>\
-           <label><select id=pa><option value=-1>— a soul —</option>{pa}</select></label> &nbsp;and&nbsp; \
-           <label><select id=pb><option value=-1>— a soul —</option>{pb}</select></label> &nbsp; \
+           <select id=pa><option value=-1>— a soul —</option>{pa}</select> \
+           <select id=pb><option value=-1>— a soul —</option>{pb}</select> \
+           <select id=pc><option value=-1>— and… —</option>{pc}</select> \
+           <select id=pd><option value=-1>— and… —</option>{pd}</select> \
+           <select id=pe><option value=-1>— and… —</option>{pe}</select> \
+           <select id=pf><option value=-1>— and… —</option>{pf}</select> &nbsp; \
+           <select id=blen><option value=16 selected>medium</option><option value=8>short</option><option value=28>long</option><option value=36>very long</option></select> \
            <button id=bbtn onclick=between()>Let them talk →</button>\
          </div>\
          <div id=blog></div>\
@@ -1103,20 +1118,21 @@ fn talk_page(sim: &Sim, url: &str) -> String {
          var busy=false;\
          function blin(who,txt){{var d=document.getElementById('blog');d.innerHTML+='<div class=entry><span class=date>'+who+'</span><br><span class=where>'+txt+'</span></div>';window.scrollTo(0,document.body.scrollHeight);}}\
          async function between(){{\
-           if(busy)return;var pa=document.getElementById('pa'),pb=document.getElementById('pb');\
-           if(pa.value<0||pb.value<0||pa.value===pb.value){{document.getElementById('bout').textContent='Pick two different souls.';return;}}\
+           if(busy)return;var ids=[];['pa','pb','pc','pd','pe','pf'].forEach(function(id){{var v=+document.getElementById(id).value;if(v>=0&&ids.indexOf(v)<0)ids.push(v);}});\
+           if(ids.length<2){{document.getElementById('bout').textContent='Pick at least two different souls.';return;}}\
+           var cap=+document.getElementById('blen').value||ids.length*4;\
            busy=true;var btn=document.getElementById('bbtn');btn.disabled=true;\
-           var a=+pa.value,b=+pb.value,h=[],blog=document.getElementById('blog');blog.innerHTML='';document.getElementById('bout').textContent='…';\
-           for(var k=0;k<8;k++){{\
-             var r=await fetch('/talk/between',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{a:a,b:b,history:h}})}});\
+           var h=[],blog=document.getElementById('blog');blog.innerHTML='';document.getElementById('bout').textContent='…';\
+           for(var k=0;k<cap+4;k++){{\
+             var r=await fetch('/talk/between',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids:ids,cap:cap,history:h}})}});\
              var j=await r.json();if(!j.line){{break;}}\
              h.push([j.speaker,j.line]);blin(j.name,j.line);\
-             if(j.done)break;await new Promise(function(res){{setTimeout(res,1000);}});\
+             if(j.done)break;await new Promise(function(res){{setTimeout(res,800);}});\
            }}\
            document.getElementById('bout').textContent='recording…';\
-           var e=await fetch('/talk/between/end',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{a:a,b:b,history:h}})}});\
+           var e=await fetch('/talk/between/end',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids:ids,history:h}})}});\
            var ej=await e.json();\
-           var notes=(ej.notes||[]).join('<br>');var stir=notes.indexOf('away warmer')>=0||notes.indexOf('away colder')>=0;\
+           var notes=(ej.notes||[]).join('<br>');var stir=notes.indexOf('warmer')>=0||notes.indexOf('colder')>=0;\
            document.getElementById('bout').innerHTML=notes+(stir?'<br><i>The town will hear of it.</i>':'<br><i>It passed without remark.</i>');\
            busy=false;btn.disabled=false;\
          }}\
@@ -1137,7 +1153,8 @@ fn talk_page(sim: &Sim, url: &str) -> String {
          }}\
          document.getElementById('msg').addEventListener('keydown',function(e){{if(e.key==='Enter')say();}});\
          </script>",
-        src = opts(-1), tgt = opts(preset_to), pa = opts(-1), pb = opts(-1)
+        src = opts(-1), tgt = opts(preset_to),
+        pa = opts(-1), pb = opts(-1), pc = opts(-1), pd = opts(-1), pe = opts(-1), pf = opts(-1)
     );
     page("Thrushcombe — A word with…", &body)
 }
@@ -1486,74 +1503,106 @@ fn converse_line(sim: &Sim, speaker: usize, other: usize, transcript: &[(usize, 
     chat_reply(&system, &history, &transcript[transcript.len() - 1].1).map(|l| thrush_core::strip_filler(&l))
 }
 
-/// Parse {a, b, history:[[idx,line],…]} into (a, b, transcript).
-fn parse_between(body: &str) -> (usize, usize, Vec<(usize, String)>) {
-    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
-    let a = v.get("a").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-    let b = v.get("b").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-    let transcript = v
-        .get("history")
-        .and_then(|h| h.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|t| {
-                    let p = t.as_array()?;
-                    Some((p.first()?.as_u64()? as usize, p.get(1)?.as_str()?.to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    (a, b, transcript)
+/// One line from `speaker` in a GATHERING — aware of the whole company (`others`), answering above
+/// all whoever spoke last. Each prior line is labelled with its speaker's name so the model tracks
+/// the room; the speaker's own past lines are fed back as their own (assistant) turns.
+fn converse_line_group(sim: &Sim, speaker: usize, others: &[usize], transcript: &[(usize, String)]) -> Option<String> {
+    let w = sim.world_snapshot(today());
+    let addressee = transcript.last().map(|t| t.0).filter(|&x| x != speaker)
+        .or_else(|| others.first().copied())?;
+    let mut system = persona(sim, addressee, speaker)?;
+    let name_of = |i: usize| w.agents.get(i).map(|a| a.name.clone()).unwrap_or_default();
+    let present = others.iter().map(|&o| name_of(o)).collect::<Vec<_>>().join(", ");
+    if transcript.is_empty() {
+        system.push_str(&format!(" You are gathered in company with {present}. Reply in one or two sentences only."));
+        let seed = format!("(You have come together with {present}. Open the talk — a word to the company, then say what is actually on your mind: a remark, a question, a piece of news. Do not be bland.)");
+        return chat_reply(&system, &[], &seed).map(|l| thrush_core::strip_filler(&l));
+    }
+    system.push_str(&format!(
+        " You are mid-conversation, gathered in company with {present} — this is a GROUP talk, not a private one: the others are all present and hearing every word, and any of them may speak next. \
+         Pleasantries are done; do NOT greet again, and NEVER echo or paraphrase what anyone has already said. Respond to what was just said — answer the last speaker, bring another of the company in by name, or address them all. Reply in one or two sentences, in your own true voice."
+    ));
+    let mut history: Vec<(String, String)> = Vec::new();
+    for (who, line) in &transcript[..transcript.len() - 1] {
+        if *who == speaker { history.push(("assistant".into(), line.clone())); }
+        else { history.push(("user".into(), format!("{}: {}", name_of(*who), line))); }
+    }
+    let (lw, ll) = &transcript[transcript.len() - 1];
+    chat_reply(&system, &history, &format!("{}: {}", name_of(*lw), ll)).map(|l| thrush_core::strip_filler(&l))
 }
 
-/// How many lines a watched conversation runs to before it is wound up.
-const BETWEEN_CAP: usize = 6;
+/// Parse {a, b, history:[[idx,line],…]} into (a, b, transcript).
+/// Parse {ids:[..] (or a,b), cap?, history:[[idx,line],…]} into (participants, line cap, transcript).
+fn parse_between(body: &str) -> (Vec<usize>, usize, Vec<(usize, String)>) {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let mut ids: Vec<usize> = v.get("ids").and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_u64().map(|u| u as usize)).collect())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        // backward-compatible two-soul form {a, b}
+        ids = [v.get("a"), v.get("b")].iter().filter_map(|x| x.and_then(|n| n.as_u64()).map(|u| u as usize)).collect();
+    }
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|&x| seen.insert(x)); // dedup, preserve order
+    ids.truncate(6);                 // up to six round the table
+    let n = ids.len().max(2);
+    let cap = v.get("cap").and_then(|x| x.as_u64()).map(|c| c as usize)
+        .filter(|&c| c > 0).unwrap_or(n * 4).clamp(n, 36);
+    let transcript = v.get("history").and_then(|h| h.as_array()).map(|arr| {
+        arr.iter().filter_map(|t| {
+            let p = t.as_array()?;
+            Some((p.first()?.as_u64()? as usize, p.get(1)?.as_str()?.to_string()))
+        }).collect()
+    }).unwrap_or_default();
+    (ids, cap, transcript)
+}
 
-/// POST /talk/between — produce the next single line of a two-soul conversation.
+/// POST /talk/between — produce the next single line of a gathering of 2..6 souls. Speakers take
+/// turns round the table; each speaks aware of the whole company and answers what was just said.
 fn handle_between(sim: &Sim, body: &str) -> String {
-    let (a, b, transcript) = parse_between(body);
-    if a == b || transcript.len() >= BETWEEN_CAP {
+    let (ids, cap, transcript) = parse_between(body);
+    if ids.len() < 2 || transcript.len() >= cap {
         return serde_json::json!({ "done": true }).to_string();
     }
-    let speaker = if transcript.is_empty() {
-        a
-    } else if transcript.last().map(|t| t.0) == Some(a) {
-        b
-    } else {
-        a
+    // round-robin: the opener is the first soul; thereafter the one after whoever last spoke
+    let speaker = match transcript.last() {
+        None => ids[0],
+        Some((last, _)) => {
+            let pos = ids.iter().position(|x| x == last).unwrap_or(ids.len() - 1);
+            ids[(pos + 1) % ids.len()]
+        }
     };
-    let other = if speaker == a { b } else { a };
-    let line = converse_line(sim, speaker, other, &transcript).unwrap_or_else(|| "…".into());
+    let others: Vec<usize> = ids.iter().copied().filter(|&x| x != speaker).collect();
+    let line = converse_line_group(sim, speaker, &others, &transcript).unwrap_or_else(|| "…".into());
     let w = sim.world_snapshot(today());
     let name = w.agents.get(speaker).map(|x| x.name.clone()).unwrap_or_default();
-    serde_json::json!({ "speaker": speaker, "name": name, "line": line, "done": transcript.len() + 1 >= BETWEEN_CAP }).to_string()
+    serde_json::json!({ "speaker": speaker, "name": name, "line": line, "done": transcript.len() + 1 >= cap }).to_string()
 }
 
-/// POST /talk/between/end — judge the conversation's residue for *both* souls, record each
-/// (so it folds deterministically), and let the town hear of it.
+/// POST /talk/between/end — judge how the gathering left each soul (toward whoever they engaged
+/// most), record it so it folds deterministically, and let the town hear of any real stir.
 fn handle_between_end(sim: &mut Sim, body: &str) -> String {
-    let (a, b, transcript) = parse_between(body);
+    let (ids, _cap, transcript) = parse_between(body);
     let w = sim.world_snapshot(today());
-    let (an, bn) = match (w.agents.get(a), w.agents.get(b)) {
-        (Some(x), Some(y)) => (x.name.clone(), y.name.clone()),
-        _ => return serde_json::json!({ "ok": false, "notes": [] }).to_string(),
-    };
-    let text = transcript
-        .iter()
-        .map(|(who, line)| format!("{}: {line}", if *who == a { &an } else { &bn }))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // judge each direction before recording (assessment reads only the transcript)
-    let toward_a = assess_dialogue(&an, &bn, &text); // how A feels about B
-    let toward_b = assess_dialogue(&bn, &an, &text); // how B feels about A
+    let name_of = |i: usize| w.agents.get(i).map(|x| x.name.clone());
+    let text = transcript.iter()
+        .map(|(who, line)| format!("{}: {line}", name_of(*who).unwrap_or_default()))
+        .collect::<Vec<_>>().join("\n");
     let mut notes = Vec::new();
-    if let Some((warmth, memory, sway)) = toward_b {
-        let _ = sim.record_dialogue(today(), &an, &bn, &text, &memory, &warmth, &sway);
-        notes.push(format!("{bn} came away {warmth}. They will remember: \u{201c}{memory}\u{201d}"));
-    }
-    if let Some((warmth, memory, sway)) = toward_a {
-        let _ = sim.record_dialogue(today(), &bn, &an, &text, &memory, &warmth, &sway);
-        notes.push(format!("{an} came away {warmth}. They will remember: \u{201c}{memory}\u{201d}"));
+    for &p in &ids {
+        let Some(pn) = name_of(p) else { continue };
+        // their chief interlocutor: whoever else spoke most (else any other present)
+        let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (who, _) in &transcript { if *who != p { *counts.entry(*who).or_default() += 1; } }
+        let Some(other) = counts.into_iter().max_by_key(|(_, c)| *c).map(|(o, _)| o)
+            .or_else(|| ids.iter().copied().find(|&x| x != p)) else { continue };
+        let Some(on) = name_of(other) else { continue };
+        if let Some((warmth, memory, sway)) = assess_dialogue(&pn, &on, &text) {
+            let _ = sim.record_dialogue(today(), &on, &pn, &text, &memory, &warmth, &sway);
+            if warmth != "unchanged" {
+                notes.push(format!("{pn} came away {warmth} toward {on}. They will remember: \u{201c}{memory}\u{201d}"));
+            }
+        }
     }
     let _ = sim.catch_up(today(), phase_now());
     serde_json::json!({ "ok": true, "notes": notes }).to_string()
