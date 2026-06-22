@@ -860,6 +860,13 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         _ => format!("You have no strong feeling about {} either way.", s.name),
     };
     let want = thrush_core::want_phrase(&w, target);
+    // a confined soul is a prisoner: their location is the gaol, and they speak from inside it —
+    // never the easy small-talk of a free villager. This directive overrides the free-man framing.
+    let seat_str: String = t.confined.clone().unwrap_or_else(|| t.seat.clone());
+    let confinement = t.confined.as_ref().map(|place| format!(
+        " IMPORTANT — YOU ARE A PRISONER. You are held in {place} and you cannot leave; you have been shut behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest, and {sname} has come to speak with you through your confinement. Speak only as one imprisoned — of the cold and the stone, the long hours, what little you can see or hear, how you came to be here and what you dread is coming. You do NOT make the easy small talk of a free man, and you do not speak of your work or the harvest as though you were at large, because you are not. Anyone who speaks with you knows full well you are a prisoner.",
+        sname = s.name,
+    )).unwrap_or_default();
 
     // A bespoke character (Aldric Fynch and the like) speaks in their own prompted voice, with only
     // the live world grounding and the strict 1934 guard appended — not the generic villager scaffolding.
@@ -885,6 +892,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             let happ: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
             if !happ.is_empty() { p.push_str(&format!(" Lately about the parish: {}", happ.join(" "))); }
         }
+        p.push_str(&confinement);
         return Some(p);
     }
 
@@ -899,10 +907,11 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
          You know only what a soul of your station and schooling could know in the year 1934: you have never heard of machines that think, of computers or simulations, of flight to the moon, nor of any matter after this year. \
          Should a stranger speak of such things the words carry no meaning for you — you mishear them for something from your own world, or say plainly you do not take their meaning, and you never explain a notion you could not have had. About your own world, though, you are nobody's fool. \
          Never mention being an AI or a model; never break character; never narrate stage directions or describe your own tone.",
-        name = t.name, role = role, seat = t.seat, age = t.age(day),
+        name = t.name, role = role, seat = seat_str, age = t.age(day),
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
+    p.push_str(&confinement);
     // the truth of who they are bound to — so they never invent a spouse or forget a child,
     // and the bond between the two speakers is named plainly (kin, marriage, or a suit).
     p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));

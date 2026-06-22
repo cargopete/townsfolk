@@ -77,6 +77,8 @@ pub struct Agent {
     pub sex: u8,                  // 0 = woman, 1 = man
     pub death_day: Option<i64>,   // None = living. Dead agents are kept (indices are stable) but inert.
     pub departed: bool,           // left Thrushcombe (married away / a situation in town) — alive but off-stage
+    #[serde(default)]
+    pub confined: Option<String>, // held prisoner in this place — cannot leave; speaks/reflects as a prisoner
     pub spouse: Option<usize>,
     pub parent: Option<usize>,    // mother/father index, for lineage & succession
     pub origin: Option<String>,   // where they came from; None = Thrushcombe-born
@@ -356,6 +358,7 @@ impl World {
             expectations: Vec::new(),
             seen_as: 0,
             focus: Preoccupation::default(),
+            confined: None,
             secret: String::new(),
         };
         let mut agents = vec![
@@ -1864,6 +1867,22 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     _ => out.push(mk("providence", t, format!("A betrothal was spoken of, but {t} or {groom} was not to be found."))),
                 }
             }
+            "confine" => {
+                // Hold a soul prisoner in a place (--note, e.g. "the lock-up below the church"), or set
+                // them free with an empty note. A confined soul cannot leave; their dialogue, their
+                // reflections and the parish's sense of them all know it — they are no longer at large.
+                if let Some(idx) = world.idx(t) {
+                    let place = iv.note.trim();
+                    if place.is_empty() {
+                        world.agents[idx].confined = None;
+                        out.push(mk("providence", t, format!("{t} is let out, and is held no longer.")));
+                    } else {
+                        world.agents[idx].confined = Some(place.to_string());
+                        world.agents[idx].courting = -1; // a prisoner courts no one
+                        out.push(mk("providence", t, format!("{t} is held prisoner in {place}.")));
+                    }
+                }
+            }
             other => {
                 out.push(mk("providence", t, format!("Providence ({other}) touched {t}.")));
             }
@@ -2051,6 +2070,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         expectations: Vec::new(),
         seen_as: 0,
         focus: Preoccupation::default(),
+        confined: None,
         secret: String::new(),
     }
 }
@@ -4350,7 +4370,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 46;
+const SNAPSHOT_VERSION: i64 = 47;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -6073,6 +6093,11 @@ impl Sim {
             name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
             mood = mood_of(ag), goal = want_phrase(w, idx),
         );
+        if let Some(place) = &ag.confined {
+            dossier.push_str(&format!(
+                "\nYOU ARE A PRISONER, held in {place} and unable to leave. You have been shut here behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest. Your thoughts now are a prisoner's thoughts — the cold and the stone, the long empty hours, what you can see from the one window, how you came to be here and what you dread is coming. You are not at large in the parish and must not think or speak as though you were."
+            ));
+        }
         dossier.push_str(&format!("\n{}", relationships_brief(w, idx, day)));
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
