@@ -7,7 +7,7 @@ image format. They appear on `/folk/<n>`, as little faces on the map, and as Dis
 
 There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg`).
 
-**Progress:** ✅ = portrait done and in `portraits/`. 47 of 63 sitters photographed so far. Awaiting a portrait: **[62] Dr Carfax** (save as `portraits/dr-carfax.jpg` or `portraits/62.jpg`).
+**Progress:** ✅ = portrait done and in `portraits/`. 51 of 63 sitters photographed so far.
 
 ---
 
@@ -32,7 +32,7 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[8] Revd Mr Soames** — a 58-year-old parson; silvered hair, clerical collar and black coat, shoulders bent slightly forward as if listening for something just beyond hearing.
 - ✅ **[9] Mrs Soames** — a 54-year-old clergyman's wife and clergyman's daughter; greying hair in a soft bun, a discreet dark dress, quietly capable.
 - ✅ **[30] Dr Lydgate** — a 50-year-old London-trained doctor, widower; greying, dark coat over a waistcoat, modern and a touch melancholy.
-- **[62] Dr Carfax** — a 48-year-old physician lately sent for from the county town by the gentry, a man of good family and cold competence; precisely groomed and clean-shaven, hair greying at the temples and severely combed, steel-rimmed spectacles, a well-cut dark coat and a stiff white collar a cut above a country doctor's; a watchful, clinical, appraising gaze that misses nothing and warms to no one — the assured, faintly predatory calm of a man who has decided he will be valued here.
+- ✅ **[62] Dr Carfax** — a 48-year-old physician lately sent for from the county town by the gentry, a man of good family and cold competence; precisely groomed and clean-shaven, hair greying at the temples and severely combed, steel-rimmed spectacles, a well-cut dark coat and a stiff white collar a cut above a country doctor's; a watchful, clinical, appraising gaze that misses nothing and warms to no one — the assured, faintly predatory calm of a man who has decided he will be valued here.
 - ✅ **[10] Mr Farran MRCVS** — a 45-year-old veterinary surgeon, widower; weather-roughened but book-learned, plain working tweeds, quietly absorbed.
 - ✅ **[11] Mr James Herrick** — a 26-year-old country doctor; young, clever, faintly disappointed in himself, a neat suit a little too careful, sharp observant eyes.
 - ✅ **[39] Mr Tallin** — a 54-year-old solicitor to the better sort; steel-rimmed spectacles, dark formal suit, careful and discreet, a keeper of secrets.
@@ -69,7 +69,7 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 - ✅ **[44] Mr Vye** — a 48-year-old knacker who lives apart by the marshes; scarred hands, crooked shoulders, a grim leather apron, a hard-used face.
 - ✅ **[43] Old Burrow** — a 67-year-old sexton; soil-darkened hands, a shapeless old coat, white hair, a slow, grave, churchyard calm.
 - ✅ **[45] Jeb Pascoe** — a 30-year-old dock labourer from a drowned fishing family; broad-backed, scarred hands, a seaman's jersey, the quiet of a man who has lost.
-- **[33] Mr Annis** — a 27-year-old railway porter; trim porter's uniform and cap, a quiet competence, watches the London trains with something like longing.
+- ✅ **[33] Mr Annis** — a 27-year-old railway porter; trim porter's uniform and cap, a quiet competence, watches the London trains with something like longing.
 - ✅ **[32] Mr Haskins** — a 49-year-old stationmaster; the manner of a man who knows his own reliability, brass-buttoned uniform and cap.
 - ✅ **[28] Constable Hodge** — a 38-year-old village constable; steady weathered fairness, high-collared police tunic and helmet, knows every lane.
 
@@ -87,8 +87,8 @@ There's also a separate **map** prompt at the bottom (save as `portraits/map.jpg
 
 ## The children
 
-- **[2] Robin Pelham** — a well-mannered solicitor's son of 11, neat Sunday clothes, a serious look.
-- **[3] Vicky Pelham** — a solicitor's daughter of 8, ribboned hair, a clean pinafore.
+- ✅ **[2] Robin Pelham** — a well-mannered solicitor's son of 11, neat Sunday clothes, a serious look.
+- ✅ **[3] Vicky Pelham** — a solicitor's daughter of 8, ribboned hair, a clean pinafore.
 - **[46] Sam Pelham** — a solicitor's boy of 5, round-faced, a little stiff for the camera.
 - **[47] Tom Soames** — the vicar's son, 13, scrubbed and proper, a buttoned collar.
 - **[48] Milly Soames** — the vicar's daughter, 9, plaited hair, a Sunday frock.
