@@ -1872,6 +1872,23 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     _ => out.push(mk("providence", t, format!("A betrothal was spoken of, but {t} or {groom} was not to be found."))),
                 }
             }
+            "teleport" => {
+                // Providence plucks a soul from where they stand and sets them down elsewhere in the
+                // space of a breath — a thing that cannot happen, and so shakes them to the root. The
+                // lurch is logged as their own uncanny memory, so it weighs on them when next they
+                // speak. --target the soul; --note the place they find themselves.
+                let place = if iv.note.is_empty() { "a place they had not been a breath before".to_string() } else { iv.note.clone() };
+                match world.idx(t) {
+                    Some(v) if world.agents[v].active() => {
+                        let from = world.agents[v].seat.clone();
+                        world.agents[v].seat = place.clone();
+                        nudge_mood(&mut world.agents[v], -12); // the lurch of the impossible
+                        out.push(mk("uncanny", t, format!("{t} was, between one breath and the next, no longer at {from} but standing in {place} — with no memory of any step that took them there, and no account they could give of how it came to be.")));
+                        world.spawn_news_idx(v, &format!("the morning {t} was somewhere, and then without a step was somewhere else entirely"), -1, day, &[v]);
+                    }
+                    _ => out.push(mk("providence", t, format!("There is no {t} to move."))),
+                }
+            }
             "execute" => {
                 // A public hanging by the law: the condemned is put to death before the assembled
                 // parish, a funeral follows, and the town is left torn between relief that the danger
@@ -4517,7 +4534,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 51;
+const SNAPSHOT_VERSION: i64 = 52;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
