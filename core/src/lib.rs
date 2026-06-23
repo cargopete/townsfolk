@@ -2224,6 +2224,42 @@ pub fn mood_word(m: i16) -> &'static str {
 /// The mood word a soul actually wears — the numeric band (`mood_word`), but with the deepest
 /// band reading "grieving" ONLY for a soul carrying a real, still-gripping bereavement. A town
 /// merely worn down by drought and dread is *downcast*, not bereaved; grief is named for grief.
+/// How the body feels this hour — fatigue, illness, the aches of age, the cold or heat of the
+/// season, hunger from a thin table, the warmth of desire — composed from the soul's tracked
+/// vigour, health, age, purse and attachments, so the flesh is genuinely *felt* in thought and talk.
+pub fn body_sense(a: &Agent, day: i64, date: Date) -> String {
+    let age = a.age(day);
+    let season = Season::of(date);
+    let working = matches!(a.archetype.as_str(), "blunt_hand" | "hill_farmer" | "scheming_improver");
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(match a.vigour {
+        v if v <= 20 => "wrung out to the last thread, every limb gone heavy as wet rope",
+        v if v <= 40 => "bone-tired, the day's labour still aching in the back and the hands",
+        v if v <= 65 => "weary in the ordinary way of a working day",
+        v if v <= 85 => "rested enough, the body easy under you",
+        _ => "fresh and strong, the body light and willing",
+    }.to_string());
+    if a.health <= 30 {
+        parts.push("ill — feverish and weak, the room tilting a little when you rise".into());
+    } else if a.health <= 55 {
+        parts.push("not right in yourself — a chill taken, a heaviness in the chest that will not shift".into());
+    } else if a.health <= 78 && age >= 55 {
+        parts.push("the old aches talking tonight — a knee, a hip, the damp got down into the bone".into());
+    }
+    match season {
+        Season::Winter => parts.push("cold, the chill sitting in your hands and feet and never quite leaving you".into()),
+        Season::Hay | Season::Harvest if working => parts.push("hot from the field, the sweat dried stiff in your shirt and the chaff itching at your neck".into()),
+        _ => {}
+    }
+    if a.purse < -12 {
+        parts.push("and a hunger you do not speak of — the belly tight, the table thinner than it was".into());
+    }
+    if a.courting >= 0 && age < 62 {
+        parts.push("and, when a certain face comes unbidden, a warmth in the body that is nothing to do with the weather".into());
+    }
+    format!("Your body, this hour: you are {}.", parts.join("; "))
+}
+
 pub fn mood_of(a: &Agent) -> &'static str {
     if a.mood <= -55
         && a.memories.iter().any(|m| m.kind == "grief" && m.salience >= 50)
@@ -6246,6 +6282,7 @@ impl Sim {
                 age = ag.age(day),
             ));
         }
+        dossier.push_str(&format!("\n{}", body_sense(ag, day, today)));
         if day > 0 && day % 365 == name_birthday_doy(&ag.name) {
             dossier.push_str(&format!(
                 "\nToday is your birthday — you are {} years old. You feel the turn of another year: what it has made of you, what you have done with your time, and how many years may yet be left to you.",
