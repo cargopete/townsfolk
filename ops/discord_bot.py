@@ -454,15 +454,30 @@ async def on_message(msg):
     if msg.mention_everyone or "@everyone" in low or "@here" in low:
         said = msg.content.replace("@everyone", "").replace("@here", "").strip() or "Well — what say you all?"
         loop = asyncio.get_running_loop()
-        folds = []
         hail = residents(seat_key)
         if not hail and seat_key in ("__chronicle__", "__inquiry__"):
             hail = await abroad_souls()          # the commons: hail whoever is out about the parish
-        for t in hail[:6]:
-            reply = await speak(t, said, [])
-            if reply is not None:                        # record this exchange (warmth + a memory)
-                folds.append(loop.run_in_executor(None, lambda tt=t, rr=reply: web_post(
-                    "/talk/end", {"source": PETE, "target": tt["idx"], "history": [["user", said], ["assistant", rr]]})))
+        hail = hail[:6]
+        present_ids = [t["idx"] for t in hail]
+        # ONE shared exchange, not parallel 1:1s: Pete opens, then each soul answers IN COMPANY —
+        # aware of who else is present and hearing every word already said (Pete's and the others').
+        transcript = [[PETE, said]]
+        folds = []
+        for t in hail:
+            others = [i for i in present_ids if i != t["idx"]] + [PETE]
+            async with msg.channel.typing():
+                try:
+                    line = web_post("/talk/among", {"speaker": t["idx"], "others": others,
+                                                    "history": transcript}).get("line", "…")
+                except Exception as e:
+                    print("among failed:", e); continue
+            try:
+                post_as(webhook, t["name"], t["idx"], line)
+            except Exception as e:
+                print("post failed:", e)
+            transcript.append([t["idx"], line])              # the next soul hears this reply
+            folds.append(loop.run_in_executor(None, lambda tt=t, ll=line: web_post(  # remember Pete spoke
+                "/talk/end", {"source": PETE, "target": tt["idx"], "history": [["user", said], ["assistant", ll]]})))
             await asyncio.sleep(0.6)
         if folds:
             await asyncio.gather(*folds, return_exceptions=True)

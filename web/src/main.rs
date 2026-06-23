@@ -1562,6 +1562,26 @@ fn parse_between(body: &str) -> (Vec<usize>, usize, Vec<(usize, String)>) {
     (ids, cap, transcript)
 }
 
+/// POST /talk/among — one group-aware reply from a CALLER-CHOSEN speaker, given the company present
+/// and the transcript so far (which may include a human interlocutor as a pseudo-participant, e.g.
+/// Pete hailing a room). Unlike /talk/between this does not round-robin — the caller drives each turn,
+/// appending replies to `history` so every soul hears Pete and one another. Returns {"line": "..."}.
+fn handle_among(sim: &Sim, body: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let speaker = v.get("speaker").and_then(|x| x.as_u64()).map(|u| u as usize);
+    let others: Vec<usize> = v.get("others").and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_u64().map(|u| u as usize)).collect()).unwrap_or_default();
+    let transcript: Vec<(usize, String)> = v.get("history").and_then(|h| h.as_array()).map(|arr| {
+        arr.iter().filter_map(|t| {
+            let p = t.as_array()?;
+            Some((p.first()?.as_u64()? as usize, p.get(1)?.as_str()?.to_string()))
+        }).collect()
+    }).unwrap_or_default();
+    let Some(speaker) = speaker else { return serde_json::json!({ "line": "…" }).to_string() };
+    let line = converse_line_group(sim, speaker, &others, &transcript).unwrap_or_else(|| "…".into());
+    serde_json::json!({ "speaker": speaker, "line": line }).to_string()
+}
+
 /// POST /talk/between — produce the next single line of a gathering of 2..6 souls. Speakers take
 /// turns round the table; each speaks aware of the whole company and answers what was just said.
 fn handle_between(sim: &Sim, body: &str) -> String {
@@ -1692,12 +1712,13 @@ fn main() {
         let is_post = matches!(req.method(), tiny_http::Method::Post);
         let json_hdr = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
         let html_hdr = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
-        if is_post && matches!(url.as_str(), "/talk/say" | "/talk/end" | "/talk/between" | "/talk/between/end") {
+        if is_post && matches!(url.as_str(), "/talk/say" | "/talk/end" | "/talk/among" | "/talk/between" | "/talk/between/end") {
             let mut body = String::new();
             let _ = req.as_reader().read_to_string(&mut body);
             let json = match url.as_str() {
                 "/talk/say" => handle_say(&sim, &body),
                 "/talk/end" => handle_end(&mut sim, &body),
+                "/talk/among" => handle_among(&sim, &body),
                 "/talk/between" => handle_between(&sim, &body),
                 _ => handle_between_end(&mut sim, &body),
             };
