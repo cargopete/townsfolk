@@ -79,6 +79,8 @@ pub struct Agent {
     pub departed: bool,           // left Thrushcombe (married away / a situation in town) — alive but off-stage
     #[serde(default)]
     pub confined: Option<String>, // held prisoner in this place — cannot leave; speaks/reflects as a prisoner
+    #[serde(default)]
+    pub displaced: Option<String>, // just whisked here by providence from this named place — reeling, no account of how
     pub spouse: Option<usize>,
     pub parent: Option<usize>,    // mother/father index, for lineage & succession
     pub origin: Option<String>,   // where they came from; None = Thrushcombe-born
@@ -359,6 +361,7 @@ impl World {
             seen_as: 0,
             focus: Preoccupation::default(),
             confined: None,
+            displaced: None,
             secret: String::new(),
         };
         let mut agents = vec![
@@ -1882,6 +1885,7 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                     Some(v) if world.agents[v].active() => {
                         let from = world.agents[v].seat.clone();
                         world.agents[v].seat = place.clone();
+                        world.agents[v].displaced = Some(from.clone()); // reeling, no account of how
                         nudge_mood(&mut world.agents[v], -12); // the lurch of the impossible
                         out.push(mk("uncanny", t, format!("{t} was, between one breath and the next, no longer at {from} but standing in {place} — with no memory of any step that took them there, and no account they could give of how it came to be.")));
                         world.spawn_news_idx(v, &format!("the morning {t} was somewhere, and then without a step was somewhere else entirely"), -1, day, &[v]);
@@ -2118,6 +2122,7 @@ fn make_agent(name: &str, arch: &str, seat: &str, standing: i32, purse: i32, sex
         seen_as: 0,
         focus: Preoccupation::default(),
         confined: None,
+        displaced: None,
         secret: String::new(),
     }
 }
@@ -4534,7 +4539,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 52;
+const SNAPSHOT_VERSION: i64 = 53;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 

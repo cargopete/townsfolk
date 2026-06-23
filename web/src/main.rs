@@ -867,6 +867,12 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         " IMPORTANT — YOU ARE A PRISONER. You are held in {place} and you cannot leave; you have been shut behind a locked door for weeks, cut off from your home, your work, the lanes and the harvest, and {sname} has come to speak with you through your confinement. Speak only as one imprisoned — of the cold and the stone, the long hours, what little you can see or hear, how you came to be here and what you dread is coming. You do NOT make the easy small talk of a free man, and you do not speak of your work or the harvest as though you were at large, because you are not. Anyone who speaks with you knows full well you are a prisoner.",
         sname = s.name,
     )).unwrap_or_default();
+    // a just-displaced soul has been plucked across space by no means they can name — the solid
+    // ground of the world has cracked under them, and they cannot rationalise it away.
+    let displaced = t.displaced.as_ref().map(|from| format!(
+        " IMPORTANT — SOMETHING IMPOSSIBLE HAS JUST HAPPENED TO YOU. One breath ago you were at {from}; the next breath, with no step taken, no door passed, no journey and no time elapsed, you found yourself standing where you are now ({seat}). There was no walking and no being carried. It simply happened, between one heartbeat and the next, and it cannot have happened, and yet it has — and you have NO account of it to give. Do NOT invent a sensible reason (you did not walk in, no girl showed you inside, no one led you here, you did not doze off and wake) — there is no sensible reason, and that is the whole horror of it. You are shaken to your foundations: bewildered, frightened, your lifelong certainty that the world is solid and orderly cracked clean through. Speak from inside that bewilderment. And if {sname} suggests this proves the world is not the fixed, real place you took it for, you can no longer simply laugh it off the way you would have an hour ago — for it has just happened to you, in your own body, and you cannot explain it.",
+        seat = t.seat, sname = s.name,
+    )).unwrap_or_default();
     // embodiment & selfhood: a soul knows its own body and holds itself as a living, conscious person —
     // not a disembodied voice. Their portrait, felt from the inside, plus the conviction of being here.
     let embodiment = sim.appearance(&t.name).ok().flatten().map(|look| format!(
@@ -907,7 +913,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
             let happ: Vec<String> = recent.into_iter().rev().map(|e| e.text).collect();
             if !happ.is_empty() { p.push_str(&format!(" Lately about the parish: {}", happ.join(" "))); }
         }
-        p.push_str(&embodiment); p.push_str(&body); p.push_str(&wedding); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement);
+        p.push_str(&embodiment); p.push_str(&body); p.push_str(&wedding); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement); p.push_str(&displaced);
         return Some(p);
     }
 
@@ -926,7 +932,7 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
         want = want, sname = s.name, srole = srole, station = station, feeling = feeling,
     );
-    p.push_str(&embodiment); p.push_str(&body); p.push_str(&wedding); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement);
+    p.push_str(&embodiment); p.push_str(&body); p.push_str(&wedding); p.push_str(&birthday); p.push_str(&dream); p.push_str(&confinement); p.push_str(&displaced);
     // the truth of who they are bound to — so they never invent a spouse or forget a child,
     // and the bond between the two speakers is named plainly (kin, marriage, or a suit).
     p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
