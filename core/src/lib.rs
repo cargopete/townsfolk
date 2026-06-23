@@ -2260,6 +2260,27 @@ pub fn body_sense(a: &Agent, day: i64, date: Date) -> String {
     format!("Your body, this hour: you are {}.", parts.join("; "))
 }
 
+/// What the parish knows of any wedding now pending — fed to every soul so the betrothed carry the
+/// certain fact of their own coming marriage (the date, the place), and the whole town carries the
+/// wedding it is full of talk about. Without this, souls speak as though no match had been settled.
+pub fn weddings_brief(w: &World, idx: usize, day: i64) -> String {
+    let mut out = String::new();
+    for wed in &w.weddings {
+        let days = (wed.scheduled - day).max(0);
+        let when = if days <= 0 { "this very day".to_string() }
+            else if days == 1 { "tomorrow".to_string() }
+            else if days <= 10 { format!("in {days} days' time") }
+            else { format!("in some {days} days") };
+        if idx == wed.a || idx == wed.b {
+            let partner = if idx == wed.a { &wed.b_name } else { &wed.a_name };
+            out.push_str(&format!(" YOUR OWN WEDDING IS SETTLED AND NEAR: you are betrothed to {partner}, and the two of you are to be married {when}, in the parish church, with the feast to follow at {}. It is no longer a question or a mere understanding but a fixed and certain thing, the banns as good as called, and it fills your mind.", wed.venue));
+        } else {
+            out.push_str(&format!(" A wedding the whole parish is full of: {} and {} are to be married {when}, in the church, the feast at {}. Everyone knows of it and everyone has a view.", wed.a_name, wed.b_name, wed.venue));
+        }
+    }
+    out
+}
+
 pub fn mood_of(a: &Agent) -> &'static str {
     if a.mood <= -55
         && a.memories.iter().any(|m| m.kind == "grief" && m.salience >= 50)
@@ -6330,6 +6351,7 @@ impl Sim {
             dossier.push_str(&format!("\nLast night you dreamed, and it lingers half-remembered into the day: {dream}"));
         }
         dossier.push_str(&format!("\n{}", relationships_brief(w, idx, day)));
+        dossier.push_str(&weddings_brief(w, idx, day));
         if !friends.is_empty() { dossier.push_str(&format!("\nThey are close to: {friends}.")); }
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
         if let Some(r) = feud { dossier.push_str(&format!("\nThey nurse a running grudge against {r}.")); }
