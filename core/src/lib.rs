@@ -6129,6 +6129,24 @@ impl Sim {
         out
     }
 
+    /// The `n` least-recently-pulsed souls (a soul never pulsed comes first) — for the bot's
+    /// continuous real-time murmur, a small rotating handful each cycle so the whole town comes
+    /// round in turn. `n == 0` gives the whole town.
+    pub fn pulse_subjects(&self, today: Date, n: usize) -> Vec<(String, String)> {
+        let all = self.pulse_roster(today);
+        if n == 0 || n >= all.len() { return all; }
+        let mut last: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        if let Ok(mut stmt) = self.conn.prepare("SELECT subject, MAX(id) FROM pulses GROUP BY subject") {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                for row in rows.flatten() { last.insert(row.0, row.1); }
+            }
+        }
+        let mut ordered = all;
+        ordered.sort_by_key(|(name, _)| last.get(name).copied().unwrap_or(-1)); // never-pulsed (-1) first
+        ordered.truncate(n);
+        ordered
+    }
+
     /// One soul's reflections, newest first, dated — for their own thought history.
     pub fn reflections_of(&self, name: &str, limit: i64) -> rusqlite::Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(

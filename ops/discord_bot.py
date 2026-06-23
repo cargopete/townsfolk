@@ -7,7 +7,7 @@ that channel), asks the sim for that soul's in-character reply (POST /talk/say, 
 and posts it back through the channel webhook AS that townsperson — own name, own portrait.
 
 One bot, sixty voices. Run as a persistent service (ops/thrushcombe-discord.service)."""
-import json, os, pathlib, urllib.request, urllib.error, base64, asyncio, random, re
+import json, os, pathlib, urllib.request, urllib.error, base64, asyncio, random, re, sqlite3
 import discord
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -30,11 +30,14 @@ BY_ID = {int(c["channel_id"]): (slug, c["seat_key"], c["webhook"]) for slug, c i
 PLACES_SORTED = sorted([(c["seat_key"], slug) for slug, c in CH.items() if not c["seat_key"].startswith("__")],
                        key=lambda kv: -len(kv[0]))
 CHRONICLE = next((s for s, c in CH.items() if c["seat_key"] == "__chronicle__"), "town-chronicle")
+MURMUR = next((s for s, c in CH.items() if c["seat_key"] == "__murmur__"), None)
 
 # live townie-to-townie encounters, staged by the sim between the hourly beats
 THRUSH = ROOT / "target" / "release" / "thrush"
 DB = ROOT / "world.db"
 ENCOUNTER_INTERVAL = 600                  # seconds between staged encounters (~6/hour)
+MURMUR_INTERVAL = 540                     # seconds between the continuous-consciousness murmur (~6/hour)
+MURMUR_BATCH = 6                          # souls who think aloud each murmur cycle (least-recent first)
 
 # the overthrow plot is OVER (the petition collapsed, the cell broke) — the conspiracy loop is retired.
 CONSPIRATORS = ["Mr Coad", "Tot Wragg", "Jeb Pascoe", "Mr Vye", "Mr Dunnage"]
@@ -222,6 +225,43 @@ async def housekeeper():
         refresh_roster()
 
 
+async def murmur():
+    """The town's continuous consciousness, streamed in real time: every cycle a rotating handful of
+    souls (least-recently thought, so the whole town comes round) pulse one present thought, and the
+    bot streams them to #the-town-thinking — so the place is visibly alive whether anyone is here or
+    not. Cheap: one batched oracle call per cycle. This is the heartbeat of the always-on town."""
+    if not MURMUR:
+        return
+    while True:
+        await asyncio.sleep(MURMUR_INTERVAL)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(THRUSH), "--db", str(DB), "pulse", "--count", str(MURMUR_BATCH),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL, env=SUBENV)
+            await proc.communicate()
+        except Exception as e:
+            print("murmur pulse failed:", e); continue
+        try:
+            con = sqlite3.connect(str(DB))
+            rows = con.execute("SELECT subject, thought FROM pulses ORDER BY id DESC LIMIT ?", (MURMUR_BATCH,)).fetchall()
+            con.close()
+        except Exception as e:
+            print("murmur read failed:", e); continue
+        webhook = CH[MURMUR]["webhook"]
+        ch = client.get_channel(int(CH[MURMUR]["channel_id"]))
+        for name, thought in reversed(rows):
+            r = BY_NAME.get(name.lower())
+            try:
+                if ch:
+                    async with ch.typing():
+                        await asyncio.sleep(0.8)
+                post_as(webhook, name, r["idx"] if r else 0, f"\U0001f4ad _{thought}_")
+            except Exception as e:
+                print("murmur post failed:", e)
+            await asyncio.sleep(0.6)
+        print(f"murmur: {len(rows)} thoughts streamed")
+
+
 async def encounters():
     """Stage live townie-to-townie talk between the hourly beats: the sim picks two souls, the talk
     is generated AND recorded (its residue folds back into the world), and the bot posts it line by
@@ -316,6 +356,7 @@ async def on_ready():
     print(f"Thrushcombe bot online as {client.user} — Pete Peckers at the keyboard, {len(BY_ID)} channels")
     client.loop.create_task(housekeeper())
     client.loop.create_task(encounters())
+    client.loop.create_task(murmur())          # the always-on heartbeat: the town thinks in real time
     # conspiracy() retired — the overthrow plot has run its course
 
 

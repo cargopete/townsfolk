@@ -122,6 +122,10 @@ enum Cmd {
         /// How many souls per oracle call (one call returns this many one-line thoughts).
         #[arg(long, default_value_t = 12)]
         batch: usize,
+        /// Pulse only this many souls (the least-recently-pulsed first) — 0 = the whole town. For
+        /// the bot's real-time murmur, a small rotating handful each cycle.
+        #[arg(long, default_value_t = 0)]
+        count: usize,
     },
     /// The unconscious: render a vivid nightly dream for the most psychologically-charged souls —
     /// the day's residue metabolised in the symbolic logic of sleep, carried into the next day.
@@ -971,11 +975,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 sim.catch_up(today(), cur_phase())?; // fold all the batch's residues in one pass
             }
         }
-        Cmd::Pulse { batch } => {
+        Cmd::Pulse { batch, count } => {
             let mut sim = Sim::open(&cli.db)?;
             sim.catch_up(today(), cur_phase())?;
             let t = today();
-            let roster = sim.pulse_roster(t);           // (name, brief) for every living soul
+            let roster = sim.pulse_subjects(t, count);  // (name, brief) — whole town, or a rotating few
             if roster.is_empty() { return Ok(()); }
             let batch = batch.clamp(4, 24);
             let chunks: Vec<Vec<(String, String)>> = roster.chunks(batch).map(|c| c.to_vec()).collect();
