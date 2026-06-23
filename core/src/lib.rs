@@ -1594,12 +1594,17 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 // An existing soul takes on a vacated office — a rise in standing and means. If a
                 // killing is open, the parish marks the one who profits by a death, and suspicion
                 // gathers on them: the negative talk both lands now and feeds the inquest for weeks.
-                let role = if iv.note.is_empty() { "new duties in the town".to_string() } else { iv.note.clone() };
+                // --note is "role" or "role|seat" — the latter moves them to the trade's place (a shop,
+                // a forge) as they take it up, so a soul steps into a vacated seat as well as a trade.
+                let mut np = iv.note.splitn(2, '|');
+                let role = np.next().map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("new duties in the town").to_string();
+                let new_seat = np.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                 let rise = if iv.amount > 0 { iv.amount } else { 8 };
                 if let Some(a) = world.agent_mut(t) {
                     clamp_standing(a, rise);
                     a.purse += rise * 2; // the office's emolument
                     a.trade = Some(role.clone());
+                    if let Some(seat) = new_seat { a.seat = seat; }
                 }
                 out.push(mk("succession", t, format!("{t} has taken on {role}, and risen in the town's eyes for it.")));
                 world.spawn_news(t, &format!("{t} coming into {role}"), 2, day, &[]);
@@ -1865,6 +1870,31 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                         world.spawn_news_open(&an, &format!("the betrothal of {bn} and {an}, to wed in a month"), if cross { -1 } else { 2 }, day);
                     }
                     _ => out.push(mk("providence", t, format!("A betrothal was spoken of, but {t} or {groom} was not to be found."))),
+                }
+            }
+            "execute" => {
+                // A public hanging by the law: the condemned is put to death before the assembled
+                // parish, a funeral follows, and the town is left torn between relief that the danger
+                // is gone and horror at the doing. --target the condemned; --note the framing/charge.
+                match world.idx(t) {
+                    Some(v) if world.agents[v].active() => {
+                        let seat = world.agents[v].seat.clone();
+                        world.agents[v].death_day = Some(day);
+                        world.agents[v].courting = -1;
+                        world.agents[v].rival = -1;
+                        let how = if iv.note.is_empty() {
+                            "hanged before the assembled parish for the murders that had haunted the year".to_string()
+                        } else { iv.note.clone() };
+                        out.push(mk("execution", t, format!("{t}, of {seat}, was {how}. The law had its reckoning at last, and the parish stood in the square and watched it done.")));
+                        let all: Vec<usize> = (0..world.agents.len()).filter(|&i| world.agents[i].active()).collect();
+                        world.spawn_news_idx(v, &format!("the hanging of {t}"), -2, day, &all);
+                        for k in 0..world.agents.len() {
+                            if world.agents[k].active() { nudge_mood(&mut world.agents[k], -10); } // relief and horror at once
+                        }
+                        world.funerals.push(Funeral { who: v, name: t.clone(), scheduled: day + FUNERAL_DELAY, murdered: false });
+                        if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) { q.closed = true; q.hanged = true; }
+                    }
+                    _ => out.push(mk("providence", t, format!("There is no {t} to bring to the gallows."))),
                 }
             }
             "confine" => {
@@ -4487,7 +4517,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 49;
+const SNAPSHOT_VERSION: i64 = 51;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
