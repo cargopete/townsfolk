@@ -2968,7 +2968,7 @@ fn update_self_regard(world: &mut World, _day: i64) {
 /// already presses feuds and plans toward a reckoning. Initiative, sprung from within.
 fn form_aims(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
     let mut out = Vec::new();
-    let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "intent".into(), actor: actor.into(), text };
+    let mk = |actor: &str, text: String| Event { day, date: date.to_string(), kind: "resolve".into(), actor: actor.into(), text };
     let mut rng = rng_for(seed ^ 0xA14E_0000_0000, day);
     let n = world.agents.len();
     for i in 0..n {
@@ -3029,6 +3029,38 @@ fn form_aims(world: &mut World, day: i64, date: Date, seed: u64) -> Vec<Event> {
                 let nm = world.agents[i].name.clone();
                 out.push(mk(&nm, format!("{nm} has set themselves a bold scheme of their own devising, to make their fortune or break upon it.")));
                 world.spawn_news(&nm, &format!("the bold scheme {nm} has lately set themselves"), 1, day, &[]);
+            }
+        }
+
+        // (3) an ambition of one's own, fitting the station — ANY soul, now and then, sets themselves
+        //     a personal aim and bends their weeks toward it: to mend a thin purse, to better their
+        //     standing, or (with means and nerve) a venture. Bid by no one; this is how a whole town
+        //     comes to be full of people each quietly chasing a thing of their own.
+        if world.agents[i].intent == 0 && world.agents[i].rival < 0 && world.agents[i].archetype != "child" {
+            let top = world.agents.iter().filter(|x| x.active()).map(|x| x.standing).max().unwrap_or(0);
+            let a = &world.agents[i];
+            let under_cloud = world.inquest.as_ref().is_some_and(|q| !q.closed) && a.suspicion >= 60;
+            let pick = if under_cloud {
+                None
+            } else if a.purse < 0 {
+                Some((1u8, (a.purse + 60).max(25), "mend their fortunes"))
+            } else if a.standing < top - 18 {
+                Some((2u8, (a.standing + 14).min(95), "better their standing in the parish"))
+            } else if (40..160).contains(&a.purse) && a.mood >= -20 {
+                Some((3u8, a.purse + 60, "a venture of their own devising"))
+            } else {
+                None
+            };
+            if let Some((kind, goal, what)) = pick {
+                if rng.gen_bool(0.025) {
+                    world.agents[i].intent = kind;
+                    world.agents[i].intent_goal = goal;
+                    world.agents[i].intent_age = 0;
+                    world.agents[i].goal = match kind { 1 => 1, 2 => 2, _ => 5 };
+                    let nm = world.agents[i].name.clone();
+                    out.push(mk(&nm, format!("{nm} has set themselves, of their own resolve, to {what} — and means to bend the coming weeks to it.")));
+                    world.spawn_news(&nm, &format!("how {nm} has set themselves to {what}"), 0, day, &[]);
+                }
             }
         }
     }
@@ -4429,12 +4461,12 @@ pub struct Report {
 pub const SALIENT: &[&str] = &[
     "calving", "party", "windfall", "scheme", "bureaucracy", "weather", "status", "household", "gossip",
     "death", "succession", "marriage", "birth", "comingofage", "feud", "bond", "providence", "triumph", "courtship", "decree", "show", "rivalry", "talk", "intent",
-    "murder", "inquest", "funeral", "birthday",
+    "murder", "inquest", "funeral", "birthday", "resolve",
 ];
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 48;
+const SNAPSHOT_VERSION: i64 = 49;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
@@ -6302,8 +6334,11 @@ impl Sim {
         if !odds.is_empty() { dossier.push_str(&format!("\nThey are at odds with: {odds}.")); }
         if let Some(r) = feud { dossier.push_str(&format!("\nThey nurse a running grudge against {r}.")); }
         if ag.intent != 0 {
-            let what = match ag.intent { 1 => "to mend their fortunes", 2 => "to better their station", _ => "a bold venture" };
-            dossier.push_str(&format!("\nThey are already set on a plan — {what} — resolved {} days since, and not yet come to its head.", ag.intent_age));
+            let what = match ag.intent { 1 => "to mend your own fortunes", 2 => "to better your standing in the parish", _ => "a bold venture of your own devising" };
+            dossier.push_str(&format!(
+                "\nAN AMBITION OF YOUR OWN, set by no one but yourself {} days ago and not yet come to its head: {what}. You bend your days toward it of your own will; its reckoning draws nearer, and what you have made of it so far — the hope or the doubt of it — sits in you.",
+                ag.intent_age,
+            ));
         }
         if let Ok(Some(bio)) = self.biography(&ag.name) {
             dossier.push_str(&format!("\nThe life behind them: {bio}"));
