@@ -1881,14 +1881,20 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 // lurch is logged as their own uncanny memory, so it weighs on them when next they
                 // speak. --target the soul; --note the place they find themselves.
                 let place = if iv.note.is_empty() { "a place they had not been a breath before".to_string() } else { iv.note.clone() };
+                let settle = iv.amount < 0; // a gentle homecoming: set them down and let the strangeness go, no lurch
                 match world.idx(t) {
                     Some(v) if world.agents[v].active() => {
                         let from = world.agents[v].seat.clone();
                         world.agents[v].seat = place.clone();
-                        world.agents[v].displaced = Some(from.clone()); // reeling, no account of how
-                        nudge_mood(&mut world.agents[v], -12); // the lurch of the impossible
-                        out.push(mk("uncanny", t, format!("{t} was, between one breath and the next, no longer at {from} but standing in {place} — with no memory of any step that took them there, and no account they could give of how it came to be.")));
-                        world.spawn_news_idx(v, &format!("the morning {t} was somewhere, and then without a step was somewhere else entirely"), -1, day, &[v]);
+                        if settle {
+                            world.agents[v].displaced = None; // the shock lets go; they are themselves again
+                            out.push(mk("providence", t, format!("{t} was at {place} once more, and the strangeness of the day loosed its hold; whatever had happened was over, and they were themselves again, and let be.")));
+                        } else {
+                            world.agents[v].displaced = Some(from.clone()); // reeling, no account of how
+                            nudge_mood(&mut world.agents[v], -12); // the lurch of the impossible
+                            out.push(mk("uncanny", t, format!("{t} was, between one breath and the next, no longer at {from} but standing in {place} — with no memory of any step that took them there, and no account they could give of how it came to be.")));
+                            world.spawn_news_idx(v, &format!("the morning {t} was somewhere, and then without a step was somewhere else entirely"), -1, day, &[v]);
+                        }
                     }
                     _ => out.push(mk("providence", t, format!("There is no {t} to move."))),
                 }
@@ -4539,7 +4545,7 @@ pub const SALIENT: &[&str] = &[
 
 /// Bump when World layout or step_day logic changes — older snapshots are then ignored
 /// and the world re-folds from genesis (and writes fresh checkpoints).
-const SNAPSHOT_VERSION: i64 = 53;
+const SNAPSHOT_VERSION: i64 = 54;
 /// Checkpoint cadence in days. A read folds at most this many days past the last one.
 const SNAPSHOT_EVERY: i64 = 365 * 5; // a year of slots
 
