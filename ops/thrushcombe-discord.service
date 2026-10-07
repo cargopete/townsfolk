@@ -5,6 +5,7 @@ Wants=thrushcombe-web.service
 
 [Service]
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/pepe/townsfolk/ops/secrets.env
 WorkingDirectory=/home/pepe/townsfolk
 ExecStart=/home/pepe/townsfolk/.venv/bin/python /home/pepe/townsfolk/ops/discord_bot.py
 Restart=on-failure

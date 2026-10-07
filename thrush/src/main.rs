@@ -340,8 +340,14 @@ fn claude_text(system: &str, user: &str) -> Option<String> {
     use std::process::{Command, Stdio};
     let model = std::env::var("CLAUDE_MODEL").unwrap_or_else(|_| "sonnet".into());
     let bin = std::env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".into()); // absolute path for headless/cron
+    // A bare model call: our prompt replaces Claude Code's, no tools, and an empty config dir
+    // outside $HOME so no CLAUDE.md or memory rides along. Auth is CLAUDE_CODE_OAUTH_TOKEN.
+    let home = std::env::temp_dir().join("thrush-claude");
+    let _ = std::fs::create_dir_all(&home);
     let mut child = Command::new(bin)
-        .env_remove("ANTHROPIC_API_KEY").arg("-p").arg("--model").arg(&model).arg("--append-system-prompt").arg(system)
+        .current_dir(&home).env("CLAUDE_CONFIG_DIR", &home).env_remove("ANTHROPIC_API_KEY")
+        .arg("-p").arg("--model").arg(&model).arg("--system-prompt").arg(system)
+        .arg("--tools").arg("").arg("--strict-mcp-config")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().ok()?;
     { let mut si = child.stdin.take()?; si.write_all(user.as_bytes()).ok()?; } // drop closes stdin → claude runs

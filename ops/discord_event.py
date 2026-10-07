@@ -37,8 +37,12 @@ def send(hook, body):
 
 
 def account(prompt):
-    out = subprocess.run([CLAUDE, "-p", "--model", os.environ.get("CLAUDE_MODEL", "sonnet"), "--append-system-prompt", CHRON_SYS, prompt],
-                         capture_output=True, text=True, timeout=180, env=dict(os.environ))
+    # bare call: our prompt only, no tools, empty config outside $HOME (no CLAUDE.md riding along)
+    home = pathlib.Path("/tmp/thrush-claude"); home.mkdir(exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"} | {"CLAUDE_CONFIG_DIR": str(home)}
+    out = subprocess.run([CLAUDE, "-p", "--model", os.environ.get("CLAUDE_MODEL", "sonnet"), "--system-prompt", CHRON_SYS,
+                          "--tools", "", "--strict-mcp-config", prompt],
+                         capture_output=True, text=True, timeout=180, env=env, cwd=home)
     return out.stdout.strip()
 
 
