@@ -1,6 +1,5 @@
-//! Every archetype's policy as pure `no_std` integer logic — one `decide(...)` over the
-//! canonical scalar ABI. The same compiled code is the host's native engine *and* the
-//! wasm guest, so swapping the substrate is bit-for-bit transparent.
+//! Every archetype's policy as pure integer logic: one `decide(...)`, no I/O, no clock, its only
+//! randomness the per-soul, per-slot seed it is handed.
 //!
 //! The souls are now *situation-aware*: they decide with their ambition (goal), their
 //! spirits (mood), and who's about them (a friend or a rival present this phase).
@@ -10,7 +9,57 @@
 //! Action: 0 Idle · 1 PayCall · 2 GiveDinner · 3 Economise · 4 KeepUp · 5 TendStock ·
 //!         6 Haggle · 7 Graft · 8 Scheme · 9 Press · 10 Minister · 11 Round.
 //! Season: 0 Winter · 1 Lambing · 2 Sowing · 3 Hay · 4 Harvest · 5 Mart.
-#![no_std]
+
+use crate::{present_ties, Action, Season, SoulView};
+use time::Weekday;
+
+fn season_ord(s: Season) -> i32 {
+    match s {
+        Season::Winter => 0,
+        Season::Lambing => 1,
+        Season::Sowing => 2,
+        Season::Hay => 3,
+        Season::Harvest => 4,
+        Season::Mart => 5,
+    }
+}
+
+fn arch_ord(archetype: &str) -> i32 {
+    match archetype {
+        "genteel_status_seeker" => 0,
+        "hill_farmer" => 1,
+        "practitioner" => 2,
+        "scheming_improver" => 3,
+        "blunt_hand" => 4,
+        "official" => 5,
+        _ => -1,
+    }
+}
+
+/// A soul's intention for this phase, read from the whole of them.
+pub fn decide(v: &SoulView) -> Action {
+    let ord = arch_ord(&v.me.archetype);
+    if ord < 0 {
+        return Action::Idle;
+    }
+    let (friend, rival) = present_ties(v.world, v.i, v.places);
+    Action::from_i32(choose(
+        ord,
+        v.me.standing,
+        v.me.purse,
+        v.me.age(v.day),
+        v.me.spouse.is_some() as i32,
+        season_ord(Season::of(v.date)),
+        (v.date.weekday() == Weekday::Wednesday) as i32,
+        (v.date.weekday() == Weekday::Sunday) as i32,
+        v.top_standing,
+        v.me.goal as i32,
+        v.me.mood as i32,
+        friend as i32,
+        rival as i32,
+        v.rng,
+    ))
+}
 
 #[inline]
 fn mix(s: &mut u64) -> u64 {
@@ -26,9 +75,9 @@ fn chance(s: &mut u64, permille: i64) -> bool {
     permille > 0 && (mix(s) % 1000) < permille as u64
 }
 
-/// The one boundary the host and the wasm guest share. Flat observation in, action out.
+/// The archetype tables over the scalars `decide` reads off the soul.
 #[allow(clippy::too_many_arguments)]
-pub fn decide(
+fn choose(
     archetype: i32,
     standing: i32,
     purse: i32,

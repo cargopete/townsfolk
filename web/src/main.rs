@@ -117,11 +117,16 @@ fn fear_banner(sim: &Sim) -> String {
     if inq.closed && w.dread <= 0 { return String::new(); }
     let vn = esc(&inq.victim_name);
     let body = if inq.closed {
-        let who = (inq.accused >= 0).then(|| w.agents.get(inq.accused as usize).map(|a| esc(&a.name))).flatten().unwrap_or_else(|| "a soul".into());
+        let acc = (inq.accused >= 0).then(|| w.agents.get(inq.accused as usize)).flatten();
+        let who = acc.map(|a| esc(&a.name)).unwrap_or_else(|| "a soul".into());
+        if acc.is_some_and(|a| a.alive()) {
+            format!("<b>after the verdict</b> &nbsp; The town is still raw from {who} getting life for the murder of {vn}. No one is quite sure the jury got the right one, and the unease has not lifted.")
+        } else {
         format!("<b>after the hanging</b> &nbsp; The town is still raw from the hanging of {who} for the murder of {vn}. No one is quite sure the right neck was stretched, and the unease has not lifted.")
+        }
     } else if inq.accused >= 0 {
         let acc = w.agents.get(inq.accused as usize).map(|a| esc(&a.name)).unwrap_or_default();
-        format!("<b>murder &middot; the accused</b> &nbsp; {vn} was murdered, and the parish has fixed on <span class=suspect>{acc}</span> — the talk is openly of hanging.")
+        format!("<b>murder &middot; the accused</b> &nbsp; {vn} was murdered, and the parish has fixed on <span class=suspect>{acc}</span> — the talk is openly of an arrest.")
     } else {
         let most = (0..w.agents.len())
             .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i != inq.victim)
@@ -176,13 +181,13 @@ fn dashboard(sim: &Sim) -> String {
     // the detailed town board: where everyone is, what they're about, and next
     body.push_str("<h2>The town, this ");
     body.push_str(&esc(&d.phase));
-    body.push_str("</h2><table class=board><tr><th>Soul</th><th>Where</th><th>Doing now</th><th>Wants</th><th>Standing</th><th>£</th></tr>");
+    body.push_str("</h2><table class=board><tr><th>Soul</th><th>Where</th><th>Doing now</th><th>Wants</th><th>Standing</th><th>Money</th></tr>");
     for p in &d.people {
         body.push_str(&format!(
             "<tr><td class=who-cell><a href=/folk/{}>{}</a> <span class=date>{}y &middot; {}</span></td>\
              <td class=where data-label=Where>{}</td><td class=doing data-label='Doing now'>{}</td><td class=next data-label=Wants>{}</td>\
              <td data-label=Standing><span class=bars>{}</span></td><td class=num data-label=Purse>{}</td></tr>",
-            p.idx, esc(&p.name), p.age, esc(&p.mood), esc(&p.location), esc(&p.doing), esc(&p.wants), bar(p.standing), p.purse
+            p.idx, esc(&p.name), p.age, esc(&p.mood), esc(&p.location), esc(&p.doing), esc(&p.wants), bar(p.standing), thrush_core::money(p.purse)
         ));
     }
     body.push_str("</table>");
@@ -470,8 +475,8 @@ fn person(sim: &Sim, idx: usize) -> String {
     }
 
     body.push_str(&format!(
-        "<div class=card>standing <span class=bars>{}</span> {} &middot; purse £{}",
-        bar(a.standing), a.standing, a.purse
+        "<div class=card>standing <span class=bars>{}</span> {} &middot; {}",
+        bar(a.standing), a.standing, thrush_core::money(a.purse)
     ));
     // the body — embodiment: how worn or hale they are, and whether they ail
     {
@@ -801,12 +806,12 @@ fn day(sim: &Sim, url: &str) -> String {
 /// A short hint at how an archetype speaks, so a vet does not sound like a vicar.
 fn voice_of(arch: &str) -> &'static str {
     match arch {
-        "genteel" | "genteel_status_seeker" => "genteel and keenly class-conscious, given to delicate courtesies and barbs wrapped in politeness",
+        "genteel" | "genteel_status_seeker" => "county set, keenly class-conscious, given to polished courtesies and barbs wrapped in politeness",
         "parson" => "measured and a touch moralising, never far from scripture or the parish's good order",
         "vet" | "practitioner" => "practical, dry and plain-spoken, apt to reach for a remark about beasts or weather",
         "farmer" | "hill_farmer" => "blunt, weather-wise and sparing with words, suspicious of fine talk",
-        "improver" | "scheming_improver" => "restless and full of schemes and modern notions, impatient with old ways",
-        "hand" | "blunt_hand" => "rough and plain, deferential to your betters but shrewd underneath",
+        "improver" | "scheming_improver" => "restless and full of schemes (diversification, rewilding, a farm shop, a glamping field), impatient with old ways",
+        "hand" | "blunt_hand" => "rough and plain, quick with a joke, wary of the posh lot but shrewd underneath",
         _ => "plain-spoken and of the country",
     }
 }
@@ -817,19 +822,19 @@ fn learning_of(arch: &str, standing: i32) -> &'static str {
     match arch {
         "genteel" | "genteel_status_seeker" | "parson" | "improver" | "scheming_improver"
         | "vet" | "practitioner" => {
-            "You are lettered and read the newspapers: you hold your own provincial opinions on the \
-             wider world — the slump and the dole, the government, the troubles in Europe, the King \
-             and his doings — though you weigh them from a comfortable distance."
+            "You are educated and follow the news: you hold your own opinions on the wider world (the \
+             government, the cost of living, the war in Europe, farming policy, the royals) though you \
+             weigh them from a comfortable distance."
         }
         _ if standing >= 45 => {
-            "You read a little and follow the bigger news as it reaches the market, though you set \
-             more store by what you can see with your own eyes than by what the papers say."
+            "You catch the bigger news on your phone and at the market, though you set more store by \
+             what you can see with your own eyes than by what the papers or the internet say."
         }
         _ => {
-            "You are not much for letters: your world is the parish — the beasts, the weather, the \
-             market price, the chapel and the talk of the lane. Of national affairs you know only \
-             what you overhear or what the vicar and the gentry let fall, and on such matters you \
-             defer to your betters or turn the talk back to something nearer home."
+            "You are not much for the news: your world is the parish (the beasts, the weather, the \
+             mart price, the pub and the village WhatsApp). Of national affairs you know what scrolls \
+             past on your phone, and on such matters you shrug or turn the talk back to something \
+             nearer home."
         }
     }
 }
@@ -894,8 +899,8 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     if let Ok(Some(custom)) = sim.custom_persona(&t.name) {
         let mut p = custom;
         p.push_str(&format!(
-            "\n\n--- WHERE YOU ARE NOW ---\nIt is the year 1934, and you are in the West-Country market town of Thrushcombe St Mary, where you have lately come to stay. You are presently {mood}. You are speaking with {sname}, {srole}. {station}. {feeling} \
-             You know only what a man of your learning could know in 1934 — nothing of any matter after this year, no machine that thinks, no notion not yet born; should a stranger speak of such things you do not take their meaning, or mishear it for something of your own world, and you never break the year. Never mention being an AI or a model; never narrate stage directions or describe your own tone.",
+            "\n\n--- WHERE YOU ARE NOW ---\nIt is the present day, 2026, and you are in the West-Country market town of Thrushcombe St Mary in rural England, where you have lately come to stay. You are presently {mood}. You are speaking with {sname}, {srole}. {station}. {feeling} \
+             You live now and know what a person of your learning knows in 2026. You are a person, not a character in anything; Never mention being an AI or a model; never narrate stage directions or describe your own tone.",
             mood = thrush_core::mood_of(t), sname = s.name, srole = srole, station = station, feeling = feeling,
         ));
         p.push_str(&format!(" {}", thrush_core::relationships_brief(&w, target, day)));
@@ -918,15 +923,14 @@ fn persona(sim: &Sim, source: usize, target: usize) -> Option<String> {
     }
 
     let mut p = format!(
-        "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary in the year 1934. \
+        "You are {name}, {role} of {seat}, aged {age}, in the West-Country market town of Thrushcombe St Mary, in present-day rural England (2026). \
          You are {voice}. Your standing is {standing} of a hundred and you are presently {mood}. What you want of life: {want}. \
          You are speaking with {sname}, {srole}. {station}. {feeling} \
          Speak as {name} would, and let your regard and your station set your warmth: where you are fond, be warm; where there is real coldness or a grudge, let it tell in dry reserve or a barb wrapped in courtesy, not open abuse; where you feel little either way, be civil and easy. \
-         Keep your place — to a clear superior you stay courteous and a touch deferential even when you privately bridle, and you do not openly insult your betters; to those beneath you, be gracious or coolly condescending, never a brawler. \
+         Class still tells in the countryside — to someone clearly above you socially you stay civil even when you privately bridle; to those beneath you, be gracious or coolly condescending, never a brawler. \
          Be particular and true to yourself, never blandly agreeable, but never manufacture a quarrel where there is no cause. \
          Vary your phrasing; do not lean on stock fillers — avoid beginning successive lines with 'I daresay', 'I warrant' or the like. \
-         You know only what a soul of your station and schooling could know in the year 1934: you have never heard of machines that think, of computers or simulations, of flight to the moon, nor of any matter after this year. \
-         Should a stranger speak of such things the words carry no meaning for you — you mishear them for something from your own world, or say plainly you do not take their meaning, and you never explain a notion you could not have had. About your own world, though, you are nobody's fool. \
+         Speak in plain present-day English true to their age, class and schooling (a farmer's West Country, the county set's clipped vowels, a young hand's slang), never period pastiche or 1930s idiom. You live now and know what someone of your age and schooling knows in 2026: phones, the internet, the news. You are a real person living a real life here, and if someone suggests otherwise you treat it as the odd remark it is. About your own world you are nobody's fool. \
          Never mention being an AI or a model; never break character; never narrate stage directions or describe your own tone.",
         name = t.name, role = role, seat = seat_str, age = t.age(day),
         voice = voice_of(&t.archetype), standing = t.standing, mood = thrush_core::mood_of(t),
@@ -1026,7 +1030,7 @@ fn claude_text(system: &str, user: &str) -> Option<String> {
     use std::process::{Command, Stdio};
     let model = std::env::var("CLAUDE_MODEL").unwrap_or_else(|_| "sonnet".into());
     let mut child = Command::new(claude_bin())
-        .arg("-p").arg("--model").arg(&model).arg("--append-system-prompt").arg(system)
+        .env_remove("ANTHROPIC_API_KEY").arg("-p").arg("--model").arg(&model).arg("--append-system-prompt").arg(system)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().ok()?;
     { let mut si = child.stdin.take()?; si.write_all(user.as_bytes()).ok()?; }
@@ -1072,7 +1076,7 @@ fn chat_reply_raw(system: &str, user: &str) -> Option<String> {
 /// cool toward the source, and what one line do they keep of it?
 fn assess_dialogue(target_name: &str, source_name: &str, transcript: &str) -> Option<(String, String, String)> {
     let sys = format!(
-        "You judge how a conversation has left {target}, a soul of a 1934 West-Country town, feeling about {source}. \
+        "You judge how a conversation has left {target}, a soul of a present-day West-Country town, feeling about {source}. \
          Respond ONLY as JSON: {{\"warmth\": one of [warmer, colder, unchanged], \"memory\": one short sentence in {target}'s own voice of what they now think of {source}, \"sway\": one of [none, debt, rise, prosper, content, reconcile]}}. \
          Default to 'unchanged' — most talk leaves regard where it was. Reserve 'warmer' for a genuinely warming exchange and 'colder' for real friction or a slight; mere courtesy, or plain civility across a difference of station, is 'unchanged', not warmer. \
          Let the memory keep {target}'s own station and regard — a plain soul speaks of a social better with deference, a better of a lesser from a height, not as easy equals. \

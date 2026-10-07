@@ -1,0 +1,13 @@
+[Unit]
+Description=Thrushcombe reader (thrush-web on 127.0.0.1:8717)
+After=network-online.target
+
+[Service]
+EnvironmentFile=-/home/pepe/townsfolk/ops/secrets.env
+Environment=PATH=/home/pepe/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pepe/townsfolk/target/release/thrush-web /home/pepe/townsfolk/world.db
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

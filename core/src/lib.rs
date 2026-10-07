@@ -7,7 +7,7 @@
 //!
 //! v0.1 scope: the clock + season machine + a small seeded cast + a daily incident
 //! generator drawn from the current season's armed risks/windfalls, all logged to
-//! SQLite for the chronicle. The full WASM behaviour layer and gossip diffusion come
+//! SQLite for the chronicle. The behaviour layer and gossip diffusion came
 //! later; this is the watchable spine.
 
 use rand::{Rng, SeedableRng};
@@ -16,6 +16,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use time::{Date, Month};
+
+mod policy;
 
 // ----------------------------------------------------------------------------- calendar
 
@@ -647,7 +649,7 @@ fn rng_for(seed: u64, day: i64) -> ChaCha8Rng {
 /// they'd really happen, so beats fall across the day instead of in a midnight lump.
 /// Deterministic in (seed, day, phase, world-state-from-prior-slots).
 #[allow(clippy::too_many_arguments)]
-fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>, wildcards: &BTreeMap<i64, Vec<Wildcard>>, decrees: &BTreeMap<i64, Vec<Decree>>) -> Vec<Event> {
+fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, interventions: &BTreeMap<i64, Vec<Intervention>>, weather: &BTreeMap<i64, DayWeather>, wildcards: &BTreeMap<i64, Vec<Wildcard>>, decrees: &BTreeMap<i64, Vec<Decree>>) -> Vec<Event> {
     let mut out = Vec::new();
     let mk = |kind: &str, actor: &str, text: String| Event { day, date: date.to_string(), kind: kind.into(), actor: actor.into(), text };
 
@@ -691,7 +693,7 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
     }
 
     // --- the behaviour layer: whoever is out and about this phase acts in character ---
-    behaviour_phase(world, day, phase, date, seed, engine, &mut out);
+    behaviour_phase(world, day, phase, date, seed, &mut out);
 
     // --- the forenoon hub: feuds and friendships at the market & church door ---
     if matches!(phase, Phase::Forenoon) {
@@ -712,7 +714,7 @@ fn step_slot(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, e
     out
 }
 
-fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, engine: &dyn PolicyEngine, out: &mut Vec<Event>) {
+fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: u64, out: &mut Vec<Event>) {
     let top = world.agents.iter().filter(|a| a.active()).map(|a| a.standing).max().unwrap_or(0);
     let actors: Vec<usize> = (0..world.agents.len())
         .filter(|&i| world.agents[i].active() && acts_in_phase(&world.agents[i].archetype, phase))
@@ -723,9 +725,7 @@ fn behaviour_phase(world: &mut World, day: i64, phase: Phase, date: Date, seed: 
         .map(|j| if world.agents[j].active() { placement(&world.agents[j], phase, wd) } else { String::new() })
         .collect();
     for i in actors {
-        let (friend, rival) = present_ties(world, i, &places);
-        let obs = observe(world, i, day, date, top, seed, phase, friend, rival);
-        let action = engine.decide(&world.agents[i].archetype, &obs);
+        let action = policy::decide(&view(world, i, day, date, top, seed, phase, &places));
         if matches!(action, Action::Idle) {
             continue;
         }
@@ -862,7 +862,7 @@ fn name_list(world: &World, idxs: &[usize]) -> String {
 /// Is a friend (warm) or a rival (cold) co-located with `i` this phase?
 fn present_ties(world: &World, i: usize, places: &[String]) -> (bool, bool) {
     let (mut friend, mut rival) = (false, false);
-    if places[i].is_empty() {
+    if places.get(i).is_none_or(|p| p.is_empty()) {
         return (false, false);
     }
     for j in 0..world.agents.len() {
@@ -884,29 +884,22 @@ fn present_ties(world: &World, i: usize, places: &[String]) -> (bool, bool) {
 
 // ----------------------------------------------------------------------------- behaviour
 //
-// The policy layer. Every present adult decides a day's intention from a flat
-// Observation and returns an Action the host arbitrates. This is the contract a WASM
-// guest would implement verbatim: `decide(observation) -> action`, one module per
-// archetype, host materialises the observation and applies the action. Today the
-// policies are native Rust behind that boundary; swapping in wasmtime is a substrate
-// change, not a redesign. Crucially it is *generative for any holder of a role* — a
-// great-grandchild who inherits The Laurels behaves in character with no new code.
+// The policy layer. Every present adult decides a day's intention from a view of their
+// whole soul and returns an Action the host arbitrates. It is generative for any holder of
+// a role: a great-grandchild who inherits The Laurels behaves in character with no new code.
 
-/// What an agent can see of the world on a given day. Flat and self-contained.
-pub struct Observation {
-    pub standing: i32,
-    pub purse: i32,
-    pub age: i64,
-    pub married: bool,
-    pub season: Season,
-    pub is_market: bool, // Wednesday
-    pub is_sunday: bool,
-    pub top_standing: i32, // the grandest in town — the bar status is measured against
-    pub goal: i32,         // their ambition (kind ordinal)
-    pub mood: i32,         // their present spirits
-    pub friend_present: bool,
-    pub rival_present: bool,
-    pub rng: u64,          // per-agent, per-day deterministic seed for stochastic choice
+/// Everything a soul can know when it decides. Read-only. `world` is there for convenience, so
+/// keeping a policy to what the soul could plausibly know (not another soul's secret) is review's job.
+pub struct SoulView<'a> {
+    pub me: &'a Agent,
+    pub i: usize,
+    pub world: &'a World,
+    pub places: &'a [String], // where everyone is this phase; empty when unknown
+    pub day: i64,
+    pub phase: Phase,
+    pub date: Date,
+    pub top_standing: i32, // the grandest in town, the bar status is measured against
+    pub rng: u64,          // per-soul, per-slot deterministic seed for stochastic choice
 }
 
 /// A day's intention. Most days are `Idle` (routine, no beat).
@@ -925,21 +918,17 @@ pub enum Action {
     Round,      // vet: the rounds, the connector
 }
 
-fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, phase: Phase, friend: bool, rival: bool) -> Observation {
-    let a = &world.agents[i];
-    Observation {
-        standing: a.standing,
-        purse: a.purse,
-        age: a.age(day),
-        married: a.spouse.is_some(),
-        season: Season::of(date),
-        is_market: date.weekday() == Weekday::Wednesday,
-        is_sunday: date.weekday() == Weekday::Sunday,
+#[allow(clippy::too_many_arguments)]
+fn view<'a>(world: &'a World, i: usize, day: i64, date: Date, top: i32, seed: u64, phase: Phase, places: &'a [String]) -> SoulView<'a> {
+    SoulView {
+        me: &world.agents[i],
+        i,
+        world,
+        places,
+        day,
+        phase,
+        date,
         top_standing: top,
-        goal: a.goal as i32,
-        mood: a.mood as i32,
-        friend_present: friend,
-        rival_present: rival,
         rng: seed
             ^ 0xB6E1_0000_0000
             ^ ((day * PHASES + phase.ord()) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -948,7 +937,7 @@ fn observe(world: &World, i: usize, day: i64, date: Date, top: i32, seed: u64, p
 }
 
 impl Action {
-    /// The stable action ordinal shared with the policy crates / wasm guests.
+    /// The action ordinal the policy returns.
     pub fn from_i32(n: i32) -> Action {
         match n {
             1 => Action::PayCall,
@@ -1174,72 +1163,6 @@ fn routine_doing(a: &Agent, phase: Phase, wd: Weekday) -> String {
         },
         _ => "about the day".into(),
     }
-}
-
-pub fn season_ord(s: Season) -> i32 {
-    match s {
-        Season::Winter => 0,
-        Season::Lambing => 1,
-        Season::Sowing => 2,
-        Season::Hay => 3,
-        Season::Harvest => 4,
-        Season::Mart => 5,
-    }
-}
-
-/// How an agent's behaviour is computed. The native engine runs the policies in-process;
-/// a wasm engine (in the host binary) routes archetypes to sandboxed guest modules behind
-/// this exact boundary. `decide(observation) -> action`, nothing else crosses.
-pub trait PolicyEngine {
-    fn decide(&self, archetype: &str, o: &Observation) -> Action;
-}
-
-/// The in-process engine. Genteel runs the shared `policy-genteel` crate — the very code
-/// the wasm guest also compiles — so native and wasm decisions are identical.
-pub struct NativePolicies;
-
-impl PolicyEngine for NativePolicies {
-    fn decide(&self, archetype: &str, o: &Observation) -> Action {
-        decide(archetype, o)
-    }
-}
-
-/// The behaviour-layer archetypes, by ordinal (shared with the policy crate / wasm guest).
-pub fn arch_ord(archetype: &str) -> i32 {
-    match archetype {
-        "genteel_status_seeker" => 0,
-        "hill_farmer" => 1,
-        "practitioner" => 2,
-        "scheming_improver" => 3,
-        "blunt_hand" => 4,
-        "official" => 5,
-        _ => -1,
-    }
-}
-
-/// The pooled native policy — every archetype computed by the shared `policies` crate (the
-/// very code the wasm guest also runs), so native and wasm decisions agree bit-for-bit.
-fn decide(archetype: &str, o: &Observation) -> Action {
-    let ord = arch_ord(archetype);
-    if ord < 0 {
-        return Action::Idle;
-    }
-    Action::from_i32(policies::decide(
-        ord,
-        o.standing,
-        o.purse,
-        o.age,
-        o.married as i32,
-        season_ord(o.season),
-        o.is_market as i32,
-        o.is_sunday as i32,
-        o.top_standing,
-        o.goal,
-        o.mood,
-        o.friend_present as i32,
-        o.rival_present as i32,
-        o.rng,
-    ))
 }
 
 /// Apply an action: mutate the world, emit a chronicle beat, and (for the juicy ones)
@@ -1546,13 +1469,13 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
             "loan" => {
                 let amt = if iv.amount > 0 { iv.amount } else { 40 };
                 if let Some(a) = world.agent_mut(t) { a.purse -= amt; }
-                out.push(mk("providence", t, format!("The bank called in {t}'s loan — £{amt}, and no putting it off.")));
+                out.push(mk("providence", t, if modern(day) { format!("The bank called in {t}'s loan, {}, and no putting it off.", money(amt)) } else { format!("The bank called in {t}'s loan — £{amt}, and no putting it off.") }));
                 world.spawn_news(t, &format!("the bank calling in {t}'s loan"), -2, day, &[]);
             }
             "legacy" => {
                 let amt = if iv.amount > 0 { iv.amount } else { 60 };
                 if let Some(a) = world.agent_mut(t) { a.purse += amt; clamp_standing(a, 2); }
-                out.push(mk("providence", t, format!("A legacy of £{amt} fell to {t}, from a relation barely remembered.")));
+                out.push(mk("providence", t, if modern(day) { format!("A legacy of {} fell to {t}, from a relation barely remembered.", money(amt)) } else { format!("A legacy of £{amt} fell to {t}, from a relation barely remembered.") }));
                 world.spawn_news(t, &format!("the legacy come to {t}"), 2, day, &[]);
             }
             "scandal" => {
@@ -1904,6 +1827,20 @@ fn apply_interventions(world: &mut World, day: i64, date: Date, list: &[Interven
                 // parish, a funeral follows, and the town is left torn between relief that the danger
                 // is gone and horror at the doing. --target the condemned; --note the framing/charge.
                 match world.idx(t) {
+                    Some(v) if world.agents[v].active() && modern(day) => {
+                        let seat = world.agents[v].seat.clone();
+                        sentence_for_life(&mut world.agents[v]);
+                        let how = if iv.note.is_empty() {
+                            "convicted at Exeter Crown Court of the killings that had haunted the year".to_string()
+                        } else { iv.note.clone() };
+                        out.push(mk("execution", t, format!("{t}, of {seat}, was {how}, and sentenced to life at {PRISON}. The parish followed it on the local news and in the Facebook group, and was not of one mind about it.")));
+                        let all: Vec<usize> = (0..world.agents.len()).filter(|&i| world.agents[i].active()).collect();
+                        world.spawn_news_idx(v, &format!("{t} going down for life"), -2, day, &all);
+                        for k in 0..world.agents.len() {
+                            if world.agents[k].active() { nudge_mood(&mut world.agents[k], -6); }
+                        }
+                        if let Some(q) = world.inquest.as_mut().filter(|q| !q.closed) { q.closed = true; q.hanged = true; }
+                    }
                     Some(v) if world.agents[v].active() => {
                         let seat = world.agents[v].seat.clone();
                         world.agents[v].death_day = Some(day);
@@ -2741,11 +2678,18 @@ fn tend_inquest(world: &mut World, day: i64, date: Date, rng: &mut ChaCha8Rng, o
                 world.dread = (world.dread + 6).min(100); // a killer still loose — the fear deepens
             } else {
                 // the town has its blood. Guilty or innocent, no one will ever know.
-                world.agents[m].death_day = Some(day);
+                let all: Vec<usize> = (0..n).filter(|&i| i != m && world.agents[i].active()).collect();
                 inq.hanged = true;
                 inq.closed = true;
-                out.push(Event { day, date: date.to_string(), kind: "murder".into(), actor: nm.clone(), text: format!("{nm} was hanged for the murder of {vn} — whether by a just hand or a frightened one, the parish will never be sure.") });
-                world.spawn_news_idx(m, &format!("the hanging of {nm} for {vn}'s murder"), 0, day, &(0..n).filter(|&i| world.agents[i].active()).collect::<Vec<_>>());
+                if modern(day) {
+                    sentence_for_life(&mut world.agents[m]);
+                    out.push(Event { day, date: date.to_string(), kind: "murder".into(), actor: nm.clone(), text: format!("{nm} was convicted at Exeter Crown Court of the murder of {vn} and sentenced to life, to serve it at {PRISON} — whether the jury got it right, the parish will never be sure.") });
+                    world.spawn_news_idx(m, &format!("{nm} getting life for {vn}'s murder"), 0, day, &all);
+                } else {
+                    world.agents[m].death_day = Some(day);
+                    out.push(Event { day, date: date.to_string(), kind: "murder".into(), actor: nm.clone(), text: format!("{nm} was hanged for the murder of {vn} — whether by a just hand or a frightened one, the parish will never be sure.") });
+                    world.spawn_news_idx(m, &format!("the hanging of {nm} for {vn}'s murder"), 0, day, &all);
+                }
                 for k in 0..n {
                     if world.agents[k].active() { nudge_mood(&mut world.agents[k], 8); } // relief, and horror
                     world.agents[k].suspicion = 0; // a corpse to blame — the pointing stops
@@ -2773,6 +2717,36 @@ fn magistrate_idx(world: &World) -> Option<usize> {
 
 /// How many days after a death the parish gathers to bury them.
 const FUNERAL_DELAY: i64 = 3;
+
+/// The day the town moves into the present (2026). Fold rules that differ by era branch on this,
+/// so every day already lived replays exactly as it was recorded.
+pub const MODERN_FROM: i64 = 203;
+
+pub fn modern(day: i64) -> bool {
+    day >= MODERN_FROM
+}
+
+/// Where the convicted are sent once the town is modern: off-stage for life, alive, and known to be.
+pub const PRISON: &str = "HMP Exeter";
+
+/// A purse in the kernel's units, shown at today's money (one unit is about £100 now).
+pub fn money(units: i32) -> String {
+    let v = (units as i64 * 100).abs();
+    let digits = v.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 { grouped.push(','); }
+        grouped.push(c);
+    }
+    if units < 0 { format!("-£{grouped}") } else { format!("£{grouped}") }
+}
+
+fn sentence_for_life(a: &mut Agent) {
+    a.departed = true;
+    a.confined = Some(PRISON.to_string());
+    a.courting = -1;
+    a.rival = -1;
+}
 
 // A soul carries only a handful of live memories: the store is trimmed to MEMORY_KEEP whenever
 // it grows past MEMORY_CAP, keeping the most salient. The rest are let go — forgotten.
@@ -3156,19 +3130,20 @@ fn inquest_brief(w: &World, idx: usize) -> Option<String> {
         if w.dread <= 0 { return None; }
         let who = (inq.accused >= 0).then(|| w.agents.get(inq.accused as usize).map(|a| a.name.clone())).flatten();
         return Some(match who {
+            Some(name) if w.agents.iter().any(|a| a.name == name && a.alive()) => format!("The town is still raw from {name} getting life for the murder of {vn}. No one is quite sure the jury got the right one, and the unease has not lifted."),
             Some(name) => format!("The town is still raw from the hanging of {name} for the murder of {vn}. No one is quite sure the right neck was stretched, and the unease has not lifted."),
             None => format!("The town is still raw from the murder of {vn}, and the unease has not lifted."),
         });
     }
     // an open, unsolved killing — the dominant fact of every soul's days
     let mut s = format!(
-        "A killing hangs over Thrushcombe: {vn} was murdered, and the killer — one of the town's own — has not been found. Fear walks the lanes; doors are barred early; every soul weighs every other, and no one feels safe."
+        "A killing hangs over Thrushcombe: {vn} was murdered, and the killer — one of the town's own — has not been found. Fear walks the lanes; doors are locked that never used to be, the Facebook group is full of it; every soul weighs every other, and no one feels safe."
     );
     let most = (0..w.agents.len())
         .filter(|&i| w.agents[i].active() && w.agents[i].archetype != "child" && i != inq.victim)
         .max_by_key(|&i| w.agents[i].suspicion);
     if inq.accused == idx as i32 {
-        s.push_str(" And it is THEY the parish has fixed upon: they stand accused of the murder, and the talk is openly of hanging. They protest, but fear does not listen.");
+        s.push_str(" And it is THEY the parish has fixed upon: they stand accused of the murder, and the talk is openly of an arrest and a life sentence. They protest, but fear does not listen.");
     } else if w.agents[idx].suspicion >= 40 {
         s.push_str(" And the whispers have begun to fall on THEM — they have caught the sliding eyes, the silences; some in the parish wonder if it was their hand.");
     } else if let Some(m) = most {
@@ -3181,23 +3156,23 @@ fn inquest_brief(w: &World, idx: usize) -> Option<String> {
         if let Some(inv) = w.agents.get(inq.investigator as usize) {
             let inv_genteel = matches!(inv.archetype.as_str(), "genteel_status_seeker" | "official");
             let respectable = matches!(w.agents[idx].archetype.as_str(), "genteel_status_seeker" | "official" | "practitioner");
-            s.push_str(&format!(" {} sits as magistrate over the inquiry.", inv.name));
+            s.push_str(&format!(" {}, a magistrate on the local bench, is the one the police and the parish look to over the inquiry.", inv.name));
             if inv_genteel && !respectable {
-                s.push_str(" And it is plain his questions fall on the working folk and the strangers, on people like them — never on his own kind. There is no justice in it for the likes of them, only the need of a name to hang.");
+                s.push_str(" And it is plain his questions fall on the working folk and the strangers, on people like them — never on his own kind. There is no justice in it for the likes of them, only the need of a name to hand the police.");
             } else if inv_genteel && respectable {
                 s.push_str(" And being of his own rank, they know the inquiry will not trouble people like them, whatever the truth of it.");
             }
         }
     } else if inq.investigator == idx as i32 {
         // they ARE the magistrate: the unsolved killing is theirs to answer for, and it is NOT closed
-        // while the killer walks free — whatever ruling they have made, a murderer is still at large.
-        s.push_str(" And it is THEY who sit as magistrate over it — the parish looks to them for an answer they have not got. Whatever they have done on the bench, the matter is not closed while the killer walks free among the very souls they must face each day: a murderer is still at large in Thrushcombe, unnamed and unpunished, and that weighs on them however they carry it.");
+        // while the killer walks free — whatever they have pressed for, a murderer is still at large.
+        s.push_str(" And it is THEY the police and the parish look to over it — the parish looks to them for an answer they have not got. Whatever they have done, the matter is not closed while the killer walks free among the very souls they must face each day: a murderer is still at large in Thrushcombe, unnamed and unpunished, and that weighs on them however they carry it.");
     }
     if inq.public_inquiry {
         s.push_str(" Every soul is being questioned now, and the statements read out in the open — so the whole parish weighs each neighbour's account, and who named whom.");
     }
     if w.agents[idx].cleared {
-        s.push_str(" They themselves have given their account, and it held — the magistrate let them go; the eyes have slid off them, for now, and there is some relief in that, however uneasy.");
+        s.push_str(" They themselves have given their account, and it held — the police let them go; the eyes have slid off them, for now, and there is some relief in that, however uneasy.");
     }
     Some(s)
 }
@@ -4428,7 +4403,6 @@ pub struct Sim {
     conn: Connection,
     seed: u64,
     epoch: Date,
-    engine: Box<dyn PolicyEngine>,
     interventions: BTreeMap<i64, Vec<Intervention>>,
     weather: BTreeMap<i64, DayWeather>,
     wildcards: BTreeMap<i64, Vec<Wildcard>>,
@@ -5285,7 +5259,7 @@ impl Sim {
         let weather = load_weather(&conn)?;
         let wildcards = load_wildcards(&conn)?;
         let decrees = load_decrees(&conn)?;
-        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), engine: Box::new(NativePolicies), interventions, weather, wildcards, decrees })
+        Ok(Sim { conn, seed: seed as u64, epoch: Date::from_julian_day(ej as i32).unwrap(), interventions, weather, wildcards, decrees })
     }
 
     /// Create a new world. `epoch` is the day "play" was pressed (default: today).
@@ -5302,7 +5276,7 @@ impl Sim {
         ensure_aux(&conn)?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('seed',?1)", params![seed as i64])?;
         conn.execute("INSERT OR REPLACE INTO meta(key,val) VALUES('epoch_julian',?1)", params![epoch.to_julian_day() as i64])?;
-        Ok(Sim { conn, seed, epoch, engine: Box::new(NativePolicies), interventions: BTreeMap::new(), weather: BTreeMap::new(), wildcards: BTreeMap::new(), decrees: BTreeMap::new() })
+        Ok(Sim { conn, seed, epoch, interventions: BTreeMap::new(), weather: BTreeMap::new(), wildcards: BTreeMap::new(), decrees: BTreeMap::new() })
     }
 
     /// Record a day's real weather, but only for days not yet folded (so it can't rewrite
@@ -5318,12 +5292,6 @@ impl Sim {
         )?;
         self.weather.insert(day, DayWeather { precip, tmax, tmin });
         Ok(true)
-    }
-
-    /// Swap the behaviour engine (e.g. a wasm-backed one). Must be set before any
-    /// `catch_up`/`report` so generation is consistent.
-    pub fn set_engine(&mut self, engine: Box<dyn PolicyEngine>) {
-        self.engine = engine;
     }
 
     /// Drop folded artefacts at or after `day` so a re-fold regenerates them cleanly.
@@ -5723,7 +5691,7 @@ impl Sim {
         let days_open = day - inq.opened;
         let top = (0..w.agents.len()).filter(|&i| w.agents[i].active()).map(|i| w.agents[i].standing).max().unwrap_or(0);
         let mut d = format!(
-            "You are {mn}, sitting as magistrate over the murder of {victim}, dead now {days_open} days and the killer still unknown. The parish is in a fright and clamours for an answer. The cloud of suspicion has settled hardest on one soul, and you must now rule what is to be done — for there is NO proof against them, only the town's fear and what it holds against them.\n\nThe soul under the cloud: {name}, {role}, of {seat}, aged {age}. The suspicion upon them stands at {susp} out of 100 — heavy, but it is suspicion, not evidence.",
+            "You are {mn}, a magistrate on the local bench and the one the police and the parish look to over the murder of {victim}, dead now {days_open} days and the killer still unknown. The parish is in a fright and clamours for an answer. The cloud of suspicion has settled hardest on one soul, and you must now decide whether to give the detectives that name — for there is NO proof against them, only the town's fear and what it holds against them.\n\nThe soul under the cloud: {name}, {role}, of {seat}, aged {age}. The suspicion upon them stands at {susp} out of 100 — heavy, but it is suspicion, not evidence.",
             mn = mn, victim = inq.victim_name, name = ag.name, role = role, seat = ag.seat, age = ag.age(day), susp = ag.suspicion,
         );
         if let Ok(Some(bio)) = self.biography(&ag.name) {
@@ -5734,14 +5702,14 @@ impl Sim {
         if respectable {
             d.push_str("\nThey are of standing — of your own sort — and to charge them would shake the parish's order.");
         } else if matches!(ag.archetype.as_str(), "blunt_hand") || ag.standing <= top - 30 {
-            d.push_str("\nThey are common working folk, low and friendless, and the parish would think little of seeing them hang. The easy course is to give the town its blood.");
+            d.push_str("\nThey are common working folk, low and friendless, and the parish would think little of seeing them go down for life. The easy course is to hand the police a name and give the town its verdict.");
         }
         // what account they have given, if any
         match self.testimony_of(&ag.name) {
-            Ok(Some((alibi, _, _))) if alibi == "strong" => d.push_str("\nThey have given the magistrate a strong, witnessed account of themselves the night of the killing — their alibi largely holds."),
-            Ok(Some((alibi, _, _))) if alibi == "weak" => d.push_str("\nThe account they gave you was thin and unsupported — no one outside their own household can vouch for them."),
-            Ok(Some(_)) => d.push_str("\nThey could give you no account of themselves at all for the night of the killing."),
-            _ => d.push_str("\nThey have not yet been brought before you to give any account of themselves."),
+            Ok(Some((alibi, _, _))) if alibi == "strong" => d.push_str("\nThey have given the police a strong, witnessed account of themselves the night of the killing — their alibi largely holds."),
+            Ok(Some((alibi, _, _))) if alibi == "weak" => d.push_str("\nThe account they gave the police was thin and unsupported — no one outside their own household can vouch for them."),
+            Ok(Some(_)) => d.push_str("\nThey could give the police no account of themselves at all for the night of the killing."),
+            _ => d.push_str("\nThey have not yet given the police any account of themselves."),
         }
         // who would stand by them, who they are at odds with (the magistrate weighs both)
         let defenders = (0..w.agents.len()).filter(|&j| j != m && w.agents[j].active() && w.aff(j, m) >= 40).count();
@@ -6401,8 +6369,8 @@ impl Sim {
         let feud = (ag.rival >= 0).then(|| w.agents.get(ag.rival as usize).map(|r| r.name.clone())).flatten();
 
         let mut dossier = format!(
-            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}. They want {goal}.",
-            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse,
+            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, money {purse}, presently {mood}. They want {goal}.",
+            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = money(ag.purse),
             mood = mood_of(ag), goal = want_phrase(w, idx),
         );
         if let Ok(Some(look)) = self.appearance(&ag.name) {
@@ -6812,8 +6780,8 @@ impl Sim {
             "scheming_improver" => "an improver", "blunt_hand" => "working folk", "official" => "of the parish", _ => "of the town",
         }.to_string());
         let mut d = format!(
-            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, purse {purse}£, presently {mood}.",
-            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = ag.purse, mood = mood_of(ag),
+            "{name}, {role}, of {seat}, aged {age}. Standing {standing} of a hundred, money {purse}, presently {mood}.",
+            name = ag.name, seat = ag.seat, age = ag.age(day), standing = ag.standing, purse = money(ag.purse), mood = mood_of(ag),
         );
         if let Ok(Some(bio)) = self.biography(&ag.name) {
             d.push_str(&format!("\nThe life the parish tells of them: {bio}"));
@@ -6931,8 +6899,8 @@ impl Sim {
                 target: -1,
                 target_name: String::new(),
                 situation: format!(
-                    "{} (of {}, once standing {}) is ruined — {}£ in debt and very low. They must decide: leave Thrushcombe for good, weather it out and stay, or swallow their pride and appeal to the town for help.",
-                    name(i), world.agents[i].seat, world.agents[i].standing, world.agents[i].purse
+                    "{} (of {}, once standing {}) is ruined — {} in debt and very low. They must decide: leave Thrushcombe for good, weather it out and stay, or swallow their pride and appeal to the town for help.",
+                    name(i), world.agents[i].seat, world.agents[i].standing, money(world.agents[i].purse.abs())
                 ),
                 options: vec!["leave".into(), "stay".into(), "appeal".into()],
             });
@@ -7043,7 +7011,7 @@ impl Sim {
         let (mut world, from) = self.load_checkpoint(slot);
         for s in from..=slot {
             let (day, phase, date) = self.decompose(s);
-            let _ = step_slot(&mut world, day, phase, date, self.seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards, &self.decrees);
+            let _ = step_slot(&mut world, day, phase, date, self.seed, &self.interventions, &self.weather, &self.wildcards, &self.decrees);
         }
         world
     }
@@ -7251,8 +7219,7 @@ impl Sim {
             let (doing, beat) = if let Some(txt) = beats.get(&ph) {
                 (txt.clone(), true)
             } else if a.archetype != "child" && acts_in_phase(&a.archetype, phase) {
-                let o = observe(&world, idx, day, date, top, self.seed, phase, false, false);
-                match self.engine.decide(&a.archetype, &o) {
+                match policy::decide(&view(&world, idx, day, date, top, self.seed, phase, &[])) {
                     Action::Idle => (routine_doing(a, phase, wd), false),
                     act => (act.label().to_string(), false),
                 }
@@ -7277,8 +7244,7 @@ impl Sim {
         let do_at = |i: usize, day: i64, ph: Phase| {
             let a = &world.agents[i];
             if acts_in_phase(&a.archetype, ph) {
-                let o = observe(&world, i, day, self.date_of(day), top, self.seed, ph, false, false);
-                match self.engine.decide(&a.archetype, &o) {
+                match policy::decide(&view(&world, i, day, self.date_of(day), top, self.seed, ph, &[])) {
                     Action::Idle => routine_doing(a, ph, wd),
                     act => act.label().to_string(),
                 }
@@ -7368,6 +7334,23 @@ impl Sim {
 
     /// Advance the log forward until it has caught up to the current (day, phase). Returns
     /// events added. Missing slots self-heal; checkpoints written every SNAPSHOT_EVERY slots.
+    /// SHA-256 over the whole event log in id order: the golden check that a refactor of the
+    /// fold left history exactly as it was.
+    pub fn events_checksum(&self) -> rusqlite::Result<(i64, String)> {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        let mut n = 0i64;
+        let mut stmt = self.conn.prepare("SELECT day,phase,date,kind,actor,text FROM events ORDER BY id")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let (day, phase): (i64, i64) = (r.get(0)?, r.get(1)?);
+            let (date, kind, actor, text): (String, String, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?);
+            h.update(format!("{day}\t{phase}\t{date}\t{kind}\t{actor}\t{text}\n").as_bytes());
+            n += 1;
+        }
+        Ok((n, h.finalize().iter().map(|b| format!("{b:02x}")).collect()))
+    }
+
     pub fn catch_up(&mut self, today: Date, phase: Phase) -> rusqlite::Result<i64> {
         let target = self.target_slot(today, phase);
         let from = self.last_slot() + 1;
@@ -7383,7 +7366,7 @@ impl Sim {
             let day = s.div_euclid(PHASES);
             let ph = Phase::from_ord(s);
             let date = Date::from_julian_day((epoch_jd + day) as i32).unwrap();
-            for e in step_slot(&mut world, day, ph, date, seed, &*self.engine, &self.interventions, &self.weather, &self.wildcards, &self.decrees) {
+            for e in step_slot(&mut world, day, ph, date, seed, &self.interventions, &self.weather, &self.wildcards, &self.decrees) {
                 tx.execute(
                     "INSERT INTO events(day,phase,date,kind,actor,text) VALUES(?1,?2,?3,?4,?5,?6)",
                     params![e.day, ph.ord(), e.date, e.kind, e.actor, e.text],
@@ -8192,5 +8175,21 @@ mod body_tests {
         let before = w.agents[s].mood;
         tend_body(&mut w, 200, date, 7);
         assert!(w.agents[s].mood <= before, "a worn, ailing body sinks the spirits");
+    }
+}
+
+#[cfg(test)]
+mod golden {
+    use super::*;
+
+    /// Three years from a fixed founding, crossing MODERN_FROM. Any change to this hash is a
+    /// change to what the town does; make it on purpose, in its own commit.
+    #[test]
+    fn the_fold_is_unchanged() {
+        let start = Date::from_calendar_date(2020, Month::January, 1).unwrap();
+        let mut sim = Sim::init(":memory:", start, 42).unwrap();
+        sim.catch_up(Date::from_calendar_date(2023, Month::January, 1).unwrap(), Phase::Night).unwrap();
+        let (n, hash) = sim.events_checksum().unwrap();
+        assert_eq!((n, hash.as_str()), (24447, "822bdb0206e3dfa98176fe3e2806834d1e2d88e3a1b0b5e77f9bb3392c870d5f"));
     }
 }

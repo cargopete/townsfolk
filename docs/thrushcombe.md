@@ -55,7 +55,7 @@ Not a god-game. You play the **novelist** — diegetic intervention only: a lett
 
 ## Architecture
 
-Event-source the whole thing: an append-only log; current state is the fold. Deterministic core in native Rust (ECS/SoA, SQLite log + snapshots + projections, seeded `rand_chacha`). WASM (wasmtime) for hot-swappable per-archetype behaviour policies. The LLM is an **external recorded oracle** — mechanics decide *what* happens; it narrates *how it reads*; every response is logged so replay stays bit-for-bit reproducible. Cognition is tiered: reflex → rules; salient decision → LLM (rare, constrained); narration → LLM (async, batched, off the hot path).
+Event-source the whole thing: an append-only log; current state is the fold. Deterministic core in native Rust (ECS/SoA, SQLite log + snapshots + projections, seeded `rand_chacha`). Behaviour policies are plain Rust in the kernel (`core/src/policy.rs`), reading the whole soul. (A wasm sandbox for hot-swappable policies was built and later removed, 2026-10-07: nothing used it, and its scalar boundary kept the inner life out of everyday choices.) The LLM is an **external recorded oracle** — mechanics decide *what* happens; it narrates *how it reads*; every response is logged so replay stays bit-for-bit reproducible. Cognition is tiered: reflex → rules; salient decision → LLM (rare, constrained); narration → LLM (async, batched, off the hot path).
 
 ## Time coupling (locked)
 

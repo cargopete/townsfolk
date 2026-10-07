@@ -1,9 +1,10 @@
 # Townsfolk — Thrushcombe St Mary
 
-A small society for simulation. A West-Country market town, **bound to the real
-calendar** — its season is your season, its day is your day. *Provincial Lady* status
-comedy, *All Creatures* animal layer, *Clarkson's Farm* friction, run over one social
-graph and aged across decades.
+A small society for simulation. A West-Country market town in **present-day rural
+England**, **bound to the real calendar** — its season is your season, its day is your day.
+*Provincial Lady* status comedy, *All Creatures* animal layer, *Clarkson's Farm* friction,
+run over one social graph and aged across decades. (It began in 1934; from day 203 it lives
+in 2026, and the days before replay exactly as they were.)
 
 > Full design: [`docs/thrushcombe.md`](docs/thrushcombe.md)
 
@@ -23,13 +24,11 @@ It runs end to end:
   calls in the afternoon, the Pelican in the evening, the life cycle at night. A season
   state machine (lambing → sowing → hay → harvest → mart → winter) arms the
   external-shock layer (the storm on the cut hay, the Board's price cut, the tithe).
-- **Behaviour layer** — every present adult decides a day's intention from a flat
-  `Observation` and returns an `Action` the host arbitrates, encoding the genre
+- **Behaviour layer** — every present adult decides a day's intention from a
+  `SoulView` of their whole self and returns an `Action` the host arbitrates, encoding the genre
   tensions (the genteel weigh solvency vs face; the improver schemes and comes to
   grief). It's generative for *any* holder of a role, so a great-grandchild who
-  inherits a seat keeps the comedy going with no new code. Runs behind a
-  `decide(observation) -> action` boundary with two interchangeable engines —
-  **native** and **wasm** (see below).
+  inherits a seat keeps the comedy going with no new code.
 - **Individuation — goals, mood, temperament** — each soul carries a personal
   **ambition** fitting their situation (clear the debt, rise in the world, marry a
   child off, get the better of a rival, make a fortune), which *shapes what they do*;
@@ -42,8 +41,7 @@ It runs end to end:
 - **Situation-aware** — `decide()` reacts to its own goal and mood *and to who's about
   it this phase*: the gentry are far busier at the calling hour when a friend or a
   rival is present (company to keep, or a standing to defend), the debtor economises,
-  the riser spends on face. The flat scalar ABI just gains a few derived fields, so
-  native/wasm parity still holds bit-for-bit.
+  the riser spends on face.
 - **Targeted society — calls, dinners, and the pointed snub** — a social act is aimed,
   not broadcast. A soul calls on a *named* person and asks *named* guests to dine: their
   warmest friends, the one they're courting, and — for a riser — a grand acquaintance
@@ -79,9 +77,8 @@ It runs end to end:
   world stays exact. The genuine intelligence, only where it matters.
 - **Speak to a soul** — on the dashboard's *A word…* page you adopt one soul's voice and
   converse with another; the oracle answers in character, mindful of who's addressing them and
-  what they remember. They are **grounded in 1934 and in their station** — a soul knows
-  only what their time and schooling allow (ask a farm lad of a "computer" and he takes it
-  for some contraption he's not seen), and their warmth follows their regard and their rank:
+  what they remember. They are **grounded in the present day and in their station** — they speak
+  plain modern English true to their age, class and schooling, and their warmth follows their regard and their rank:
   cordial where there's fondness, dry where there's a grudge, deferential up and gracious
   down, never a manufactured quarrel. Each soul's page has a *speak to me directly* button.
   When you end the conversation the oracle judges its residue — a **warming or cooling, a
@@ -145,7 +142,7 @@ each system follows.
   they'd wish; the rest turns outward, to one soul they can't put from their mind, the town,
   the season's work. The oracle gets their whole dossier — standing, purse, spirits, ties,
   recent days, what they carry of others and of their own past thinking — and answers in
-  their own inward voice, grounded in 1934 and their station. It runs on the **`claude` CLI
+  their own inward voice, grounded in the present day and their station. It runs on the **`claude` CLI
   (Sonnet)** against the local subscription — the thought is recorded once and replayed, so
   determinism holds. The thought becomes **self-memory** (carried into
   their next talk and next hour, so reflection compounds), and its residue folds in with real
@@ -356,9 +353,9 @@ cargo build --release
 
 thrush init                              # found a town, epoch = today (companion mode)
 thrush init --start 1976-06-08 --seed 7  # or backdate for instant decades of history
-thrush --wasm init --start 1976-06-08    # run the behaviour layer inside the wasm sandbox
 thrush weather                           # record Sofia's real sky for the days ahead
 thrush tick                              # advance the chronicle to the current phase
+thrush checksum                          # event count + SHA-256 of the whole log
 thrush jump --days 1                     # jump the town forward N whole days (lived in full)
 thrush narrate                           # render new salient beats in voice (Sonnet, via the claude CLI)
 thrush wildcard                          # now and then, let the oracle invent a happening
@@ -413,16 +410,6 @@ sonnet` (system prompt appended, the dossier piped on stdin). No API key, no loc
 per-token ledger; `CLAUDE_MODEL` and `CLAUDE_BIN` override the model and binary path (the beat sets
 the latter so a headless service finds it). Each call is recorded and folded, so the world stays
 deterministic and replayable however rich the language gets.
-
-## The two engines (native ↔ wasm)
-
-The behaviour layer is one `decide(observation) -> action` boundary with two
-implementations: the **native** in-process engine, and a **wasm** engine that runs the
-policies inside wasmtime. Both call the *same* shared `policies` crate (a `no_std`,
-dependency-free crate compiled into the host and into a 625-byte wasm guest over a pure
-scalar ABI), so `thrush --wasm` produces a **byte-identical event log** to native —
-proof the substrate swap is transparent. Rebuild the guest with `ops/build-wasm.sh`
-(needs `rustup target add wasm32-unknown-unknown`).
 
 ## The reader (`thrush-web`)
 
@@ -496,13 +483,11 @@ cursor (`ops/discord_channels.json`, `ops/discord_state.json`) are gitignored to
 
 ```
 core/           deterministic event-sourced kernel — calendar · seasons · behaviour ·
-                gossip · life cycle · providence · snapshots · the PolicyEngine boundary
-policies/       shared no_std crate: every archetype's policy, compiled native AND to wasm
-wasm-policies/  the behaviour layer as one wasm guest (built by ops/build-wasm.sh)
-thrush/         CLI + detailed ratatui monitor + the wasmtime-backed engine
+                gossip · life cycle · providence · snapshots · policy.rs (decide)
+thrush/         CLI + detailed ratatui monitor
 web/            thrush-web — dashboard, legends & kinship browser
 llm/            the recorded-oracle client (now the claude CLI, Sonnet)
-ops/            the daily timer, the wasm build script, and the Discord layer
+ops/            the daily timer, the reader service, and the Discord layer
                 (setup_channels · feed · bot · thrushcombe-discord.service)
 docs/           the design
 ```
@@ -525,7 +510,10 @@ it). In-game time is the same however the day arrives.
 
 ## Determinism
 
-Same `(seed, epoch, today)` + the same interventions → the same town, verified by
-event-log checksum. The wasm engine matches native exactly; the LLM is a *recorded*
-oracle (its prose is logged once and replayed); snapshots are a cache that never
-affects generation. Change the behaviour or world layout and bump `SNAPSHOT_VERSION`.
+The same binary with the same `(seed, epoch, today)` and the same recorded inputs gives the
+same event log. `thrush checksum` hashes it, and the `golden` test in `core` folds three
+years from a fixed seed and asserts the hash, so a refactor that changes history fails. The
+LLM is a *recorded* oracle (its output is logged once and replayed); snapshots are a cache
+that never affects generation. A rule that should change what the town does from now on is
+gated by day (`MODERN_FROM` is the first), so the lived past replays unchanged; change the
+world layout and bump `SNAPSHOT_VERSION`.

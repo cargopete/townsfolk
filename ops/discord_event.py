@@ -13,8 +13,8 @@ DB = ROOT / "world.db"
 CLAUDE = os.environ.get("CLAUDE_BIN") or os.path.expanduser("~/.local/bin/claude")
 PUBLIC_BASE = "https://pepe-thinkpad.tailb0627.ts.net:8443"
 UA = "DiscordBot (https://thrushcombe.local, 0.1)"
-CHRON_SYS = ("You are the chronicler of Thrushcombe St Mary, a West-Country market town in 1934. "
-             "Write in the dry, observed, lightly wry register of interwar English provincial prose. "
+CHRON_SYS = ("You are the chronicler of Thrushcombe St Mary, a West-Country market town in present-day rural England (2026). "
+             "Write in the dry, observed, lightly wry register of a good contemporary English country column. "
              "Be strictly faithful to who and what you are given; never invent a villager or a surname.")
 
 
@@ -37,7 +37,7 @@ def send(hook, body):
 
 
 def account(prompt):
-    out = subprocess.run([CLAUDE, "-p", "--model", "sonnet", "--append-system-prompt", CHRON_SYS, prompt],
+    out = subprocess.run([CLAUDE, "-p", "--model", os.environ.get("CLAUDE_MODEL", "sonnet"), "--append-system-prompt", CHRON_SYS, prompt],
                          capture_output=True, text=True, timeout=180, env=dict(os.environ))
     return out.stdout.strip()
 
