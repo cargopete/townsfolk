@@ -1,0 +1,70 @@
+# yatr - https://github.com/cargopete/yatr
+#
+# The aggregate is `ci`, not `check`: `yatr check` is a builtin that validates
+# this file and shadows any task of that name.
+
+[env]
+CARGO_TERM_COLOR = "always"
+
+[settings]
+cache = true
+watch_debounce_ms = 200
+
+[tasks.fmt]
+desc = "Format the tree"
+run = ["cargo fmt --all"]
+no_cache = true
+
+[tasks.fmt-check]
+desc = "Fail if the tree is unformatted"
+run = ["cargo fmt --all --check"]
+sources = ["**/*.rs"]
+
+[tasks.lint]
+desc = "Clippy with warnings denied"
+run = ["cargo clippy --workspace --all-targets -- -D warnings"]
+sources = ["**/*.rs", "**/Cargo.toml", "Cargo.lock"]
+
+[tasks.test]
+desc = "Run the test suite"
+run = ["cargo test --workspace"]
+sources = ["**/*.rs", "**/Cargo.toml", "Cargo.lock"]
+watch = ["**/*.rs"]
+
+[tasks.golden]
+desc = "Only the determinism hash: three years from a fixed seed"
+run = ["cargo test -p thrush-core golden::"]
+sources = ["core/**", "Cargo.lock"]
+
+[tasks.sh-check]
+desc = "Parse the ops and llm scripts without running them"
+parallel = true
+run = [
+  "bash -n ops/daily.sh",
+  "bash -n ops/ripple.sh",
+  "bash -n ops/compress-portraits.sh",
+  "bash -n llm/narrate.sh",
+]
+sources = ["ops/*.sh", "llm/*.sh"]
+
+[tasks.build]
+desc = "Release build of thrush and thrush-web, which the timer and units run"
+run = ["cargo build --workspace --release"]
+sources = ["**/*.rs", "**/Cargo.toml", "Cargo.lock"]
+outputs = ["target/release/thrush", "target/release/thrush-web"]
+
+[tasks.web]
+desc = "Serve world.db on 127.0.0.1:8717"
+foreground = true
+run = ["cargo run --release -p thrush-web -- world.db"]
+
+# Rewrites portraits/ in place and deletes the originals; run it by hand after a new batch.
+[tasks.portraits]
+desc = "Compress portraits/ to web-sized sepia JPEGs (needs ImageMagick)"
+run = ["ops/compress-portraits.sh"]
+no_cache = true
+
+[tasks.ci]
+desc = "The local gate: fmt-check, lint, test, sh-check"
+depends = ["fmt-check", "lint", "test", "sh-check"]
+run = []
